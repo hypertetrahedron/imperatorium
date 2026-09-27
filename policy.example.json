@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Which permission prompts Imperatorium answers for you.",
+    "Deny always wins; anything not matched by a rule is asked about as usual.",
+    "Set enabled=false to turn the whole thing off without touching hooks.",
+    "Per-project keys: auto_edit, allow_reads_outside_cwd, safe_bash,",
+    "never_auto_approve. The most specific matching project path wins."
+  ],
+  "enabled": false,
+  "decision_format": "object",
+  "_decision_format": "`object` is the reply Claude Code actually acts on, so verdicts here take effect. Remove the key (legacy reply) to make every verdict advisory again - logged, never applied.",
+  "park": {
+    "_comment": "Offer an `ask` to the Imperatorium window and Stream Deck before the terminal prompts. While a request waits, the terminal's own prompt is held back, so an interactive session (you may be at its terminal) waits only wait_seconds; a background session has no terminal and waits background_wait_seconds. Nobody answering falls straight through to the normal prompt. Set enabled=false to go back to terminal-only, then rerun hooks/install.py so the hook timeout shrinks too.",
+    "enabled": true,
+    "wait_seconds": 20,
+    "background_wait_seconds": 300
+  },
+  "defaults": {
+    "auto_edit": false,
+    "allow_reads_outside_cwd": false
+  },
+  "projects": {},
+  "_projects": "Per-project overrides keyed by absolute path, e.g. {\"C:\\code\\my-app\": {\"auto_edit\": true, \"safe_bash\": [\"make\\s+test\\b\"]}}",
+  "_enabled": "Auto-approval: true lets this policy answer cheap prompts (reads, git status, tests) for you. false asks about everything, but the window and Stream Deck can still answer prompts. setup_machine.py asks which you want."
+}

@@ -1,0 +1,3 @@
+# Core: the window's conversation, history, activity and error views read
+# sessions through the Agent SDK. The dispatcher itself is standard library.
+claude-agent-sdk>=0.2.155

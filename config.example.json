@@ -1,0 +1,57 @@
+{
+  "_comment": "Copied to config.json by setup_machine.py, which then fills in `roots`. Every key is optional.",
+  "roots": [],
+  "_roots": "Folders whose subfolders are your projects. Empty means the folder this checkout sits in.",
+  "streamdeck": {
+    "_comment": "Projects pinned to fixed keys, in order. Anything live and unpinned fills the rest.",
+    "keys": []
+  },
+  "palette": {
+    "hotkey": [
+      "ctrl+alt+backquote",
+      "ctrl+alt+j",
+      "ctrl+shift+space"
+    ]
+  },
+  "background": {
+    "_comment": "Options for `claude --bg`. Omit a key to use your own settings.",
+    "permission_mode": "acceptEdits"
+  },
+  "voice": {
+    "_comment": "Dictation (F9). Local GPU; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice). preload keeps ~2GB of VRAM busy.",
+    "enabled": false,
+    "model": "large-v3-turbo",
+    "device": "cuda",
+    "compute_type": "float16",
+    "language": "en",
+    "input_device": null,
+    "preload": false
+  },
+  "remote": {
+    "_comment": "Sessions on other machines, polled over SSH (key auth). Example host: {\"name\": \"devbox\", \"claude\": \"$HOME/.local/bin/claude\", \"tunnel\": true}",
+    "enabled": false,
+    "hosts": []
+  },
+  "notify": {
+    "_comment": "When a session is still waiting on you after `delay` seconds. Both off; the Insights view switches them on and off at runtime. ntfy sends only 'project: reason' to https://<server>/<topic> - on ntfy.sh the topic name is the only secret, so pick an unguessable one.",
+    "ntfy": {
+      "enabled": false,
+      "server": "https://ntfy.sh",
+      "topic": "",
+      "delay": 60,
+      "priority": "default"
+    },
+    "speak": {
+      "enabled": false,
+      "delay": 5,
+      "rate": 0
+    }
+  },
+  "budget": {
+    "_comment": "Rate-limit percentages that raise an event (and a push/speech when those are on), once per window. Needs the statusline: python hooks/install.py --statusline",
+    "thresholds": [
+      80,
+      95
+    ]
+  }
+}

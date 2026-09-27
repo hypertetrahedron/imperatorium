@@ -1,0 +1,4 @@
+# Optional: the Stream Deck surface. On Windows it also needs vendor/hidapi.dll,
+# which setup_machine.py downloads from the official libusb/hidapi release.
+streamdeck>=0.10
+pillow>=10

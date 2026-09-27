@@ -1,0 +1,5 @@
+* text=auto
+# Shell scripts must stay LF: they are piped straight into bash from GitHub.
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.dll binary
