@@ -166,6 +166,10 @@ def merge(agent_rows, files, creds=None):
         row.setdefault("status", rec.get("status"))
         row["socket"] = rec.get("messagingSocketPath")
         row["bridgeSessionId"] = rec.get("bridgeSessionId")
+        # Sessions the Claude desktop app hosts live in its window, not a
+        # terminal, so a person hunting for a console will not find them.
+        row["entrypoint"] = rec.get("entrypoint")
+        row["desktop_app"] = rec.get("entrypoint") == "claude-desktop"
         # When this session's status last changed. `claude agents --json`
         # reports the status but not its age, and the age is the only thing
         # that can tell a live "waiting for you" from one the session has
@@ -237,9 +241,10 @@ def needs_attention(row):
 
 
 def snapshot(creds=None):
+    from . import procs
     return {
         "at": time.time(),
-        "sessions": merge(agents(), session_files(), creds),
+        "sessions": procs.annotate(merge(agents(), session_files(), creds)),
     }
 
 

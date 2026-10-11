@@ -12,6 +12,7 @@ this server's own: a cross-origin fetch with a plain-text body is a CORS
 "simple request", so a page the user merely had open could otherwise drive
 this.
 """
+import hashlib
 import json
 import os
 import sys
@@ -301,7 +302,7 @@ class Control:
             out.append(entry)
         return {"hosts": out, "status": status}
 
-    def conversation(self, session_id, limit=60):
+    def conversation(self, session_id, limit=0):
         """What one session said. Empty rather than fatal when unreadable."""
         row = next((r for r in self.sessions()["sessions"]
                     if r["sessionId"] == session_id
@@ -826,6 +827,21 @@ class Control:
         self.invalidate()
         return got
 
+    def new_session(self, session_id=None, cwd=None):
+        """A fresh session in the same project as `session_id`, in a new tab."""
+        row = self._row(session_id) if session_id else None
+        if row and row.get("remote"):
+            return {"ok": False, "error": "starting a session on %s is not "
+                    "supported yet" % row.get("host")}
+        cwd = cwd or (row or {}).get("cwd")
+        try:
+            got = history.new_session(cwd)
+        except history.ResumeError as exc:
+            return {"ok": False, "error": str(exc)}
+        self.store.add_event({"kind": "new", "cwd": cwd, "summary": "claude"})
+        self.invalidate()
+        return got
+
     # -- dispatch --------------------------------------------------------
     def dispatch(self, text=None, project=None, prompt=None, mode="auto",
                  confirm=False, session_id=None):
@@ -1084,6 +1100,7 @@ class Control:
 
     def _deliver(self, row, prompt):
         """Put `prompt` in `row`'s inbox, wherever it is. None, or the error."""
+        prompt = conversation.with_origin(prompt)
         try:
             if row.get("remote"):
                 host = self.host(row.get("host"))
@@ -1097,7 +1114,7 @@ class Control:
         self._event(row.get("host"), {"kind": "dispatch_inject",
                                       "session_id": row["sessionId"],
                                       "cwd": row.get("cwd"),
-                                      "summary": prompt[:280]})
+                                      "summary": conversation.strip_origin(prompt)[:280]})
         return None
 
     def _session_for(self, path, host=None):
@@ -1224,11 +1241,22 @@ class Handler(BaseHTTPRequestHandler):
             if not session:
                 self._send(400, {"error": "session is required"})
                 return
+            # 0, the default, is the whole conversation, back through every
+            # compaction.
             try:
-                limit = max(1, min(400, int((args.get("limit") or ["60"])[0])))
+                limit = max(0, int((args.get("limit") or ["0"])[0]))
             except ValueError:
-                limit = 60
-            self._send(200, c.conversation(session, limit))
+                limit = 0
+            body = c.conversation(session, limit)
+            # The window polls every 1.5s; a long session is megabytes of
+            # items, so an unchanged one is answered with its signature only.
+            sig = hashlib.sha1(json.dumps(body.get("items") or [],
+                                          sort_keys=True).encode("utf-8")
+                               ).hexdigest()[:16]
+            if (args.get("known") or [""])[0] == sig:
+                body = {"session": body.get("session"), "unchanged": True}
+            body["sig"] = sig
+            self._send(200, body)
         elif path == "/api/changes":
             self._send(200, c.changes(self._arg("session")))
         elif path == "/api/worktrees":
@@ -1283,7 +1311,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, c.focus(payload.get("project"),
                                     payload.get("session_id")))
         elif path in ("/api/queue", "/api/unqueue", "/api/worktree",
-                      "/api/resume", "/api/prefs", "/api/notify"):
+                      "/api/resume", "/api/new", "/api/prefs", "/api/notify"):
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})
                 return
@@ -1332,6 +1360,8 @@ class Handler(BaseHTTPRequestHandler):
             return c.resume(p.get("session_id"), where=p.get("where") or "window",
                             fork=bool(p.get("fork")), prompt=p.get("prompt"),
                             cwd=p.get("cwd"))
+        if path == "/api/new":
+            return c.new_session(p.get("session_id"), cwd=p.get("cwd"))
         if path == "/api/prefs":
             allowed = {k: p[k] for k in ("pinned", "archived", "group", "filter")
                        if k in p}

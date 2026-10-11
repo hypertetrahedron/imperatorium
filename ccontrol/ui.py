@@ -57,6 +57,8 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s.on{background:var(--sel)}
 .s.attn{border-left:3px solid var(--warn);padding-left:10px}
 .s .n{font-weight:600;font-size:13.5px;word-break:break-word}
+.s .app{display:inline-block;width:13px;height:11px;margin-right:5px;vertical-align:-1px;
+  color:var(--muted)}
 .s .w{color:var(--muted);font-size:11.5px;margin-top:1px;font-style:italic;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s .m{color:var(--muted);font-size:11.5px;margin-top:2px;
@@ -71,13 +73,31 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 #head{padding:11px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
 #title{font-weight:600}
 #sub{color:var(--muted);font-size:11.5px;word-break:break-all}
-#sessionpane{flex:1;display:flex;flex-direction:column;min-height:0}
-#log{flex:1;overflow-y:auto;padding:14px 16px}
+#sessionpane{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
+#log{flex:1;overflow-y:auto;padding:14px 16px;position:relative}
+#jump{position:absolute;right:22px;bottom:12px;display:flex;flex-direction:column;gap:4px;z-index:2}
+#jump button{padding:3px 8px;font-size:12px;opacity:.75}
+#jump button:hover{opacity:1}
+.turn.flash{outline:2px solid var(--busy);outline-offset:4px;border-radius:2px}
+#current{border-bottom:1px solid var(--line);background:var(--panel);padding:8px 16px;
+  max-height:30vh;overflow-y:auto}
+#current .hd{display:flex;justify-content:space-between;align-items:center;cursor:pointer;
+  font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+#current .bd{margin-top:5px}
+#current.fold .bd{display:none}
+#tabs button.cur{margin-left:auto;font-size:11.5px}
+#tabs button.cur.open{color:var(--ink);border-bottom-color:transparent}
+details.compact{margin:0 0 15px;color:var(--muted)}
+details.compact>summary{cursor:pointer;font-size:11px;text-transform:uppercase;
+  letter-spacing:.06em;list-style:none;text-align:center;border-top:1px dashed var(--line);
+  padding-top:6px}
+details.compact[open]>summary{margin-bottom:6px}
 button.tiny.on{color:var(--ink);border-color:var(--busy)}
 .turn{margin:0 0 15px;max-width:900px}
 .who{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
   color:var(--muted);margin-bottom:3px}
 .who.you{color:var(--ink);font-weight:600}
+.who .via{color:var(--muted);font-weight:400;font-size:11px}
 .who.claude{color:var(--busy);font-weight:600}
 .txt{white-space:pre-wrap;word-wrap:break-word}
 .tbl{overflow-x:auto;margin:7px 0}
@@ -88,6 +108,19 @@ button.tiny.on{color:var(--ink);border-color:var(--busy)}
 .tbl tbody tr:nth-child(even){background:var(--panel)}
 .tbl code{background:var(--code);border-radius:3px;padding:0 3px;
   font:12px Consolas,ui-monospace,monospace}
+.txt code,.md code,.h code,blockquote code{background:var(--code);border-radius:3px;
+  padding:0 3px;font:12.5px Consolas,ui-monospace,monospace}
+.txt a,.md a,.tbl a,.h a,blockquote a{color:var(--busy)}
+.h{font-weight:600;margin:12px 0 4px}
+.h1{font-size:18px}.h2{font-size:16px}.h3{font-size:14.5px}
+.h4,.h5,.h6{font-size:13.5px;color:var(--muted)}
+.md ul,.md ol{margin:4px 0;padding-left:22px}
+.md li{margin:2px 0}
+pre.code{background:var(--code);border-radius:5px;padding:8px 10px;margin:6px 0;
+  font:12.5px/1.45 Consolas,ui-monospace,monospace;overflow-x:auto;white-space:pre}
+blockquote{border-left:3px solid var(--line);margin:6px 0;padding:0 0 0 10px;
+  color:var(--muted)}
+#log hr{border:0;border-top:1px solid var(--line);margin:10px 0}
 .tool{border-left:2px solid var(--busy);padding:3px 0 3px 9px;margin:7px 0;
   font:12.5px/1.5 Consolas,ui-monospace,monospace;color:var(--muted)}
 .tool b{color:var(--busy);font-weight:600}
@@ -119,8 +152,9 @@ select.tiny{background:var(--panel);color:var(--muted);border:1px solid var(--li
   border-radius:4px;font:11.5px inherit;padding:2px 3px}
 #meter{padding:0 12px 8px;font-size:11.5px;color:var(--muted)}
 #meter .row{display:flex;align-items:center;gap:6px;margin-top:3px}
-#meter .bar{flex:1;height:5px;border-radius:3px;background:var(--line);overflow:hidden}
-#meter .bar i{display:block;height:100%;background:var(--ok)}
+#meter .bar{flex:1;height:5px;border-radius:3px;background:var(--line);position:relative}
+#meter .bar i{display:block;height:100%;border-radius:3px;background:var(--ok)}
+#meter .bar b{position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;background:var(--ink)}
 #meter .bar i.hi{background:var(--warn)}#meter .bar i.over{background:var(--fail)}
 #meter .pace{font-size:11px;margin-left:24px}
 #meter .pace.bad{color:var(--fail)}
@@ -228,7 +262,9 @@ const RUNNING = {busy: "working", shell: "running a command"};
 // The wire role says "user" for every tool result, because that is how a
 // result is handed back to the model - not who wrote it. The server sends a
 // `speaker` derived from content; this only has to name it.
-const SPEAKER = {you: "you", claude: "Claude", tool: "tool result"};
+// `system` is Claude Code itself (a task finishing, a command's output); the
+// item's `note` says which.
+const SPEAKER = {you: "you", claude: "Claude", tool: "tool result", system: "Claude Code"};
 
 function stateOf(s){
   if (s.attention) return [s.attention_kind === "failure" ? "d-fail" : "d-attn",
@@ -237,6 +273,11 @@ function stateOf(s){
   if (s.state && s.state !== "working") return ["d-done", s.state];
   if (RUNNING[s.status] || s.state === "working")
     return ["d-busy", RUNNING[s.status] || "working"];
+  // Idle between turns but a command it started is still running: it will wake
+  // when that exits, so it is not free for more work yet.
+  if (s.status === "idle" && s.background_tasks)
+    return ["d-busy", s.background_tasks === 1 ? "waiting on a background task"
+                      : `waiting on ${s.background_tasks} background tasks`];
   if (s.status === "idle") return ["d-idle","idle"];
   return ["d-done", s.status || "unknown"];
 }
@@ -310,6 +351,10 @@ function prBadge(pr){
     what ? " " + esc(what) : ""}</span>`;
 }
 
+// Marks a session hosted by the Claude desktop app: it lives in that app's
+// window, so someone scanning terminals for it would never find it.
+const APP_ICON = `<svg class="app" viewBox="0 0 13 11" aria-label="Claude desktop app"><title>in the Claude desktop app</title><rect x=".5" y=".5" width="12" height="10" rx="1.5" fill="none" stroke="currentColor"/><path d="M.5 3.5h12" stroke="currentColor"/></svg>`;
+
 function tile(s){
   const [dot, label] = stateOf(s);
   const when = age(s.attention_since || s.last_event_at);
@@ -321,7 +366,7 @@ function tile(s){
     <div class="acts"><span data-pin="${esc(pkey(s))}" title="${pinned?"unpin":"pin to top"}">${
       pinned ? "★" : "☆"}</span><span data-arch="${esc(pkey(s))}" title="${
       archived ? "unarchive" : "archive (hide until it needs you)"}">${archived ? "↩" : "✕"}</span></div>
-    <div class="n">${esc(s.name || s.id || "(unnamed)")}${pinned ? `<span class="pin">★</span>` : ""}</div>${
+    <div class="n">${s.desktop_app ? APP_ICON : ""}${esc(s.name || s.id || "(unnamed)")}${pinned ? `<span class="pin">★</span>` : ""}</div>${
       s.window_title ? `<div class="w" title="window title">${esc(s.window_title)}</div>` : ""}${
       s.doing ? `<div class="d" title="${esc(s.doing)}">${esc(s.doing)}${
         s.doing_since ? " · " + age(s.doing_since) : ""}</div>` : ""}
@@ -337,7 +382,7 @@ function drawSessions(){
   sessions.sort((a,b) =>
     (a.attention?0:1) - (b.attention?0:1) ||
     (a.remote?1:0) - (b.remote?1:0) ||
-    (a.status === "idle" ? 1 : 0) - (b.status === "idle" ? 1 : 0) ||
+    (stateOf(a)[0] === "d-idle" ? 1 : 0) - (stateOf(b)[0] === "d-idle" ? 1 : 0) ||
     String(a.name||"").localeCompare(String(b.name||"")));
   if (selected && !sessions.some(s => key(s) === selected)) selected = null;
   if (!selected && sessions.length) selected = key(sessions[0]);
@@ -385,6 +430,7 @@ function drawSessions(){
   const fold = $("#archfold");
   if (fold) fold.onclick = () => { showArchived = !showArchived; drawSessions(); };
 
+  syncDraft();
   drawHead();
 }
 
@@ -401,6 +447,7 @@ function drawHead(){
       acts.push(`<button class="sm" data-act="resume-window" title="claude --resume in a new tab">Resume</button>`);
       acts.push(`<button class="sm ghost" data-act="resume-background" title="continue it in the background; the prompt box is its next message">Resume in bg</button>`);
     }
+    acts.push(`<button class="sm ghost" data-act="new" title="a fresh claude session in this project, in a new tab">New</button>`);
     acts.push(`<button class="sm ghost" data-act="fork-window" title="a copy of this conversation in a new tab; the original is untouched">Fork</button>`);
     acts.push(`<button class="sm ghost" data-act="fork-background" title="a copy, continued in the background with the prompt box as its message">Fork in bg</button>`);
     acts.push(`<button class="sm ghost" data-act="copy" title="${esc(s.resume_command || "")}">Copy resume cmd</button>`);
@@ -415,8 +462,8 @@ function current(){ return sessions.find(x => key(x) === selected); }
 
 // Markdown tables, the GFM shape Claude writes: a header row, a delimiter row
 // of dashes (colons set alignment), then body rows until a line without a
-// pipe. Everything else stays pre-wrapped text, and nothing inside a ``` fence
-// is touched - a table in a code sample is meant to be read as source.
+// pipe. Nothing inside a ``` fence is touched - a table in a code sample is
+// meant to be read as source.
 const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 function cells(line){
@@ -426,12 +473,32 @@ function cells(line){
   return s.split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, "|"));
 }
 
-// Inside a cell only: `code` and **bold**, which Claude uses constantly there
-// and which read as noise when left raw in a grid. Runs on escaped text.
+// Inline Markdown: `code`, [links](https://...), bare URLs, **bold**,
+// *italic*, ~~strike~~. Code and links are set aside first so nothing inside
+// them is read as emphasis; underscores only count at word edges, so
+// snake_case names and paths come through untouched. Only http(s) links are
+// made clickable - a session's output is not trusted to pick a scheme.
+const attr = s => esc(s).replace(/"/g, "&quot;");
+const link = (href, text) => `<a href="${attr(href)}" target="_blank" rel="noopener">${text}</a>`;
+
+function emph(s){
+  return s
+    .replace(/\*\*(?!\s)([^\n]+?)(?<!\s)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^\w])__(?!\s)([^\n]+?)(?<!\s)__(?!\w)/g, "$1<b>$2</b>")
+    .replace(/(^|[^*\w])\*(?![\s*])([^*\n]+?)(?<!\s)\*(?![*\w])/g, "$1<i>$2</i>")
+    .replace(/(^|[^\w])_(?![\s_])([^_\n]+?)(?<!\s)_(?!\w)/g, "$1<i>$2</i>")
+    .replace(/~~(?!\s)([^\n]+?)(?<!\s)~~/g, "<s>$1</s>");
+}
+
 function inline(s){
-  return esc(s)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  const kept = [];
+  const hold = h => "\u0000" + (kept.push(h) - 1) + "\u0000";
+  s = String(s == null ? "" : s)
+    .replace(/`([^`\n]+)`/g, (_, c) => hold("<code>" + esc(c) + "</code>"))
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => hold(link(u, emph(esc(t)))))
+    .replace(/\bhttps?:\/\/[^\s<>()\[\]"'`\u0000]*[^\s<>()\[\]"'`\u0000.,;:!?*_~]/g,
+             u => hold(link(u, esc(u))));
+  return emph(esc(s)).replace(/\u0000(\d+)\u0000/g, (_, i) => kept[+i]);
 }
 
 function renderTable(head, sep, rows){
@@ -445,36 +512,105 @@ function renderTable(head, sep, rows){
     rows.map(r => row("td", r)).join("")}</tbody></table></div>`;
 }
 
+// Block Markdown, the subset Claude actually writes: fenced code, headings,
+// bullet and numbered lists (nested by indent), block quotes, rules and
+// tables. Prose between them stays one pre-wrapped run per paragraph group,
+// so line breaks Claude put there survive as they always have.
+const FENCE = /^\s*(```|~~~)/;
+const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
+const QUOTE = /^\s*>\s?(.*)$/;
+const indentOf = s => s.replace(/\t/g, "    ").length;
+
 function renderText(text){
   const lines = String(text == null ? "" : text).split("\n");
   const out = [];
-  let run = [], fence = false;
+  let run = [], lists = [], listHtml = "";
   const flush = () => {
     const t = run.join("\n").replace(/^\n+|\n+$/g, "");
-    if (t) out.push(`<div class="txt">${esc(t)}</div>`);
+    if (t) out.push(`<div class="txt">${inline(t)}</div>`);
     run = [];
   };
+  const closeList = () => {
+    const top = lists.pop();
+    listHtml += (top.open ? "</li>" : "") + (top.ordered ? "</ol>" : "</ul>");
+  };
+  const endLists = () => {
+    while (lists.length) closeList();
+    if (listHtml) out.push(`<div class="md">${listHtml}</div>`);
+    listHtml = "";
+  };
+  const block = html => { flush(); endLists(); out.push(html); };
+
   for (let i = 0; i < lines.length; i++){
     const line = lines[i];
-    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
     const next = lines[i + 1];
-    if (!fence && line.includes("|") && next !== undefined && TABLE_SEP.test(next)
-        && next.includes("|")){
+
+    if (FENCE.test(line)){
+      const mark = line.trim().slice(0, 3), body = [];
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim().startsWith(mark)) body.push(lines[j++]);
+      block(`<pre class="code">${esc(body.join("\n"))}</pre>`);
+      i = j;
+      continue;
+    }
+    if (line.includes("|") && next !== undefined && TABLE_SEP.test(next) && next.includes("|")){
       const head = cells(line);
       if (cells(next).length === head.length){
         const rows = [];
         let j = i + 2;
         while (j < lines.length && lines[j].includes("|") && lines[j].trim())
           rows.push(cells(lines[j++]));
-        flush();
-        out.push(renderTable(head, next, rows));
+        block(renderTable(head, next, rows));
         i = j - 1;
         continue;
       }
     }
+    const item = ITEM.exec(line);
+    if (item && !RULE.test(line)){
+      flush();
+      const indent = indentOf(item[1]), ordered = /\d/.test(item[2]);
+      while (lists.length && indent < lists[lists.length - 1].indent) closeList();
+      let top = lists[lists.length - 1];
+      if (top && indent === top.indent && top.ordered !== ordered){ closeList(); top = null; }
+      else if (top && indent < top.indent) top = null;
+      if (!top || indent > top.indent){
+        const n = parseInt(item[2], 10);
+        listHtml += ordered ? (n > 1 ? `<ol start="${n}">` : "<ol>") : "<ul>";
+        lists.push(top = {indent, ordered, open: false});
+      }
+      listHtml += (top.open ? "</li>" : "") + "<li>" + inline(item[3]);
+      top.open = true;
+      continue;
+    }
+    if (lists.length){
+      // A list survives a blank line when it carries on after it, and takes
+      // indented lines as the current item's continuation.
+      if (!line.trim()){
+        const after = lines.slice(i + 1).find(l => l.trim());
+        if (after !== undefined && (ITEM.test(after) || /^\s{2,}/.test(after))) continue;
+      } else if (/^\s{2,}/.test(line)){
+        listHtml += "<br>" + inline(line.trim());
+        continue;
+      }
+      endLists();
+    }
+    const h = HEADING.exec(line);
+    if (h){ block(`<div class="h h${h[1].length}">${inline(h[2])}</div>`); continue; }
+    if (RULE.test(line) && line.trim()){ block("<hr>"); continue; }
+    if (QUOTE.test(line)){
+      const inner = [];
+      let j = i;
+      while (j < lines.length && QUOTE.test(lines[j])) inner.push(QUOTE.exec(lines[j++])[1]);
+      block(`<blockquote>${renderText(inner.join("\n"))}</blockquote>`);
+      i = j - 1;
+      continue;
+    }
     run.push(line);
   }
   flush();
+  endLists();
   return out.join("");
 }
 
@@ -492,24 +628,94 @@ function renderBlocks(blocks){
 async function loadLog(force){
   if (!selected) { $("#log").innerHTML = `<div class="note">select a session</div>`; return; }
   let data;
-  try { data = await get("/api/conversation?session=" + encodeURIComponent(selected) + "&limit=60"); }
+  // The whole conversation, as the terminal shows it; the dispatcher answers
+  // "unchanged" when what this page already has is current.
+  const known = (!force && lastSig) ? "&known=" + encodeURIComponent(lastSig) : "";
+  try { data = await get("/api/conversation?session=" + encodeURIComponent(selected) + known); }
   catch (e) { return; }
+  if (data.unchanged) return;
   if (data.error && !data.items.length){
     $("#log").innerHTML = `<div class="note">${esc(data.error)}</div>`;
     return;
   }
   // Only repaint when something changed, so the scroll position survives.
-  const sig = JSON.stringify(data.items).length + ":" + data.items.length;
+  const sig = data.sig || (JSON.stringify(data.items).length + ":" + data.items.length);
   if (!force && sig === lastSig) return;
   lastSig = sig;
 
   const log = $("#log");
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-  log.innerHTML = data.items.map(it =>
-    `<div class="turn"><div class="who ${esc(it.speaker || it.role)}">${
-      esc(SPEAKER[it.speaker] || it.speaker || it.role)}</div>${renderBlocks(it.blocks)}</div>`
-  ).join("") || `<div class="note">nothing yet</div>`;
+  log.innerHTML = data.items.map(it => {
+    // Where the session compacted: the summary that replaced everything above
+    // it, folded away, since the real conversation is now shown in full.
+    if (it.note === "earlier conversation, summarised")
+      return `<details class="compact"><summary>compacted here - show the summary it kept</summary>${
+        renderBlocks(it.blocks)}</details>`;
+    return `<div class="turn${it.speaker === "you" ? " you-turn" : ""}"><div class="who ${esc(it.speaker || it.role)}">${
+      esc(it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${renderBlocks(it.blocks)}</div>`;
+  }).join("") || `<div class="note">nothing yet</div>`;
   if (force || atBottom) log.scrollTop = log.scrollHeight;
+  const asked = data.items.filter(it => it.speaker === "you").pop();
+  currentPrompt = asked ? asked.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n\n") : "";
+  drawCurrent();
+}
+
+// -- the prompt being worked on --------------------------------------------
+// The last thing you asked, pinned above the chat on demand, so a long turn
+// can be read against what it is meant to be doing.
+let currentPrompt = "", showCurrent = false, currentFolded = false;
+function drawCurrent(){
+  const box = $("#current");
+  box.hidden = !showCurrent || tab !== "log" || view !== "session";
+  $("#curbtn").classList.toggle("open", showCurrent);
+  $("#curbtn").textContent = showCurrent ? "Hide Current Prompt" : "Show Current Prompt";
+  box.classList.toggle("fold", currentFolded);
+  $("#curfold").innerHTML = currentFolded ? "&#9656;" : "&#9662;";
+  $("#curbody").innerHTML = currentPrompt ? renderText(currentPrompt)
+    : `<div class="note" style="padding:6px 0">no prompt yet in this session</div>`;
+}
+
+// -- jump between your prompts ---------------------------------------------
+function jump(dir){
+  const log = $("#log");
+  const top = log.scrollTop, turns = [...log.querySelectorAll(".turn.you-turn")];
+  // Compare where each prompt would be scrolled to, not where it sits, or the
+  // prompt just jumped to counts as the next one down.
+  const at = x => x.offsetTop - 8;
+  const t = dir < 0 ? turns.filter(x => at(x) < top - 2).pop()
+                    : turns.find(x => at(x) > top + 2);
+  if (!t) return;
+  log.scrollTop = at(t);
+  t.classList.add("flash");
+  setTimeout(() => t.classList.remove("flash"), 900);
+}
+
+// -- one unsent draft per session ------------------------------------------
+// The box belongs to whichever session it was typed for; switching sessions
+// parks it and brings back that session's own. Kept in this browser only.
+let drafts = {}, draftFor = null;
+try { drafts = JSON.parse(localStorage.getItem("ccontrol.drafts") || "{}") || {}; } catch (e) { drafts = {}; }
+function saveDrafts(){
+  try { localStorage.setItem("ccontrol.drafts", JSON.stringify(drafts)); } catch (e) {}
+}
+function noteDraft(){
+  if (draftFor === null) return;
+  const v = $("#prompt").value;
+  if (v) drafts[draftFor] = v; else delete drafts[draftFor];
+  saveDrafts();
+}
+function syncDraft(){
+  if (draftFor === selected) return;
+  noteDraft();
+  draftFor = selected;
+  $("#prompt").value = (selected && drafts[selected]) || "";
+}
+// After a send: clear the draft it came from, and the box only if it still
+// shows that session - the person may have moved on while it was in flight.
+function clearPrompt(k){
+  k = k === undefined ? draftFor : k;
+  delete drafts[k]; saveDrafts();
+  if (draftFor === k) $("#prompt").value = "";
 }
 
 let ticks = 0;
@@ -558,6 +764,21 @@ async function drawPending(){
 // -- usage meter ---------------------------------------------------------
 const clock = t => new Date(t * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 const LIMIT_NAMES = {five_hour: "5h", seven_day: "7d", spend_limit: "spend"};
+const LIMIT_SECONDS = {five_hour: 5 * 3600, seven_day: 7 * 86400};
+// A reset that isn't today names its weekday too: "Tue 09:00".
+const resetLabel = t => {
+  const d = new Date(t * 1000);
+  return (d.toDateString() === new Date().toDateString() ? ""
+          : d.toLocaleDateString([], {weekday: "short"}) + " ") + clock(t);
+};
+// The tick: how far through the window the clock is, so the fill can be read
+// against time - fill ahead of the tick means using faster than the window allows.
+const timeTick = (name, resets) => {
+  const len = LIMIT_SECONDS[name];
+  if (!len || !resets) return "";
+  const done = Math.max(0, Math.min(1, 1 - (resets - Date.now() / 1000) / len));
+  return `<b style="left:${(done * 100).toFixed(1)}%" title="${Math.round(done * 100)}% of the window elapsed"></b>`;
+};
 
 async function drawMeter(){
   let u;
@@ -574,8 +795,8 @@ async function drawMeter(){
     else if (p && p.per_hour > 0)
       pace = `<div class="pace">${Math.round(p.per_hour)}%/h - lasts until reset</div>`;
     return `<div class="row" title="${esc(name)}"><span style="width:18px">${esc(LIMIT_NAMES[name] || name)}</span>
-      <span class="bar"><i class="${cls}" style="width:${pct}%"></i></span>
-      <span>${Math.round(w.used)}%${w.resets_at ? " · " + clock(w.resets_at) : ""}</span></div>${pace}`;
+      <span class="bar"><i class="${cls}" style="width:${pct}%"></i>${timeTick(name, w.resets_at)}</span>
+      <span>${Math.round(w.used)}%${w.resets_at ? " · " + resetLabel(w.resets_at) : ""}</span></div>${pace}`;
   }).join("");
 }
 
@@ -602,8 +823,10 @@ function setView(v){
 
 function setTab(t){
   tab = t;
-  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll("#tabs button[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   ["log","changes","activity","worktrees"].forEach(n => $("#" + n).hidden = n !== t);
+  $("#jump").hidden = t !== "log";
+  drawCurrent();
   refreshTab(true);
 }
 
@@ -732,12 +955,17 @@ async function act(what){
     catch (e) { $("#say").textContent = s.resume_command; }
     return;
   }
+  if (what === "new"){
+    const r = await post("/api/new", {session_id: key(s), cwd: s.cwd || null});
+    $("#say").textContent = r.ok ? "opened a new session in " + (s.cwd || "its project") : (r.error || "refused");
+    return;
+  }
   const [kind, where] = what.split("-");
   const r = await post("/api/resume", {session_id: key(s), where, fork: kind === "fork",
     prompt: $("#prompt").value.trim() || null});
   $("#say").textContent = r.ok ? (r.where === "background" ? kind + "ed in the background · " + (r.id || "")
     : "opened a new tab: " + r.command) : (r.error || "refused");
-  if (r.ok && where === "background") $("#prompt").value = "";
+  if (r.ok && where === "background") clearPrompt(key(s));
 }
 
 // -- queue -----------------------------------------------------------------
@@ -746,7 +974,7 @@ async function queue(){
   const text = $("#prompt").value.trim();
   if (!s || !text) return;
   const r = await post("/api/queue", {session_id: key(s), prompt: text});
-  if (r.ok){ $("#prompt").value = ""; $("#say").textContent = r.waiting ?
+  if (r.ok){ clearPrompt(key(s)); $("#say").textContent = r.waiting ?
       "queued - delivered when its current turn ends (" + r.waiting + " waiting)" : "delivered now - it was idle"; }
   else $("#say").textContent = r.error || "refused";
   queuedSig = "";
@@ -851,7 +1079,7 @@ async function send(mode){
     session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: mode || "auto"
   });
   busy = false;
-  if (r.ok){ $("#prompt").value = ""; $("#say").textContent = outcome(r); }
+  if (r.ok){ clearPrompt(key(s)); $("#say").textContent = outcome(r); }
   else $("#say").textContent = r.error || "refused";
   lastSig = ""; loadLog(true);
 }
@@ -885,6 +1113,7 @@ async function dictate(){
     const box = $("#prompt");
     box.value = (box.value.trim() ? box.value.replace(/\s*$/, " ") : "") + data.text;
     box.focus();
+    noteDraft();
     $("#say").textContent = "dictated " + data.text.length + " chars";
   };
   rec.start();
@@ -923,7 +1152,7 @@ async function startProject(name){
     mode: text ? "auto" : "launch"
   });
   $("#say").textContent = r.ok ? outcome(r) : (r.error || "refused");
-  if (r.ok){ $("#prompt").value = ""; togglePicker(false); }
+  if (r.ok){ clearPrompt(); togglePicker(false); }
 }
 
 function togglePicker(show){
@@ -961,7 +1190,17 @@ $("#prompt").addEventListener("keydown", e => {
 });
 $("#filter").addEventListener("input", drawSessions);
 $("#group").onchange = () => savePrefs({group: $("#group").value});
-document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+document.querySelectorAll("#tabs button[data-tab]").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+$("#curbtn").onclick = () => { showCurrent = !showCurrent; currentFolded = false; drawCurrent(); };
+$("#curhd").onclick = () => { currentFolded = !currentFolded; drawCurrent(); };
+$("#jprev").onclick = () => jump(-1);
+$("#jnext").onclick = () => jump(1);
+document.addEventListener("keydown", e => {
+  if (!e.altKey || view !== "session" || tab !== "log") return;
+  if (e.key === "ArrowUp"){ e.preventDefault(); jump(-1); }
+  if (e.key === "ArrowDown"){ e.preventDefault(); jump(1); }
+});
+$("#prompt").addEventListener("input", noteDraft);
 document.querySelectorAll("[data-view]").forEach(b => b.onclick = () =>
   setView(view === b.dataset.view ? "session" : b.dataset.view));
 let hqTimer;
@@ -994,8 +1233,14 @@ def render_shell():
         '<div id=acts></div></div>'
         '<div id=tabs><button data-tab=log class=on>Conversation</button>'
         '<button data-tab=changes>Changes</button><button data-tab=activity>Activity</button>'
-        '<button data-tab=worktrees>Worktrees</button></div></div>'
-        '<div id=sessionpane><div id=log></div>'
+        '<button data-tab=worktrees>Worktrees</button>'
+        '<button id=curbtn class=cur title="the prompt this session is working on">'
+        'Show Current Prompt</button></div></div>'
+        '<div id=sessionpane><div id=current hidden><div class=hd id=curhd>'
+        '<span id=curcap>current prompt</span><span id=curfold>&#9662;</span></div>'
+        '<div class=bd id=curbody></div></div><div id=log></div>'
+        '<div id=jump><button class=ghost id=jprev title="previous prompt (alt+Up)">&#9650;</button>'
+        '<button class=ghost id=jnext title="next prompt (alt+Down)">&#9660;</button></div>'
         '<div id=changes class=panel hidden></div><div id=activity class=panel hidden></div>'
         '<div id=worktrees class=panel hidden></div></div>'
         '<div id=historypane class=panel hidden>'

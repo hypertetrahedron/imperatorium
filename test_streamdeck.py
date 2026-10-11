@@ -67,6 +67,10 @@ class States(unittest.TestCase):
     def test_idle_is_idle(self):
         self.assertEqual(sd.state_for({"status": "idle"}), "idle")
 
+    def test_idle_waiting_on_a_background_task_is_working(self):
+        self.assertEqual(sd.state_for({"status": "idle", "background_tasks": 1}),
+                         "working")
+
     def test_finished_background_job_is_not_shown_as_live(self):
         self.assertEqual(sd.state_for({"state": "done"}), "none")
 
@@ -83,50 +87,96 @@ class Layout(unittest.TestCase):
             ]
         }
 
+    def names(self, slots):
+        return [sl["project"] for sl in slots]
+
     def test_pinned_keys_keep_their_position(self):
         surface = sd.Surface(FakeDeck(), pinned=["laser-ledger", "gem-trip"])
-        order, _ = surface.layout(
-            [row("Y:/projects-software/amarantha")], self.by_path
-        )
-        self.assertEqual(order[:2], ["laser-ledger", "gem-trip"])
-        self.assertIn("amarantha", order)
+        slots = surface.layout([row("Y:/projects-software/amarantha")], self.by_path)
+        self.assertEqual(self.names(slots), ["laser-ledger", "gem-trip", "amarantha"])
+        self.assertIsNone(slots[0]["row"])
 
     def test_unpinned_blocked_project_sorts_ahead_of_other_extras(self):
         surface = sd.Surface(FakeDeck(), pinned=[])
-        order, _ = surface.layout(
-            [
-                row("Y:/projects-software/amarantha"),
-                row("Y:/projects-software/gem-trip", attention=True),
-            ],
-            self.by_path,
-        )
-        self.assertEqual(order[0], "gem-trip")
+        slots = surface.layout(
+            [row("Y:/projects-software/amarantha"),
+             row("Y:/projects-software/gem-trip", attention=True)],
+            self.by_path)
+        self.assertEqual(slots[0]["project"], "gem-trip")
 
     def test_order_is_capped_at_the_key_count(self):
         surface = sd.Surface(FakeDeck(keys=2), pinned=["a", "b", "c", "d"])
-        order, _ = surface.layout([], self.by_path)
-        self.assertEqual(len(order), 2)
+        self.assertEqual(len(surface.layout([], self.by_path)), 2)
 
-    def test_blocked_session_wins_when_two_share_a_project(self):
+    def test_every_session_of_a_project_gets_a_key(self):
         surface = sd.Surface(FakeDeck(), pinned=[])
-        _, live = surface.layout(
-            [
-                row("Y:/projects-software/gem-trip", sessionId="calm"),
-                row("Y:/projects-software/gem-trip", sessionId="stuck", attention=True),
-            ],
-            self.by_path,
-        )
-        self.assertTrue(live["gem-trip"]["attention"])
+        slots = surface.layout(
+            [row("Y:/projects-software/gem-trip", sessionId="late", startedAt=2),
+             row("Y:/projects-software/gem-trip", sessionId="early", startedAt=1)],
+            self.by_path)
+        self.assertEqual([sl["row"]["sessionId"] for sl in slots], ["early", "late"])
+        self.assertEqual([sl["count"] for sl in slots], ["1/2", "2/2"])
 
-    def test_sessions_outside_the_catalogue_are_ignored(self):
+    def test_a_lone_session_has_no_counter(self):
         surface = sd.Surface(FakeDeck(), pinned=[])
-        order, live = surface.layout([row("C:/somewhere/else")], self.by_path)
-        self.assertEqual((order, live), ([], {}))
+        [slot] = surface.layout([row("Y:/projects-software/gem-trip")], self.by_path)
+        self.assertIsNone(slot["count"])
+
+    def test_pinned_project_expands_in_place(self):
+        surface = sd.Surface(FakeDeck(), pinned=["gem-trip", "laser-ledger"])
+        slots = surface.layout(
+            [row("Y:/projects-software/gem-trip", sessionId="a"),
+             row("Y:/projects-software/gem-trip", sessionId="b")], self.by_path)
+        self.assertEqual(self.names(slots), ["gem-trip", "gem-trip", "laser-ledger"])
+
+    def test_open_sessions_beat_pinned_projects_with_none(self):
+        surface = sd.Surface(FakeDeck(keys=3), pinned=["laser-ledger", "amarantha"])
+        slots = surface.layout(
+            [row("Y:/projects-software/gem-trip", sessionId="a"),
+             row("Y:/projects-software/gem-trip", sessionId="b")], self.by_path)
+        self.assertEqual(self.names(slots), ["laser-ledger", "gem-trip", "gem-trip"])
+        self.assertTrue(all(sl["row"] for sl in slots[1:]))
+
+    def test_finished_and_remote_sessions_get_no_key(self):
+        surface = sd.Surface(FakeDeck(), pinned=[])
+        slots = surface.layout(
+            [row("Y:/projects-software/gem-trip", status=None, state="done"),
+             row("Y:/projects-software/amarantha", remote=True)], self.by_path)
+        self.assertEqual(slots, [])
+
+    def test_sessions_outside_the_catalogue_are_named_by_folder(self):
+        surface = sd.Surface(FakeDeck(), pinned=[])
+        [slot] = surface.layout([row("C:/somewhere/else")], self.by_path)
+        self.assertEqual(slot["label"], "else")
 
     def test_a_press_on_an_empty_slot_does_nothing(self):
         surface = sd.Surface(FakeDeck(), pinned=[])
         surface.slots = []
         surface.on_press(None, 7, True)  # must not raise or call the API
+
+
+@unittest.skipIf(sd is None, "surface module not importable")
+class Flash(unittest.TestCase):
+    def setUp(self):
+        self.s = sd.Surface(FakeDeck(), pinned=[])
+
+    def test_first_sight_does_not_flash(self):
+        self.assertEqual(self.s.flash_state("a", "idle", 0.0), "idle")
+        self.assertFalse(self.s.flashing())
+
+    def test_a_change_alternates_new_and_old_then_settles(self):
+        self.s.flash_state("a", "working", 0.0)
+        seen = [self.s.flash_state("a", "idle", t) for t in (10.0, 10.3, 10.6, 11.1, 14.9)]
+        self.assertEqual(seen, ["idle", "idle", "working", "idle", "working"])
+        self.assertTrue(self.s.flashing())
+        self.assertEqual(self.s.flash_state("a", "idle", 15.0), "idle")
+        self.assertFalse(self.s.flashing())
+
+    def test_a_change_mid_flash_restarts_from_the_shown_state(self):
+        self.s.flash_state("a", "working", 0.0)
+        self.s.flash_state("a", "idle", 1.0)
+        self.assertEqual(self.s.flash_state("a", "blocked", 2.0), "blocked")
+        self.assertEqual(self.s.flash_state("a", "blocked", 2.6), "idle")
 
 
 @unittest.skipIf(sd is None, "surface module not importable")
@@ -182,8 +232,18 @@ class Decisions(unittest.TestCase):
     def test_layout_shrinks_while_a_decision_shows(self):
         s = sd.Surface(FakeDeck(15), ["p%d" % i for i in range(15)])
         s.set_decision(self.PENDING)
-        order, _ = s.layout([], {})
-        self.assertEqual(len(order), 12)
+        self.assertEqual(len(s.layout([], {})), 12)
+
+
+
+@unittest.skipIf(sd is None, "surface module not importable")
+class DesktopAppGlyph(unittest.TestCase):
+    def test_glyph_marks_the_top_left_corner_only(self):
+        from PIL import Image, ImageDraw
+        image = Image.new("RGB", (72, 72), "black")
+        sd.draw_app_icon(ImageDraw.Draw(image), "white")
+        self.assertEqual(image.getpixel((5, 5)), (255, 255, 255))
+        self.assertEqual(image.getpixel((60, 60)), (0, 0, 0))
 
 
 if __name__ == "__main__":

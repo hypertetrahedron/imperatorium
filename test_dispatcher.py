@@ -420,8 +420,20 @@ class Routing(Base):
         self.control.invalidate()
         out = self.control.dispatch(text="project: laser ledger, do the thing")
         self.assertEqual(out["action"], "inject")
-        self.assertEqual(self.sent[0][2], "do the thing")
+        self.assertEqual(self.sent[0][2], conversation.with_origin("do the thing"))
         self.assertEqual(self.launched, [])
+
+    def test_a_dispatched_prompt_says_it_has_no_sender_to_answer(self):
+        # Two sessions in one project: without this, the receiver took the
+        # prompt for a peer's and answered the other session by SendMessage.
+        self.live()
+        self.start_hook()
+        self.control.invalidate()
+        self.control.dispatch(text="project: laser ledger, do the thing")
+        sent = self.sent[0][2]
+        self.assertTrue(sent.startswith(conversation.ORIGIN_NOTE))
+        self.assertIn("do not use SendMessage", sent)
+        self.assertEqual(conversation.strip_origin(sent), "do the thing")
 
     def test_falls_back_to_a_deep_link_when_nothing_is_live(self):
         out = self.control.dispatch(text="project: laser ledger, do the thing")
@@ -674,7 +686,8 @@ class RemoteRouting(RemoteBase):
         self.remote_hook()
         out = self.control.dispatch(prompt="go", session_id=RSID)
         self.assertTrue(out["ok"], out)
-        self.assertEqual(self.injected, [("pi", RSOCK, "rtok", "go")])
+        self.assertEqual(self.injected,
+                         [("pi", RSOCK, "rtok", conversation.with_origin("go"))])
         self.assertEqual(self.sent, [])
 
     def test_a_remote_session_without_a_token_is_refused(self):
@@ -847,6 +860,56 @@ class Origins(Base):
         self.assertEqual(self.post("null"), 403)
 
 
+class ConversationRoute(Base):
+    """The window polls this every 1.5s for the whole conversation."""
+
+    def setUp(self):
+        super().setUp()
+        import threading
+        dispatcher.Handler.control = self.control
+        self.srv = dispatcher.Server(("127.0.0.1", 0), dispatcher.Handler)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.port = self.srv.server_address[1]
+        self.limits = []
+        self.items = [{"speaker": "you", "role": "user", "via": "inbox",
+                       "blocks": [{"kind": "text", "text": "hi"}]}]
+        self._orig_read = conversation.read
+        conversation.read = lambda sid, limit=0: (self.limits.append(limit)
+                                                  or self.items)
+
+    def tearDown(self):
+        conversation.read = self._orig_read
+        self.srv.shutdown()
+        self.srv.server_close()
+        super().tearDown()
+
+    def get(self, query):
+        import json
+        import urllib.request
+        url = "http://127.0.0.1:%d/api/conversation?%s" % (self.port, query)
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return json.loads(resp.read())
+
+    def test_the_default_is_the_whole_conversation(self):
+        self.get("session=" + SID)
+        self.assertEqual(self.limits, [0])
+
+    def test_an_unchanged_conversation_is_not_resent(self):
+        first = self.get("session=" + SID)
+        self.assertEqual(first["items"], self.items)
+        again = self.get("session=%s&known=%s" % (SID, first["sig"]))
+        self.assertTrue(again["unchanged"])
+        self.assertNotIn("items", again)
+
+    def test_a_changed_conversation_is_sent_in_full(self):
+        first = self.get("session=" + SID)
+        self.items = self.items + [{"speaker": "claude", "role": "assistant",
+                                    "blocks": [{"kind": "text", "text": "yo"}]}]
+        again = self.get("session=%s&known=%s" % (SID, first["sig"]))
+        self.assertEqual(len(again["items"]), 2)
+        self.assertNotEqual(again["sig"], first["sig"])
+
+
 class RemoteConversation(RemoteBase):
     def setUp(self):
         super().setUp()
@@ -880,7 +943,7 @@ class RemoteConversation(RemoteBase):
         self.assertEqual(out["items"][0]["blocks"][0]["text"], "4.2 MB")
         self.assertEqual(out["host"], "pi")
         # Its folder is passed, so the SDK does not search every project.
-        self.assertEqual(self.reads, [(RSID, 60, RCWD)])
+        self.assertEqual(self.reads, [(RSID, 0, RCWD)])
 
     def test_one_reader_per_host_is_kept(self):
         self.remote_live()

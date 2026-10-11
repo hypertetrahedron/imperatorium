@@ -1,4 +1,4 @@
-"""One key per project, coloured by what that project's session is doing.
+"""One key per session, coloured by what that session is doing.
 
 Runs as its own process, against the venv that has `streamdeck` and `pillow`,
 because the dispatcher itself is deliberately standard-library only. It talks
@@ -13,7 +13,13 @@ Colours:
     green   idle, session is live
     grey    no session running for this project
 
-A press focuses that project's session, or opens one when nothing is running.
+Every open session gets its own key; a project with several shows a `1/2`
+counter in the corner. Pinned projects (config.json `streamdeck.keys`) come
+first and keep a grey key while nothing runs there - unless keys run short,
+when open sessions win and the grey keys give way. A key whose session
+changes state flashes between the old and new colours for FLASH_SECONDS.
+
+A press focuses that key's session, or opens one when nothing is running.
 
 When a permission request is parked in the dispatcher (policy.json `park`),
 the last three keys become a decision: what is asking, ALLOW, DENY. A key
@@ -58,6 +64,11 @@ STATES = {
 # Seconds a decision key must have been showing before a press counts.
 ARM_SECONDS = 1.0
 DECISION_KEYS = 3
+# A state change flashes old/new colours this long, swapping every FLASH_HALF.
+FLASH_SECONDS = 5.0
+FLASH_HALF = 0.5
+# How often keys are repainted while one is flashing.
+FLASH_TICK = 0.25
 
 
 def api(path, payload=None, timeout=6.0):
@@ -103,11 +114,19 @@ def wrap(label, width=9):
     return lines[:3] or [label[:width]]
 
 
-def render_key(deck, label, state, badge=None):
+def draw_app_icon(draw, fg, x=5, y=5, w=14, h=11):
+    """A small window glyph: the session lives in the Claude desktop app."""
+    draw.rectangle((x, y, x + w, y + h), outline=fg, width=1)
+    draw.line((x, y + 3, x + w, y + 3), fill=fg, width=1)
+
+
+def render_key(deck, label, state, badge=None, desktop_app=False, count=None):
     bg, fg = STATES.get(state, STATES["none"])
     image = PILHelper.create_image(deck, background=bg)
     draw = ImageDraw.Draw(image)
     w, h = image.size
+    if desktop_app:
+        draw_app_icon(draw, fg)
 
     lines = wrap(label)
     font = load_font(13 if len(lines) < 3 else 11)
@@ -118,6 +137,10 @@ def render_key(deck, label, state, badge=None):
         draw.text(((w - (span[2] - span[0])) // 2, y), line, font=font, fill=fg)
         y += line_h
 
+    if count:
+        small = load_font(10)
+        span = draw.textbbox((0, 0), count, font=small)
+        draw.text((w - (span[2] - span[0]) - 4, 3), count, font=small, fill=fg)
     if badge:
         small = load_font(10)
         span = draw.textbbox((0, 0), badge, font=small)
@@ -133,6 +156,8 @@ def state_for(row):
         return "blocked"
     if row.get("status") == "busy" or row.get("state") == "working":
         return "working"
+    if row.get("status") == "idle" and row.get("background_tasks"):
+        return "working"  # between turns, but a command it started still runs
     if row.get("status") == "idle":
         return "idle"
     return "none"
@@ -142,8 +167,10 @@ class Surface:
     def __init__(self, deck, pinned=None):
         self.deck = deck
         self.pinned = pinned or []
-        self.slots = []          # key index -> project name
-        self.last = {}           # key index -> (state, label)
+        self.slots = []          # key index -> slot dict (see layout)
+        self.last = {}           # key index -> what was painted there
+        self.seen = {}           # slot id -> last state it was painted in
+        self.flashes = {}        # slot id -> (old state, new state, started)
         self.lock = threading.Lock()
         self.decision = None     # the pending request on the decision keys
         self.decision_at = 0.0   # when it appeared there
@@ -184,30 +211,79 @@ class Surface:
                     "who": "streamdeck"}
 
     def layout(self, sessions, projects_by_path):
-        """Pinned projects first, then whatever is live, then blanks."""
-        live = {}
+        """The slots to show, one per key, in key order.
+
+        A slot is {id, project, label, row, count}: a live session (`row`
+        set), or a pinned project with nothing running (`row` None). Pinned
+        projects come first, each expanded into one slot per session; then
+        every other open session, blocked ones first. When there are more
+        slots than keys, pinned projects with no session give way first.
+        Remote sessions are left out: a press here has no window to raise.
+        """
+        by_project = {}
         for row in sessions:
             cwd = row.get("cwd")
-            if not cwd:
+            if not cwd or row.get("remote") or state_for(row) == "none":
                 continue
-            name = projects_by_path.get(os.path.normcase(os.path.abspath(cwd)))
-            if not name:
-                continue
-            # A blocked session outranks whatever else shares its project.
-            if name not in live or row.get("attention"):
-                live[name] = row
+            name = (projects_by_path.get(os.path.normcase(os.path.abspath(cwd)))
+                    or os.path.basename(cwd.rstrip("/\\")) or cwd)
+            by_project.setdefault(name, []).append(row)
+        for rows in by_project.values():
+            rows.sort(key=lambda r: (r.get("startedAt") or 0, r["sessionId"]))
 
-        order = list(self.pinned)
-        extras = sorted(
-            (n for n in live if n not in order),
-            key=lambda n: (not live[n].get("attention"), n.lower()),
-        )
-        order += extras
-        return order[: self.project_keys()], live
+        def expand(name):
+            rows = by_project.get(name) or []
+            if not rows:
+                return [{"id": "project:" + name, "project": name, "label": name,
+                         "row": None, "count": None}]
+            return [{"id": r["sessionId"], "project": name, "label": name, "row": r,
+                     "count": "%d/%d" % (n + 1, len(rows)) if len(rows) > 1 else None}
+                    for n, r in enumerate(rows)]
 
-    def paint(self, order, live):
+        slots = []
+        for name in self.pinned:
+            slots += expand(name)
+        extras = sorted((n for n in by_project if n not in self.pinned),
+                        key=lambda n: (not any(r.get("attention") for r in by_project[n]),
+                                       n.lower()))
+        for name in extras:
+            slots += expand(name)
+
+        room = self.project_keys()
+        while len(slots) > room:
+            idle = [n for n, sl in enumerate(slots) if sl["row"] is None]
+            if not idle:
+                break
+            del slots[idle[-1]]
+        return slots[:room]
+
+    def flash_state(self, slot_id, state, now):
+        """The state to paint for `slot_id` now, starting a flash on a change.
+
+        The flash opens on the new colour and alternates with the old one
+        every FLASH_HALF; another change mid-flash restarts it from there.
+        """
+        before = self.seen.get(slot_id)
+        self.seen[slot_id] = state
+        if before is not None and before != state:
+            self.flashes[slot_id] = (before, state, now)
+        f = self.flashes.get(slot_id)
+        if not f:
+            return state
+        old, new, at = f
+        if now - at >= FLASH_SECONDS:
+            self.flashes.pop(slot_id, None)
+            return state
+        return old if int((now - at) / FLASH_HALF) % 2 else new
+
+    def flashing(self):
+        return bool(self.flashes)
+
+    def paint(self, slots, now=None):
+        now = time.time() if now is None else now
         with self.lock:
-            self.slots = order
+            self.slots = slots
+            shown = set()
             for key in range(self.deck.key_count()):
                 slot = self.decision_slot(key)
                 if slot:
@@ -224,22 +300,26 @@ class Surface:
                                                                 state, badge))
                         self.last[key] = (state, label, badge)
                     continue
-                name = order[key] if key < len(order) else None
-                if not name:
-                    state, label, badge = "none", "", None
+                sl = slots[key] if key < len(slots) else None
+                if not sl:
+                    look = ("", "none", None, False, None)
                 else:
-                    row = live.get(name)
-                    state = state_for(row)
-                    label = name
+                    row = sl["row"]
+                    shown.add(sl["id"])
+                    state = self.flash_state(sl["id"], state_for(row), now)
                     badge = None
                     if row and row.get("attention") and row.get("attention_since"):
-                        badge = "%dm" % max(
-                            0, int((time.time() - row["attention_since"]) // 60)
-                        )
-                if self.last.get(key) == (state, label, badge):
+                        badge = "%dm" % max(0, int((now - row["attention_since"]) // 60))
+                    look = (sl["label"], state, badge,
+                            bool(row and row.get("desktop_app")), sl["count"])
+                if self.last.get(key) == look:
                     continue
-                self.deck.set_key_image(key, render_key(self.deck, label, state, badge))
-                self.last[key] = (state, label, badge)
+                self.deck.set_key_image(key, render_key(self.deck, *look))
+                self.last[key] = look
+            # A session that leaves the board starts fresh if it comes back.
+            for gone in set(self.seen) - shown:
+                self.seen.pop(gone, None)
+                self.flashes.pop(gone, None)
 
     def on_press(self, deck, key, pressed):
         if not pressed:
@@ -257,11 +337,15 @@ class Surface:
         if self.decision_slot(key):
             return  # the info key, or a decision key not yet armed
         with self.lock:
-            name = self.slots[key] if key < len(self.slots) else None
-        if not name:
+            sl = self.slots[key] if key < len(self.slots) else None
+        if not sl:
             return
+        name = sl["project"]
+        payload = {"project": name}
+        if sl["row"]:
+            payload["session_id"] = sl["row"]["sessionId"]
         try:
-            result = api("/api/focus", {"project": name})
+            result = api("/api/focus", payload)
             print("press %-2d %-24s -> %s" % (key, name, result.get("action") or
                                               result.get("error")))
         except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -293,27 +377,31 @@ def main():
     surface = Surface(deck, pinned)
     deck.set_key_callback(surface.on_press)
 
+    slots, polled = [], 0.0
     try:
         while True:
-            try:
-                sessions = api("/api/sessions")["sessions"]
-                surface.set_decision(api("/api/pending").get("pending") or [])
-                catalogue = api("/api/projects")["projects"]
-                by_path = {
-                    os.path.normcase(os.path.abspath(p["path"])): p["name"]
-                    for p in catalogue
-                }
-                order, live = surface.layout(sessions, by_path)
-                surface.paint(order, live)
-            except (urllib.error.URLError, OSError, ValueError, KeyError):
-                # The dispatcher restarting is normal; say so on the keys
-                # rather than exiting and leaving a dead board. A decision
-                # that can no longer be delivered stops being offered.
-                surface.set_decision([])
-                surface.paint([], {})
+            if time.time() - polled >= POLL_SECONDS:
+                polled = time.time()
+                try:
+                    sessions = api("/api/sessions")["sessions"]
+                    surface.set_decision(api("/api/pending").get("pending") or [])
+                    catalogue = api("/api/projects")["projects"]
+                    by_path = {
+                        os.path.normcase(os.path.abspath(p["path"])): p["name"]
+                        for p in catalogue
+                    }
+                    slots = surface.layout(sessions, by_path)
+                except (urllib.error.URLError, OSError, ValueError, KeyError):
+                    # The dispatcher restarting is normal; say so on the keys
+                    # rather than exiting and leaving a dead board. A decision
+                    # that can no longer be delivered stops being offered.
+                    surface.set_decision([])
+                    slots = []
+            surface.paint(slots)
             if args.once:
                 break
-            time.sleep(POLL_SECONDS)
+            # Between polls only a flash needs the keys redrawn.
+            time.sleep(FLASH_TICK if surface.flashing() else POLL_SECONDS)
     except KeyboardInterrupt:
         pass
     finally:

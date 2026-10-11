@@ -214,6 +214,14 @@ def resume(session_id, cwd, where="window", fork=False, prompt=None,
     raise ResumeError("where must be window or background")
 
 
+def new_session(cwd, popen=None):
+    """A fresh `claude` in a new tab, in `cwd`. Nothing carried over."""
+    if not cwd or not os.path.isdir(cwd):
+        raise ResumeError("its directory is gone: %s" % (cwd,))
+    (popen or _popen)(terminal_command(cwd, ["claude"]), cwd)
+    return {"ok": True, "action": "new", "where": "window", "command": "claude"}
+
+
 def _popen(cmd, cwd):
     subprocess.Popen(cmd, cwd=cwd, close_fds=True,
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)

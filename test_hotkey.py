@@ -92,6 +92,12 @@ class WindowLookup(unittest.TestCase):
         found = hotkey.find_window()
         self.assertTrue(found is None or isinstance(found, int))
 
+    def test_only_the_app_window_matches(self):
+        self.assertTrue(hotkey.is_app_title("Imperatorium"))
+        self.assertFalse(hotkey.is_app_title(
+            "hypertetrahedron/imperatorium: A central app - Google Chrome"))
+        self.assertFalse(hotkey.is_app_title(""))
+
     def test_the_title_it_looks_for_matches_the_page(self):
         # If these drift apart the hotkey silently opens a second window
         # every time instead of raising the one already there.

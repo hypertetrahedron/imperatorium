@@ -801,6 +801,21 @@ class Resume(unittest.TestCase):
         with self.assertRaises(history.ResumeError):
             history.resume("sid1", self.dir, where="teleport")
 
+    def test_new_session_opens_plain_claude_in_a_tab(self):
+        calls = []
+        got = history.new_session(self.dir,
+                                  popen=lambda cmd, cwd: calls.append((cmd, cwd)))
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["action"], "new")
+        cmd, cwd = calls[0]
+        self.assertEqual(cwd, self.dir)
+        self.assertEqual(cmd[-1], "claude")
+        self.assertNotIn("--resume", cmd)
+
+    def test_new_session_requires_a_real_directory(self):
+        with self.assertRaises(history.ResumeError):
+            history.new_session(os.path.join(self.dir, "gone"), popen=lambda *a: None)
+
     def test_window_needs_wt_on_path(self):
         history.shutil.which = lambda name: None
         with self.assertRaises(history.ResumeError):
@@ -1023,7 +1038,7 @@ class Queue(Base):
         out = self.control.enqueue(SID, "do the thing")
         self.assertTrue(out["ok"])
         self.assertEqual(len(self.sent), 1)
-        self.assertEqual(self.sent[0][2], "do the thing")
+        self.assertEqual(conversation.strip_origin(self.sent[0][2]), "do the thing")
         self.assertEqual(self.control.store.queued(SID), [])
 
     def test_a_busy_session_holds_the_prompt_until_a_stop_hook(self):
@@ -1037,13 +1052,13 @@ class Queue(Base):
         self.control.on_hook({"hook_event_name": "Stop", "session_id": SID,
                               "cwd": CWD, "last_assistant_message": "ok"})
         self.assertEqual(len(self.sent), 1)
-        self.assertEqual(self.sent[0][2], "first")
+        self.assertEqual(conversation.strip_origin(self.sent[0][2]), "first")
         self.assertEqual(len(self.control.store.queued(SID)), 1)
 
         self.control.on_hook({"hook_event_name": "Stop", "session_id": SID,
                               "cwd": CWD, "last_assistant_message": "ok"})
         self.assertEqual(len(self.sent), 2)
-        self.assertEqual(self.sent[1][2], "second")
+        self.assertEqual(conversation.strip_origin(self.sent[1][2]), "second")
         self.assertEqual(self.control.store.queued(SID), [])
 
         # A third Stop has nothing left to deliver.
@@ -1072,7 +1087,7 @@ class Queue(Base):
         self.control.invalidate()
         delivered = self.control.sweep_queue()
         self.assertEqual(len(delivered), 1)
-        self.assertEqual(self.sent[0][2], "waiting")
+        self.assertEqual(conversation.strip_origin(self.sent[0][2]), "waiting")
 
     def test_enqueue_with_no_prompt_is_refused(self):
         out = self.control.enqueue(SID, "   ")
@@ -1194,6 +1209,22 @@ class ResumeMethod(Base):
         self.assertTrue(out["ok"])
         self.assertEqual(calls[0][1], CWD)
 
+    def test_new_session_uses_the_selected_sessions_cwd(self):
+        self.live(status="idle")
+        self.start_hook()
+        calls = []
+        orig = dispatcher.history.new_session
+        dispatcher.history.new_session = lambda cwd: calls.append(cwd) or {
+            "ok": True, "action": "new", "command": "claude"}
+        try:
+            out = self.control.new_session(SID)
+        finally:
+            dispatcher.history.new_session = orig
+        self.assertTrue(out["ok"])
+        self.assertEqual(calls, [CWD])
+        self.assertTrue(any(e.get("kind") == "new"
+                            for e in self.control.store.events(10)))
+
     def test_a_resume_error_is_reported_not_raised(self):
         orig = dispatcher.history.resume
 
@@ -1293,6 +1324,11 @@ class HttpRoutes(Base):
 
     def test_post_resume_for_an_unknown_session_answers_200_not_ok(self):
         status, body = self._post("/api/resume", {"session_id": "nope-nope"})
+        self.assertEqual(status, 200)
+        self.assertFalse(body["ok"])
+
+    def test_post_new_without_a_project_answers_200_not_ok(self):
+        status, body = self._post("/api/new", {"session_id": "nope-nope"})
         self.assertEqual(status, 200)
         self.assertFalse(body["ok"])
 

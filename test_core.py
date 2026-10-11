@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import unittest
 
-from ccontrol import background, deeplink, inbox, projects, registry, winfocus
+from ccontrol import background, deeplink, inbox, procs, projects, registry, winfocus
 from ccontrol.store import Store
 
 CATALOGUE = [
@@ -354,6 +354,15 @@ class StaleAttention(unittest.TestCase):
             )
             self.assertNotIn("status_changed_at", rows[0], repr(stamp))
 
+    def test_a_desktop_app_session_is_flagged(self):
+        rows = registry.merge(
+            [{"sessionId": "app"}, {"sessionId": "cli"}, {"sessionId": "bare"}],
+            {"app": {"sessionId": "app", "entrypoint": "claude-desktop"},
+             "cli": {"sessionId": "cli", "entrypoint": "cli"}},
+        )
+        flags = {r["sessionId"]: bool(r.get("desktop_app")) for r in rows}
+        self.assertEqual(flags, {"app": True, "cli": False, "bare": False})
+
 
 class FailureCaptions(unittest.TestCase):
     """What a tile says when a turn dies on an API error.
@@ -522,6 +531,62 @@ class WindowTitles(unittest.TestCase):
 
     def test_no_windows_is_not_an_error(self):
         self.assertIsNone(winfocus.match_title("anything", []))
+
+
+class BackgroundTasks(unittest.TestCase):
+    """An idle session with a shell still under it is waiting, not done."""
+    NOW = 1000.0
+    OLD, NEW = 900.0, 999.0
+
+    def table(self, *extra):
+        # 100 is a claude session; 200 another with an MCP server and nothing else.
+        return [(100, 1, "claude", self.OLD), (200, 1, "claude", self.OLD),
+                (201, 200, "node", self.OLD)] + list(extra)
+
+    def count(self, table, pids=(100, 200)):
+        return procs.waiting_shells(pids, table=table, now=self.NOW)
+
+    def test_no_shells_means_nothing_waiting(self):
+        self.assertEqual(self.count(self.table()), {})
+
+    def test_a_running_shell_counts(self):
+        self.assertEqual(self.count(self.table((110, 100, "bash", self.OLD))), {100: 1})
+
+    def test_git_bash_reexec_is_one_task(self):
+        # bash.exe -> usr/bin/bash.exe -> conhost, as seen on Windows.
+        t = self.table((110, 100, "bash", self.OLD), (111, 110, "bash", self.OLD),
+                       (112, 111, "conhost", self.OLD))
+        self.assertEqual(self.count(t), {100: 1})
+
+    def test_powershell_behind_cmd_counts(self):
+        t = self.table((120, 100, "cmd", self.OLD), (121, 120, "pwsh", self.OLD))
+        self.assertEqual(self.count(t), {100: 1})
+
+    def test_a_brand_new_shell_is_a_hook_not_a_task(self):
+        self.assertEqual(self.count(self.table((110, 100, "bash", self.NEW))), {})
+
+    def test_two_tasks(self):
+        t = self.table((110, 100, "bash", self.OLD), (130, 100, "pwsh", self.OLD))
+        self.assertEqual(self.count(t), {100: 2})
+
+    def test_exe_names_normalise(self):
+        self.assertEqual(procs._exe("bash.EXE"), "bash")
+
+    def test_annotate_only_touches_idle_rows(self):
+        rows = [{"pid": 100, "status": "idle"}, {"pid": 200, "status": "busy"}]
+        real = procs.waiting_shells
+        procs.waiting_shells = lambda pids: {p: 1 for p in pids}
+        try:
+            procs.annotate(rows)
+        finally:
+            procs.waiting_shells = real
+        self.assertEqual(rows[0].get("background_tasks"), 1)
+        self.assertNotIn("background_tasks", rows[1])
+
+    def test_live_table_reads(self):
+        # This process is in the table, under its parent.
+        rows = {pid: ppid for pid, ppid, _, _ in procs.process_table()}
+        self.assertEqual(rows.get(os.getpid()), os.getppid())
 
 
 if __name__ == "__main__":

@@ -122,6 +122,68 @@ class Filtering(unittest.TestCase):
         self.assertEqual(len(conv.to_items(msgs, limit=0)[0]["blocks"]), 5)
 
 
+class InboxPrompts(unittest.TestCase):
+    """What was typed into the window has to show in the conversation.
+
+    Claude Code records an inbox prompt as a meta message from a peer, wraps
+    it in a notice for the model, and the SDK's public reader drops it.
+    """
+
+    WRAPPED = ("Another Claude session sent a message:\nallow the install.\n\n"
+               "This came from another Claude session — not typed by your "
+               "user, but very likely working on their behalf.")
+
+    def peer(self, content, **extra):
+        entry = {"type": "user", "isMeta": True, "uuid": "u1",
+                 "origin": {"kind": "peer", "from": "unknown"},
+                 "message": {"role": "user", "content": content}}
+        entry.update(extra)
+        return entry
+
+    def test_the_wrapper_is_removed(self):
+        self.assertEqual(conv.unwrap_peer(self.WRAPPED), "allow the install.")
+
+    def test_the_dispatchers_origin_note_is_removed_too(self):
+        wrapped = self.WRAPPED.replace("allow the install.",
+                                       conv.with_origin("allow the install."))
+        self.assertEqual(conv.unwrap_peer(wrapped), "allow the install.")
+        # Mid-turn, the prompt arrives bare in a queued_command attachment.
+        self.assertEqual(conv.unwrap_peer(conv.with_origin("go")), "go")
+
+    def test_origin_note_goes_on_once_and_comes_off(self):
+        once = conv.with_origin("hello")
+        self.assertEqual(conv.with_origin(once), once)
+        self.assertEqual(conv.strip_origin(once), "hello")
+        self.assertEqual(conv.strip_origin("plain"), "plain")
+
+    def test_unwrapped_text_is_left_alone(self):
+        self.assertEqual(conv.unwrap_peer("line one\nline two"),
+                         "line one\nline two")
+
+    def test_only_peer_prompts_are_recovered(self):
+        self.assertTrue(conv._is_peer_prompt(self.peer("x")))
+        self.assertFalse(conv._is_peer_prompt(self.peer("x", origin=None)))
+        self.assertFalse(conv._is_peer_prompt(self.peer("x", isMeta=False)))
+        self.assertFalse(conv._is_peer_prompt(self.peer("x", isSidechain=True)))
+
+    def test_a_sent_prompt_is_the_person_and_says_how_it_came(self):
+        items = conv.to_items([conv._Sent(self.peer(self.WRAPPED)),
+                               assistant(TEXT)])
+        self.assertEqual(items[0]["speaker"], conv.YOU)
+        self.assertEqual(items[0]["via"], "inbox")
+        self.assertEqual(items[0]["blocks"][0]["text"], "allow the install.")
+        self.assertNotIn("via", items[1])
+
+    def test_a_sent_prompt_does_not_merge_into_a_typed_one(self):
+        typed = user({"type": "text", "text": "typed here"})
+        items = conv.to_items([typed, conv._Sent(self.peer("sent"))])
+        self.assertEqual(len(items), 2)
+
+    def test_the_default_keeps_every_message(self):
+        msgs = [assistant(TEXT), user({"type": "text", "text": "q"})] * 100
+        self.assertEqual(len(conv.to_items(msgs)), 200)
+
+
 class Attribution(unittest.TestCase):
     """The bug this fixes: the window called Claude's own output "USER".
 
@@ -171,6 +233,119 @@ class Attribution(unittest.TestCase):
         items = conv.to_items([Msg({"role": "user", "content": "go"}),
                                user({"type": "tool_result", "content": "out"})])
         self.assertEqual([i["speaker"] for i in items], [conv.YOU, conv.TOOLS])
+
+
+class SystemMessages(unittest.TestCase):
+    """Claude Code's own user-role messages are not the person talking."""
+    NOTE = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
+            "<summary>Background command \"sleep\" completed (exit code 0)</summary>\n"
+            "</task-notification>")
+
+    def text(self, t):
+        return user({"type": "text", "text": t})
+
+    def test_task_notification_is_not_you(self):
+        [item] = conv.to_items([self.text(self.NOTE)])
+        self.assertEqual(item["speaker"], conv.SYSTEM)
+        self.assertEqual(item["note"], conv.NOTE_TASK)
+        self.assertEqual(item["blocks"][0]["text"],
+                         'Background command "sleep" completed (exit code 0)')
+
+    def test_command_output_loses_its_wrapper(self):
+        [item] = conv.to_items([self.text(
+            "<local-command-stdout>Set model to Opus</local-command-stdout>")])
+        self.assertEqual((item["speaker"], item["note"]), (conv.SYSTEM, conv.NOTE_COMMAND))
+        self.assertEqual(item["blocks"][0]["text"], "Set model to Opus")
+
+    def test_metadata_tag_wins_without_a_prefix(self):
+        msg = self.text("This session is being continued from a previous conversation")
+        msg.system = conv.NOTE_SUMMARY
+        [item] = conv.to_items([msg])
+        self.assertEqual((item["speaker"], item["note"]), (conv.SYSTEM, conv.NOTE_SUMMARY))
+
+    def test_a_typed_slash_command_is_still_you(self):
+        [item] = conv.to_items([self.text("<command-name>/clear</command-name>")])
+        self.assertEqual(item["speaker"], conv.YOU)
+
+    def test_a_prompt_after_a_notification_keeps_its_own_turn(self):
+        items = conv.to_items([self.text(self.NOTE), self.text("now fix it")])
+        self.assertEqual([i["speaker"] for i in items], [conv.SYSTEM, conv.YOU])
+
+    def test_entry_origin_maps_to_a_note(self):
+        self.assertEqual(conv._system_origin({"origin": {"kind": "task-notification"}}),
+                         conv.NOTE_TASK)
+        self.assertEqual(conv._system_origin({"isCompactSummary": True}), conv.NOTE_SUMMARY)
+        self.assertIsNone(conv._system_origin({"origin": {"kind": "human"}}))
+
+
+class Compaction(unittest.TestCase):
+    """What a compaction cut off is put back in front, once."""
+
+    def e(self, uuid, parent, **kw):
+        return dict({"uuid": uuid, "parentUuid": parent, "type": "user"}, **kw)
+
+    def test_earlier_chain_is_prepended(self):
+        entries = [self.e("a", None), self.e("b", "a"),
+                   self.e("k", None, type="system", subtype="compact_boundary",
+                          logicalParentUuid="b"),
+                   self.e("s", "k", isCompactSummary=True), self.e("c", "s")]
+        chain = [entries[2], entries[3], entries[4]]
+        got = [x["uuid"] for x in conv.with_compacted(entries, chain)]
+        self.assertEqual(got, ["a", "b", "k", "s", "c"])
+
+    def test_two_compactions(self):
+        entries = [self.e("a", None),
+                   self.e("k1", None, type="system", subtype="compact_boundary",
+                          logicalParentUuid="a"),
+                   self.e("b", "k1"),
+                   self.e("k2", None, type="system", subtype="compact_boundary",
+                          logicalParentUuid="b"),
+                   self.e("c", "k2")]
+        got = [x["uuid"] for x in conv.with_compacted(entries, entries[3:])]
+        self.assertEqual(got, ["a", "k1", "b", "k2", "c"])
+
+    def test_missing_link_leaves_chain_alone(self):
+        entries = [self.e("k", None, type="system", subtype="compact_boundary",
+                          logicalParentUuid="gone"), self.e("c", "k")]
+        self.assertEqual(conv.with_compacted(entries, entries), entries)
+
+    def test_no_compaction_is_untouched(self):
+        entries = [self.e("a", None), self.e("b", "a")]
+        self.assertEqual(conv.with_compacted(entries, entries), entries)
+
+
+class QueuedPrompts(unittest.TestCase):
+    """A prompt that lands mid-turn is an attachment, and still shows."""
+
+    def att(self, prompt, origin=None, mode="prompt"):
+        a = {"type": "queued_command", "prompt": prompt, "commandMode": mode}
+        if origin is not None:
+            a["origin"] = origin
+        return {"type": "attachment", "uuid": "q1", "attachment": a}
+
+    def test_window_prompt_while_busy_is_you_via_inbox(self):
+        entry = self.att("fix the tests", {"kind": "peer", "from": "unknown"})
+        self.assertTrue(conv._is_queued_prompt(entry))
+        [item] = conv.to_items([conv._Queued(entry)])
+        self.assertEqual((item["speaker"], item.get("via")), (conv.YOU, "inbox"))
+        self.assertEqual(item["blocks"][0]["text"], "fix the tests")
+
+    def test_task_notification_mid_turn_is_a_note(self):
+        entry = self.att(SystemMessages.NOTE, {"kind": "task-notification"},
+                         mode="task-notification")
+        [item] = conv.to_items([conv._Queued(entry)])
+        self.assertEqual((item["speaker"], item["note"]), (conv.SYSTEM, conv.NOTE_TASK))
+        self.assertNotIn("via", item)
+
+    def test_subagent_hand_back_is_not_you(self):
+        entry = self.att("[Subagent hand-back] report",
+                         {"kind": "peer", "from": "a1", "senderTaskId": "a1"})
+        [item] = conv.to_items([conv._Queued(entry)])
+        self.assertEqual((item["speaker"], item["note"]), (conv.SYSTEM, conv.NOTE_SUBAGENT))
+
+    def test_other_attachments_are_ignored(self):
+        self.assertFalse(conv._is_queued_prompt({"type": "attachment",
+                                                 "attachment": {"type": "file"}}))
 
 
 class Preview(unittest.TestCase):

@@ -74,15 +74,31 @@ http://127.0.0.1:8792/         # or just open it
 Sessions down the left, the selected session's conversation in the middle, a
 prompt box underneath. Selecting a session shows what it actually said - text,
 tool calls, tool results - so you can see what a blocked session is blocked on
-instead of guessing from a status dot on another screen. Markdown tables
-in what Claude writes are drawn as tables; the rest of its text is shown as
-written. Enter sends to that
-session; ctrl+Enter hands the work to a fresh background session.
+instead of guessing from a status dot on another screen. What Claude writes
+is rendered as Markdown - bold and italic, inline code, links, headings,
+lists, quotes, code blocks and tables - by a small renderer in `ui.py`, not
+a library, so the page still loads with no network. Enter sends to that
+session; ctrl+Enter hands the work to a fresh background session. The prompt
+box keeps an unsent draft per session (in this browser), so switching away
+mid-sentence and back loses nothing.
 
-Conversations are read through the Agent SDK's `get_session_messages`, the
-supported reader, which works on a session running in another process. The
-transcript files are not parsed: the docs say that format is internal and
-changes between versions.
+The chat shows the whole conversation, back through every compaction - each
+one, including those Claude Code runs on its own while a session sits idle,
+is marked by a folded "compacted here" divider holding the summary it kept.
+What you send from the window shows as yours ("via inbox") even when it
+reached a session mid-turn. Claude Code's own messages - a background task
+finishing, a slash command's output, a subagent's report - are captioned as
+such rather than as you. ▲/▼ at the chat's lower right (alt+Up/Down) jump
+between your prompts, and **Show Current Prompt** pins the prompt the session
+is working on above the chat.
+
+Conversations are read through the Agent SDK: its private chain builder
+gives the same message order the supported `get_session_messages` does, and
+`conversation.py` then adds back the three things that reader drops - prompts
+that arrived through the inbox, prompts folded into a running turn, and
+everything before a compaction. Those reach into transcript fields the docs
+call internal; if they move, the reader falls back to the public call and
+only those additions go missing.
 
 Tabs above the conversation show the session's **Changes** (git status and
 diff), its **Activity** (every tool call, what failed and why) and the
@@ -91,13 +107,20 @@ PR and discard). The header offers Fork, and Resume for a session that has
 finished. **Queue** (alt+Enter) holds a prompt until the session's current
 turn ends. The sidebar groups by state or folder, pins, archives and
 filters; each tile says what the session is doing now, its context use and
-its PR. **history** searches every past session; **insights** tallies tool
+its PR. A session between turns that still has a background command running
+shows as working ("waiting on a background task"), not idle. The 5h and 7d
+usage bars carry a tick showing how far through each window the clock is, and
+a reset that is not today names its weekday. **history** searches every past session; **insights** tallies tool
 failures across projects and switches the phone and spoken alerts on.
 
 ## What it does
 
 - **Registry** - every live session, its project, and whether it is idle,
-  working, or blocked on you.
+  working, or blocked on you. A session between turns that still has a
+  background command running (a build, a test run, a `Monitor`) shows as
+  working - "waiting on a background task" - not idle, since it wakes when
+  that command exits. Found by counting the shells under its `claude`
+  process; background subagents run in-process and are not seen.
 - **Attention** - Claude Code hooks push `permission_prompt`, `idle_prompt`
   and `agent_needs_input` here the moment they happen, so the board shows what
   is waiting and for how long.
@@ -115,6 +138,26 @@ kept separate for that reason.
 
 ## Running it
 
+`impctl.py` is the one front door: service control, sessions, approvals,
+setup and tests, without having to know which file each lives in.
+`impctl.ps1` and `impctl.sh` run it from any folder with the right Python
+(the venv when there is one): `.\impctl.ps1 status`, `./impctl.sh status`.
+
+```
+python impctl.py help                      # every command and its parameters
+python impctl.py help send                 # one command in full
+python impctl.py status                    # service components, and is the dispatcher up
+python impctl.py restart [dispatcher]      # stop then start (all, or one component)
+python impctl.py stop | start [COMPONENT]  # stop stays stopped: the task is disabled
+python impctl.py sessions                  # live sessions
+python impctl.py send -s NAME "prompt"     # or -p PROJECT; --dry-run to see the route
+python impctl.py resume | fork | new ID    # sessions by id, id prefix or name
+python impctl.py pending; python impctl.py allow ID
+python impctl.py test                      # every suite, through the venv if there is one
+```
+
+The pieces underneath, run directly:
+
 ```
 python -m ccontrol.dispatcher              # http://127.0.0.1:8792
 python hooks/install.py --dry-run          # show what would change
@@ -128,7 +171,8 @@ python test_hotkey.py && python test_ui.py        # test_ui needs node; skips wi
 .venv\Scripts\python.exe test_voice.py
 .venv\Scripts\python.exe test_features.py        # the newer tabs, queue, usage, history
 python test_setup.py                               # the installer
-# 489 tests in total
+python test_impctl.py                              # the command line
+# 576 tests in total
 ```
 
 Individual pieces are runnable on their own, which is usually the fastest way
@@ -202,7 +246,15 @@ not a valid auth line is closed and delivers nothing.
 Code is explicit that such a message is not user consent: it cannot answer a
 pending permission prompt, cannot change settings or `CLAUDE.md`, and a slash
 command in its text arrives as inert text. What the token buys is delivery
-*without an approval dialog*, not authority. So this dispatches work; approving
+*without an approval dialog*, not authority.
+
+Claude Code also tells the receiving agent the message came from "another
+Claude session" and to answer by `SendMessage` to its sender - but a
+dispatched prompt has no sender. With two sessions open in one project, an
+agent answered a window prompt by messaging the other session. So every
+dispatched prompt starts with one line saying there is no sending session and
+to reply in its own conversation (`conversation.ORIGIN_NOTE`); the window and
+the event log strip it again. So this dispatches work; approving
 what that work then asks for stays a human job, through the terminal, Remote
 Control, or a `PermissionRequest` hook.
 
@@ -270,10 +322,13 @@ as before and the button reports that it is unavailable.
 
 ## Stream Deck
 
-`streamdeck_surface.py` puts one project on each key, coloured by what that
-project's session is doing: orange blocked, blue working, green idle, grey no
-session. A blocked key carries a badge counting how long it has been waiting.
-Pressing a key raises that session, or opens one if nothing is running.
+`streamdeck_surface.py` puts one session on each key, coloured by what it is
+doing: orange blocked, blue working, green idle, grey no session. A project
+with several sessions gets a key for each, with a `1/2` counter in the
+corner. A blocked key carries a badge counting how long it has been waiting,
+and a key whose session changes state flashes between its old and new
+colours for five seconds. Pressing a key raises that exact session, or opens
+one if nothing is running.
 
 ```
 .venv\Scripts\python.exe streamdeck_surface.py
@@ -282,8 +337,11 @@ Pressing a key raises that session, or opens one if nothing is running.
 It is a separate process with its own dependencies (`streamdeck`, `pillow`),
 so the dispatcher stays standard-library only, and it holds no state - killing
 or restarting it affects nothing else. Pin the projects you want in fixed
-positions under `streamdeck.keys` in `config.json`; anything live that is not
-pinned fills the remaining keys, blocked first.
+positions under `streamdeck.keys` in `config.json` - each expands into one
+key per session, and keeps a grey key while nothing runs there. Every other
+open session fills the remaining keys, blocked first. When keys run short,
+the grey keys give way first. Remote sessions stay off the deck: a press has
+no window here to raise.
 
 The library's only backend is hidapi, which is not on PyPI, so the official
 libusb release DLL is vendored at `vendor/hidapi.dll`. The venv's `python.exe`
@@ -294,6 +352,7 @@ registers the vendor directory with `os.add_dll_directory` at import.
 
 ```
 ccontrol/registry.py    who is running, from `claude agents --json`
+ccontrol/procs.py       is an idle session still waiting on a shell it started
 ccontrol/projects.py    the catalogue, and turning speech into a project
 ccontrol/inbox.py       the named-pipe client
 ccontrol/deeplink.py    claude-cli://open URLs
@@ -320,6 +379,8 @@ ONBOARDING.md           the step-by-step walkthrough
 *.example.json          what config.json and policy.json start from
 requirements*.txt       core, voice and Stream Deck dependencies
 hooks/cc_statusline.py  the statusline: forwards usage, prints a short line
+impctl.py               the command line: every function below, and a help
+impctl.ps1/.sh          run it from anywhere, with the venv's Python
 hotkey.py               the global hotkey, and nothing else
 streamdeck_surface.py   the Stream Deck, a separate process
 service/tasks.ps1       Windows scheduled tasks that keep all three up

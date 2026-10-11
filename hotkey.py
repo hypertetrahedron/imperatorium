@@ -76,6 +76,13 @@ def candidates(override=None):
     return DEFAULT_HOTKEYS
 
 
+def is_app_title(title):
+    """Exact, not a substring: a browser tab on the GitHub repo is titled
+    "hypertetrahedron/imperatorium: ... - Google Chrome", and matching it
+    raised that tab instead of the app."""
+    return (title or "").strip().lower() == WINDOW_TITLE.lower()
+
+
 def find_window():
     """HWND of the control window, by title. None when it is not open."""
     if not winfocus.WINDOWS:
@@ -92,7 +99,7 @@ def find_window():
             return True
         buf = ctypes.create_unicode_buffer(length + 1)
         winfocus._user32.GetWindowTextW(hwnd, buf, length + 1)
-        if WINDOW_TITLE.lower() in buf.value.lower():
+        if is_app_title(buf.value):
             found.append(hwnd)
         return True
 
@@ -103,10 +110,8 @@ def find_window():
 def raise_or_open():
     """Front the window if it exists, otherwise start it."""
     hwnd = find_window()
-    if hwnd:
-        winfocus._user32.ShowWindow(hwnd, winfocus.SW_RESTORE)
-        if winfocus._user32.SetForegroundWindow(hwnd):
-            return "raised"
+    if hwnd and winfocus.focus_hwnd(hwnd):
+        return "raised"
     window_mod.open_window()
     return "opened"
 

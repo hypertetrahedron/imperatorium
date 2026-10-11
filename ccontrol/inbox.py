@@ -12,10 +12,14 @@ Two frame types matter here:
     {"type": "user",  "message": {"role": "user", "content": "..."}}
     {"type": "peer_message", ...}
 
-A `user` frame is queued as a user turn. A peer message is explicitly not
-user consent: it cannot answer a permission prompt, cannot change settings,
-and a slash command inside it arrives as inert text. Dispatch therefore uses
-the `user` frame, which is why the token matters - see AUTH below.
+A peer message is explicitly not user consent: it cannot answer a permission
+prompt, cannot change settings, and a slash command inside it arrives as
+inert text. Dispatch uses the `user` frame, which is why the token matters -
+see AUTH below. As of Claude Code 2.1.292 that makes no difference to how it
+lands: a `user` frame is recorded with `origin.kind: "peer"` and presented as
+"Another Claude session sent a message", with the same limits. The
+dispatcher puts `conversation.ORIGIN_NOTE` in front so the receiver at least
+answers in place rather than looking for a sender to reply to.
 
 AUTH
     On native Windows the first line of the connection MUST be a valid auth

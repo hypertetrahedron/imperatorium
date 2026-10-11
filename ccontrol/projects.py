@@ -44,33 +44,6 @@ def load_config(project_dir):
         return {}
 
 
-def claude_home():
-    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
-        os.path.expanduser("~"), ".claude"
-    )
-
-
-def known_cwds():
-    """Every directory Claude Code has a transcript folder for.
-
-    The folder name is the absolute path with non-alphanumerics replaced by
-    '-', which is lossy and not reversible, so these contribute *names* to
-    the catalogue, not paths. On Windows the same path can appear under two
-    different cases; fold them together.
-    """
-    names = set()
-    d = os.path.join(claude_home(), "projects")
-    try:
-        entries = os.listdir(d)
-    except OSError:
-        return names
-    for slug in entries:
-        leaf = slug.rstrip("-").split("-")[-1]
-        if leaf and leaf not in SKIP:
-            names.add(leaf.lower())
-    return names
-
-
 def discover(roots=None, extra=None):
     """The project catalogue: {name, path, source}."""
     roots = roots or DEFAULT_ROOTS
