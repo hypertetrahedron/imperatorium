@@ -181,6 +181,9 @@ def merge(agent_rows, files, creds=None):
     attach_credentials(rows, creds)
     for row in rows.values():
         row["attention"] = needs_attention(row)
+        row["project"], row["worktree"] = place(row.get("cwd"))
+        row["display_name"] = label(row)
+        row["short_name"] = short_label(row)
     return sorted(rows.values(), key=lambda r: (r.get("name") or "", r["sessionId"]))
 
 
@@ -229,6 +232,91 @@ def moved_on(row, since):
         return False
     changed = row.get("status_changed_at")
     return bool(changed) and changed > since + SETTLE_SECONDS
+
+
+def still_running(row, notification):
+    """Is an `idle_prompt` contradicted by the session still having work on?
+
+    Claude Code sends `idle_prompt` once the prompt has sat for a minute,
+    whether or not something it started is still going. A session waiting on
+    a `Monitor` or a backgrounded command got one, and the tile said "waiting
+    for you" while the terminal said "waiting on 1 monitor". Here the session
+    file had gone `shell` a minute *before* the notice, so `moved_on`, which
+    looks for work resuming after it, could never clear it.
+
+    Hidden, not cleared: once the command ends the session takes a turn and
+    `Stop` clears it; if instead it falls truly idle, the notice is right again.
+    """
+    if notification != "idle_prompt":
+        return False
+    return row.get("status") in ACTIVE_STATUSES or bool(row.get("background_tasks"))
+
+
+# Where `claude --worktree` puts a worktree: <repo>/.claude/worktrees/<name>.
+# Matched on the path alone, so it works for a remote host's paths too.
+CLAUDE_WORKTREE = re.compile(r"^(?P<root>.*?)[\\/]\.claude[\\/]worktrees[\\/](?P<name>[^\\/]+)[\\/]*$")
+# A linked worktree's `.git` is a file: "gitdir: <main>/.git/worktrees/<name>".
+GITDIR = re.compile(r"^gitdir:\s*(?P<main>.*?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+\s*$", re.M)
+
+
+def _base(path):
+    return re.split(r"[\\/]", (path or "").rstrip("\\/"))[-1]
+
+
+def place(cwd):
+    """(project, worktree) for a working directory; worktree is None if not one.
+
+    A session started with `--worktree` runs in a folder named after the
+    worktree, so naming it by its folder hid which project it belonged to.
+    """
+    if not cwd:
+        return None, None
+    m = CLAUDE_WORKTREE.match(cwd)
+    if m:
+        return _base(m.group("root")), m.group("name")
+    # Any other linked worktree, wherever it was put. Only readable for a
+    # path on this machine; elsewhere the folder name has to do.
+    try:
+        with open(os.path.join(cwd, ".git"), encoding="utf-8") as fh:
+            g = GITDIR.search(fh.read(4096))
+    except OSError:
+        g = None
+    if g:
+        return _base(g.group("main")), _base(cwd)
+    return _base(cwd), None
+
+
+def default_name(row):
+    """Is `name` the one Claude Code made up - "<folder>-<short id>"?"""
+    name, folder = row.get("name") or "", _base(row.get("cwd"))
+    return bool(folder) and re.fullmatch(re.escape(folder) + r"-[0-9a-f]{1,8}", name) is not None
+
+
+def label(row):
+    """What a tile calls the session.
+
+    A worktree session's default name is "<worktree>-<id>", which says nothing
+    about the project; it becomes "<project>-<worktree>". A name someone chose
+    is left alone, as is every session outside a worktree.
+    """
+    name = row.get("name") or ""
+    if row.get("worktree") and (not name or default_name(row)):
+        return "%s-%s" % (row["project"], row["worktree"])
+    return name
+
+
+def short_label(row):
+    """The name under a project's node, where the project is already said.
+
+    "<project>-<worktree>" becomes the worktree and "<project>-<id>" the id;
+    a name someone chose is left whole.
+    """
+    name = row.get("name") or ""
+    if name and not default_name(row):
+        return name
+    if row.get("worktree"):
+        return row["worktree"]
+    return name[len(_base(row.get("cwd"))) + 1:] or name
 
 
 def needs_attention(row):

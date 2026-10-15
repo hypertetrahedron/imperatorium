@@ -18,14 +18,15 @@
     "permission_mode": "acceptEdits"
   },
   "voice": {
-    "_comment": "Dictation (F9). Local GPU; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice). preload keeps ~2GB of VRAM busy.",
+    "_comment": "Dictation (F9). Local GPU; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice). The model runs in its own process; preload starts it with the dispatcher, idle_unload (seconds, 0 = never) ends it when unused.",
     "enabled": false,
     "model": "large-v3-turbo",
     "device": "cuda",
     "compute_type": "float16",
     "language": "en",
     "input_device": null,
-    "preload": false
+    "preload": false,
+    "idle_unload": 1800
   },
   "remote": {
     "_comment": "Sessions on other machines, polled over SSH (key auth). Example host: {\"name\": \"devbox\", \"claude\": \"$HOME/.local/bin/claude\", \"tunnel\": true}",

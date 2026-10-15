@@ -45,6 +45,10 @@ def reading(payload):
         "context_pct": _num(ctx.get("used_percentage")),
         "context_size": _num(ctx.get("context_window_size")),
         "cost_usd": _num(cost.get("total_cost_usd")),
+        "duration_ms": _num(cost.get("total_duration_ms")),
+        "api_duration_ms": _num(cost.get("total_api_duration_ms")),
+        "lines_added": _num(cost.get("total_lines_added")),
+        "lines_removed": _num(cost.get("total_lines_removed")),
         "model": model.get("display_name") or model.get("id"),
         "limits": limits,
     }

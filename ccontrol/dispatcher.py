@@ -12,7 +12,6 @@ this server's own: a cross-origin fetch with a plain-text body is a CORS
 "simple request", so a page the user merely had open could otherwise drive
 this.
 """
-import hashlib
 import json
 import os
 import sys
@@ -20,9 +19,9 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import (activity, background, changes, conversation, deeplink, history,
-               inbox, notify, pending, projects, prs, registry, remote, ui,
-               usage, voice, winfocus)
+from . import (activity, background, changes, conversation, convcache, deeplink,
+               history, inbox, notify, pending, procs, projects, prs, registry,
+               remote, sessionstat, ui, usage, voice, winfocus)
 from .store import Store
 
 HOST = "127.0.0.1"
@@ -103,6 +102,9 @@ class Control:
     # How often the one-line "what is it doing" is re-read from a session's
     # conversation when no tool hook has said so more cheaply.
     DOING_EVERY = 10.0
+    # How old a snapshot may be when it is only used to find a session's row
+    # for the chat, the status panel or the activity tab (see `_row`).
+    LOOKUP_AGE = 15.0
     # Error analytics read whole transcripts; nobody needs them fresher.
     ERRORS_EVERY = 300.0
 
@@ -126,6 +128,11 @@ class Control:
             thresholds=budget.get("thresholds") or usage.DEFAULT_THRESHOLDS,
             on_crossing=self._budget_crossed)
         self.live = activity.Live()
+        self.stats = sessionstat.Reader()
+        # Parsed transcripts, reread only when one changes: the chat poll,
+        # the doing lines and the activity tab all read through this.
+        self.convs = convcache.Cache(
+            reader=lambda sid: conversation.read(sid, limit=0, merge=False))
         self.prs = prs.Tracker()
         self.history = history.Index()
         self._doing = {}  # session id -> (at, line)
@@ -133,13 +140,16 @@ class Control:
         self._tallies = {}  # session id -> (size, tally)
 
         self.pending = pending.Pending()
+        # Dictation runs in a child process (voice.Worker), so the model's
+        # ~3.3 GB is given back when it is ended. Only a config that has a
+        # `voice` block turns it on: a test's Control never starts one.
         self._voice = None
-        settings = voice.load_settings()
-        if settings.get("enabled") and voice.available():
-            self._voice = voice.Transcriber(settings)
-            if settings.get("preload"):
-                threading.Thread(target=self._warm_voice, name="whisper-warm",
-                                 daemon=True).start()
+        if isinstance(config.get("voice"), dict):
+            settings = voice.settings_from(config["voice"])
+            if settings.get("enabled") and voice.available():
+                self._voice = voice.Worker(settings)
+                if settings.get("preload"):
+                    self._voice.warm()
         self.fleet = remote.Fleet(hosts or ())
         self.tunnels = {}  # host name -> remote.Tunnel, started by serve()
         self.readers = {}  # host name -> remote.Reader, opened on first read
@@ -147,12 +157,6 @@ class Control:
         if hosts:
             threading.Thread(target=self._refresh_remote, name="remote",
                              daemon=True).start()
-
-    def _warm_voice(self):
-        try:
-            self._voice.load()
-        except Exception:
-            self._voice = None
 
     def _refresh_remote(self):
         while True:
@@ -211,7 +215,9 @@ class Control:
         got = self.usage.session(key)
         if got:
             row["usage"] = {k: got.get(k) for k in
-                            ("context_pct", "context_size", "cost_usd", "model", "at")}
+                            ("context_pct", "context_size", "cost_usd", "model", "at",
+                             "duration_ms", "api_duration_ms", "lines_added",
+                             "lines_removed")}
         if not row.get("remote") and row.get("cwd"):
             pr = self.prs.get(row["cwd"])
             if pr:
@@ -223,6 +229,26 @@ class Control:
                 and not row.get("status")):
             row["resumable"] = True
         row["resume_command"] = " ".join(history.resume_command(row["sessionId"]))
+        if not row.get("remote"):
+            row["work"] = self._work(row)
+
+    def _work(self, row):
+        """What the tile and the status panel's header line show at a glance:
+        when the prompt cache expires, and how many subagents, background
+        shells, monitors and shell processes the session has going. Counts
+        only while its process lives - nothing it started outlives it."""
+        try:
+            stat = self.stats.read(row["sessionId"], time.time()) or {}
+        except Exception:
+            stat = {}
+        alive = isinstance(row.get("pid"), int) and bool(row.get("status"))
+        out = {"cache_expires_at": (stat.get("cache") or {}).get("expires_at"),
+               "alive": alive}
+        if alive:
+            for name in ("agents", "shells", "monitors"):
+                out[name] = len(stat.get(name) or [])
+            out["processes"] = row.get("shell_processes") or 0
+        return out
 
     def _doing_line(self, sid):
         now = time.time()
@@ -231,7 +257,7 @@ class Control:
         if hit and now - hit[0] < self.DOING_EVERY:
             return hit[1]
         try:
-            line = activity.doing(conversation.read(sid, limit=8))
+            line = activity.doing(self.convs.items(sid, limit=8))
         except Exception:
             line = hit[1] if hit else ""
         with self._lock:
@@ -260,6 +286,9 @@ class Control:
         stale = (kind != BY_FAILURE) and registry.moved_on(row, since)
         if since and stale:
             self.store.clear_attention(key)
+        elif since and kind != BY_FAILURE and registry.still_running(
+                row, extra.get("last_notification")):
+            pass
         elif since:
             row["attention_since"] = since
             row["attention"] = True
@@ -304,18 +333,22 @@ class Control:
 
     def conversation(self, session_id, limit=0):
         """What one session said. Empty rather than fatal when unreadable."""
-        row = next((r for r in self.sessions()["sessions"]
-                    if r["sessionId"] == session_id
-                    or r.get("id") == session_id), None)
+        row = self._row(session_id, max_age=self.LOOKUP_AGE,
+                        match=lambda r: r["sessionId"] == session_id
+                        or r.get("id") == session_id)
         if row and row.get("remote"):
             return self._remote_conversation(row, limit)
+        sid = row["sessionId"] if row else session_id
         try:
-            items = conversation.read(row["sessionId"] if row else session_id,
-                                      limit=limit)
+            if limit:
+                items = self.convs.items(sid, limit=limit)
+                sig = convcache.signature(items)
+            else:
+                items, sig = self.convs.conversation(sid)
         except Exception as exc:
             return {"session": session_id, "items": [],
                     "error": "%s: %s" % (type(exc).__name__, exc)}
-        return {"session": session_id, "items": items,
+        return {"session": session_id, "items": items, "sig": sig,
                 "name": (row or {}).get("name"), "cwd": (row or {}).get("cwd")}
 
     def _remote_conversation(self, row, limit):
@@ -345,27 +378,27 @@ class Control:
         return out
 
     def transcribe(self, audio_bytes, hint=None):
-        """Browser-recorded audio to text, on the model this process holds.
+        """Browser-recorded audio to text, in the dictation process.
 
         The mic belongs in the window, next to the prompt box it fills. The
         browser records (localhost is a secure context, so getUserMedia
-        works) and the decode and transcription happen here, where the model
-        is already resident - loading it costs seconds, using it costs
-        hundredths.
+        works); decoding and transcription happen in the child, where the
+        model is resident - loading it costs seconds, using it hundredths.
         """
         if self._voice is None:
             return {"ok": False, "error": "dictation is not available"}
         try:
-            import io
-
-            from faster_whisper.audio import decode_audio
-
-            audio = decode_audio(io.BytesIO(audio_bytes),
-                                 sampling_rate=voice.SAMPLE_RATE)
-            text = self._voice.transcribe(audio, hint=hint)
+            text = self._voice.transcribe_bytes(audio_bytes, hint=hint)
         except Exception as exc:
             return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
         return {"ok": True, "text": text}
+
+    def warm_voice(self):
+        """The mic was pressed: build the model while the user speaks."""
+        if self._voice is None:
+            return {"ok": False, "error": "dictation is not available"}
+        self._voice.warm()
+        return {"ok": True, "running": self._voice.running}
 
     def decisions(self, limit=60):
         """Recent auto-approval verdicts, newest first.
@@ -671,10 +704,17 @@ class Control:
             except Exception:
                 pass
 
-    def _row(self, session_id):
-        return next((r for r in self.sessions()["sessions"]
-                     if r["sessionId"] == session_id or r.get("key") == session_id),
-                    None)
+    def _row(self, session_id, max_age=2.0, match=None):
+        """The session's row. A `max_age` past the usual 2s accepts an older
+        snapshot - rebuilding one runs `claude agents`, ~0.25 s, which a
+        click on a tile should not wait for - and looks again in a fresh one
+        only when the session is not in it."""
+        match = match or (lambda r: r["sessionId"] == session_id
+                          or r.get("key") == session_id)
+        row = next((r for r in self.sessions(max_age)["sessions"] if match(r)), None)
+        if row is None and max_age > 2.0:
+            row = next((r for r in self.sessions()["sessions"] if match(r)), None)
+        return row
 
     # -- changes, worktrees, activity --------------------------------------
     def _local_cwd(self, session_id):
@@ -728,7 +768,7 @@ class Control:
 
     def activity(self, session_id, limit=200):
         """The timeline of one session, from hooks when they exist."""
-        row = self._row(session_id)
+        row = self._row(session_id, max_age=self.LOOKUP_AGE)
         key = (row or {}).get("key") or session_id
         events = self.live.events(key)
         if events:
@@ -740,8 +780,8 @@ class Control:
                     "note": "remote sessions report activity only through tool hooks"}
         else:
             try:
-                items = conversation.read((row or {}).get("sessionId") or session_id,
-                                          limit=limit)
+                items = self.convs.items((row or {}).get("sessionId") or session_id,
+                                         limit=limit)
             except Exception as exc:
                 return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
             calls = activity.timeline(items)
@@ -749,6 +789,36 @@ class Control:
         return {"ok": True, "source": source, "timeline": calls[-limit:],
                 "tally": activity.tally(calls),
                 "current": self.live.current(key)}
+
+    def session_status(self, session_id):
+        """The window's status panel: what the transcript and process tree add
+        to the row - background work, prompt cache, tokens.
+
+        Background work only runs while the session's process does, so a
+        session that has ended reports none of it, whatever its transcript
+        last said.
+        """
+        row = self._row(session_id, max_age=self.LOOKUP_AGE)
+        if row is None:
+            return {"ok": False, "error": "no such session"}
+        if row.get("remote"):
+            return {"ok": True, "now": time.time(), "note":
+                    "remote sessions report only what their tile shows"}
+        now = time.time()
+        try:
+            stat = self.stats.read(row["sessionId"], now)
+        except Exception as exc:
+            return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+        out = {"ok": True, "now": now, "stat": stat or {}}
+        pid = row.get("pid")
+        alive = isinstance(pid, int) and bool(row.get("status"))
+        out["alive"] = alive
+        if stat and not alive:
+            for name in ("agents", "shells", "monitors"):
+                stat[name] = []
+        if alive:
+            out["shell_processes"] = procs.waiting_shells([pid]).get(pid, 0)
+        return out
 
     def errors(self, days=7.0, max_sessions=120):
         """Tool failures across recent sessions, by tool, category and project."""
@@ -1250,9 +1320,8 @@ class Handler(BaseHTTPRequestHandler):
             body = c.conversation(session, limit)
             # The window polls every 1.5s; a long session is megabytes of
             # items, so an unchanged one is answered with its signature only.
-            sig = hashlib.sha1(json.dumps(body.get("items") or [],
-                                          sort_keys=True).encode("utf-8")
-                               ).hexdigest()[:16]
+            # A local one's comes from the cache; a remote one is hashed here.
+            sig = body.get("sig") or convcache.signature(body.get("items") or [])
             if (args.get("known") or [""])[0] == sig:
                 body = {"session": body.get("session"), "unchanged": True}
             body["sig"] = sig
@@ -1263,6 +1332,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, c.worktrees(self._arg("project")))
         elif path == "/api/worktree_diff":
             self._send(200, c.worktree_diff(self._arg("project"), self._arg("path")))
+        elif path == "/api/session_status":
+            self._send(200, c.session_status(self._arg("session")))
         elif path == "/api/activity":
             self._send(200, c.activity(self._arg("session")))
         elif path == "/api/errors":
@@ -1304,6 +1375,8 @@ class Handler(BaseHTTPRequestHandler):
         c = self.control
         if path == "/hook":
             self._send(200, c.on_hook(payload if isinstance(payload, dict) else {}))
+        elif path == "/api/voice/warm":
+            self._send(200, c.warm_voice())
         elif path == "/api/focus":
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})

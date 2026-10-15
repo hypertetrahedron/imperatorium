@@ -75,9 +75,23 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 #sub{color:var(--muted);font-size:11.5px;word-break:break-all}
 #sessionpane{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
 #log{flex:1;overflow-y:auto;padding:14px 16px;position:relative}
-#jump{position:absolute;right:22px;bottom:12px;display:flex;flex-direction:column;gap:4px;z-index:2}
-#jump button{padding:3px 8px;font-size:12px;opacity:.75}
+#strip{display:flex;align-items:center;gap:10px;padding:4px 16px;
+  border-top:1px solid var(--line);background:var(--panel);font-size:11.5px;color:var(--muted)}
+#shape{display:flex;flex-wrap:wrap;gap:4px 12px;flex:1;min-width:0}
+#shape label{display:flex;align-items:center;gap:4px;white-space:nowrap}
+#shape select.full{color:var(--muted)}
+#shape select:not(.full){color:var(--ink);border-color:var(--busy)}
+#jump{display:flex;gap:4px;flex:none}
+#jump button{padding:2px 8px;font-size:12px;opacity:.75}
 #jump button:hover{opacity:1}
+details.cmp{margin:3px 0}
+details.cmp>summary{cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;color:var(--muted);font-size:12.5px}
+details.cmp>summary::before{content:"▸ ";font-size:10px}
+details.cmp[open]>summary::before{content:"▾ "}
+details.cmp[open]>summary .ln{display:none}
+details.cmp>summary .k{font:11px Consolas,ui-monospace,monospace;color:var(--busy);margin-right:5px}
+details.cmp>summary .k.err{color:var(--warn)}
 .turn.flash{outline:2px solid var(--busy);outline-offset:4px;border-radius:2px}
 #current{border-bottom:1px solid var(--line);background:var(--panel);padding:8px 16px;
   max-height:30vh;overflow-y:auto}
@@ -88,6 +102,8 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 #tabs button.cur{margin-left:auto;font-size:11.5px}
 #tabs button.cur.open{color:var(--ink);border-bottom-color:transparent}
 details.compact{margin:0 0 15px;color:var(--muted)}
+#log .earlier{text-align:center;margin:0 0 14px}
+#log .earlier button{font-size:11.5px}
 details.compact>summary{cursor:pointer;font-size:11px;text-transform:uppercase;
   letter-spacing:.06em;list-style:none;text-align:center;border-top:1px dashed var(--line);
   padding-top:6px}
@@ -142,6 +158,22 @@ button.ghost{background:transparent;color:var(--muted);border:1px solid var(--li
 button.rec{background:var(--warn);color:#fff;border-color:var(--warn)}
 button:disabled{opacity:.45;cursor:default}
 #say{color:var(--muted);font-size:12px}
+#status{margin-top:8px;border-top:1px dashed var(--line);padding-top:5px;font-size:12px;
+  color:var(--muted)}
+#status .hd{display:flex;justify-content:space-between;gap:10px;cursor:pointer;user-select:none}
+#status .hd .sum{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#status.fold .bd{display:none}
+#status .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
+  gap:2px 16px;margin-top:5px}
+#status .c{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#status .c b{font-weight:400;margin-right:6px}
+#status .c span{color:var(--ink)}
+#status .c span.hot{color:var(--busy)}#status .c span.ok{color:var(--ok)}
+#status .c span.warn{color:var(--warn)}
+#status .ri{font:11.5px/1.5 Consolas,ui-monospace,monospace;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+#status .ri .k{color:var(--busy);margin-right:6px}
+#status .run{margin-top:4px}
 
 /* -- sidebar tools: filter, grouping, usage meter ---------------------- */
 #tools{display:flex;gap:6px;padding:0 10px 8px;align-items:center}
@@ -161,6 +193,14 @@ select.tiny{background:var(--panel);color:var(--muted);border:1px solid var(--li
 .g{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
   padding:8px 13px 3px;display:flex;justify-content:space-between;cursor:default}
 .g.fold{cursor:pointer}
+.fam{padding:7px 13px 4px;font-weight:600;font-size:12.5px;display:flex;align-items:center;
+  gap:5px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none}
+.fam:hover{background:var(--panel)}
+.fam .car{color:var(--muted);font-size:10px;width:9px}
+.fam .dots{margin-left:auto;display:flex;gap:3px}
+.fam .dot{margin-right:0}
+.kids{margin-left:13px;border-left:2px solid var(--line)}
+.kids .s{padding-left:11px}
 .s{position:relative}
 .s .d{color:var(--ink);font-size:11.5px;margin-top:2px;opacity:.8;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -179,6 +219,12 @@ select.tiny{background:var(--panel);color:var(--muted);border:1px solid var(--li
 .badge.merged{color:#8a63d2;border-color:#8a63d2}
 .badge.q{color:var(--busy);border-color:var(--busy)}
 .badge.ctx-hi{color:var(--warn);border-color:var(--warn)}
+.work{font-variant-numeric:tabular-nums}
+.work.cache{color:var(--ok)}
+.work.busy{color:var(--busy)}
+#status .hd .work+.work{margin-left:6px}
+.badge.work.cache{border-color:var(--ok)}
+.badge.work.busy{border-color:var(--busy)}
 
 /* -- main: tabs and panels ------------------------------------------- */
 #headrow{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
@@ -327,8 +373,15 @@ function toggleIn(list, k){
 
 const folder = cwd => String(cwd || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "(no folder)";
 
+// What a tile calls a session. The server turns a worktree session's
+// made-up "<worktree>-<id>" into "<project>-<worktree>"; a chosen name stays.
+const nameOf = s => s.display_name || s.name || s.id || "(unnamed)";
+// The project a session belongs to - for a worktree, the repository it was
+// made from, not the worktree's folder.
+const projectOf = s => (s.project || folder(s.cwd)) + (s.host ? " @ " + s.host : "");
+
 function groupOf(s){
-  if (prefs.group === "folder") return folder(s.cwd) + (s.host ? " @ " + s.host : "");
+  if (prefs.group === "folder") return projectOf(s);
   if (prefs.group === "state"){
     if (s.attention) return "needs you";
     const dot = stateOf(s)[0];
@@ -354,8 +407,32 @@ function prBadge(pr){
 // Marks a session hosted by the Claude desktop app: it lives in that app's
 // window, so someone scanning terminals for it would never find it.
 const APP_ICON = `<svg class="app" viewBox="0 0 13 11" aria-label="Claude desktop app"><title>in the Claude desktop app</title><rect x=".5" y=".5" width="12" height="10" rx="1.5" fill="none" stroke="currentColor"/><path d="M.5 3.5h12" stroke="currentColor"/></svg>`;
+// Marks a session working in a worktree rather than the main checkout.
+const WT_ICON = `<svg class="app" viewBox="0 0 11 13" aria-label="worktree"><title>in a worktree</title><circle cx="3" cy="2.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="3" cy="10.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="8.5" cy="4.5" r="1.6" fill="none" stroke="currentColor"/><path d="M3 4.1v4.8M8.5 6.1c0 2.2-5.5 1.4-5.5 2.8" fill="none" stroke="currentColor"/></svg>`;
 
-function tile(s){
+// `short` is for a tile under its project's node, where the project's name
+// would only be said twice; the chat header still carries the full name.
+// Pure: a session's other work at a glance, shared by its tile and the status
+// panel's header line so the two always say the same. "-58" is minutes until
+// the prompt cache expires (nothing once it has); "0/2/1/0" counts subagents,
+// background shells, monitors and shell processes, while its process lives.
+function workParts(w, now){
+  if (!w) return [];
+  const out = [];
+  const left = w.cache_expires_at ? w.cache_expires_at - now : 0;
+  if (left > 0) out.push({text: "-" + Math.ceil(left / 60), cls: "cache",
+    title: `prompt cache expires in ${Math.ceil(left / 60)} min; a prompt after that re-sends the whole context`});
+  if (w.alive){
+    const n = [w.agents, w.shells, w.monitors, w.processes].map(x => x || 0);
+    out.push({text: n.join("/"), cls: n.some(Boolean) ? "busy" : "",
+      title: `${n[0]} subagents / ${n[1]} background shells / ${n[2]} monitors / ${n[3]} shell processes`});
+  }
+  return out;
+}
+const workHtml = (w, now, cls, skip) => workParts(w, now).filter(p => p.cls !== skip).map(p =>
+  `<span class="${cls} ${p.cls}" title="${esc(p.title)}">${esc(p.text)}</span>`).join("");
+
+function tile(s, short){
   const [dot, label] = stateOf(s);
   const when = age(s.attention_since || s.last_event_at);
   const mark = s.attention ? (s.attention_kind === "failure" ? " fail" : " attn") : "";
@@ -366,15 +443,55 @@ function tile(s){
     <div class="acts"><span data-pin="${esc(pkey(s))}" title="${pinned?"unpin":"pin to top"}">${
       pinned ? "★" : "☆"}</span><span data-arch="${esc(pkey(s))}" title="${
       archived ? "unarchive" : "archive (hide until it needs you)"}">${archived ? "↩" : "✕"}</span></div>
-    <div class="n">${s.desktop_app ? APP_ICON : ""}${esc(s.name || s.id || "(unnamed)")}${pinned ? `<span class="pin">★</span>` : ""}</div>${
+    <div class="n" title="${esc(nameOf(s))}">${s.desktop_app ? APP_ICON : ""}${
+      s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${pinned ? `<span class="pin">★</span>` : ""}</div>${
       s.window_title ? `<div class="w" title="window title">${esc(s.window_title)}</div>` : ""}${
       s.doing ? `<div class="d" title="${esc(s.doing)}">${esc(s.doing)}${
         s.doing_since ? " · " + age(s.doing_since) : ""}</div>` : ""}
     <div class="m"><span class="dot ${dot}"></span>${esc(label)}${when?" · "+when:""}${
       s.host ? " · " + esc(s.host) : ""}${prBadge(s.pr)}${
       ctx != null ? `<span class="badge${ctx >= 80 ? " ctx-hi" : ""}" title="context used">${ctx}%</span>` : ""}${
-      s.queued ? `<span class="badge q" title="prompts queued">${s.queued} queued</span>` : ""}</div>
+      s.queued ? `<span class="badge q" title="prompts queued">${s.queued} queued</span>` : ""}${
+      workHtml(s.work, Date.now() / 1000, "badge work")}</div>
   </div>`;
+}
+
+// Tiles for one group, with a project's sessions gathered under a node named
+// for the project whenever it has more than one. The node carries one dot per
+// session, so how many there are and what each is doing still shows when it
+// is folded. A folded node keeps showing a session that needs you, as the
+// archive does. Grouped by folder, the whole list is that tree: every
+// project gets a node, one session or several, in place of a group header.
+function tree(list, group){
+  const fams = new Map();
+  for (const s of list){
+    const f = projectOf(s);
+    if (!fams.has(f)) fams.set(f, []);
+    fams.get(f).push(s);
+  }
+  return [...fams].map(([f, kids]) => {
+    if (kids.length < 2 && !(prefs.group === "folder" && group !== "pinned"))
+      return kids.map(s => tile(s)).join("");
+    const shut = folded.has(f);
+    const dots = kids.map(s => `<span class="dot ${stateOf(s)[0]}" title="${
+      esc(nameOf(s) + ": " + stateOf(s)[1])}"></span>`).join("");
+    const shown = shut ? kids.filter(s => s.attention) : kids;
+    return `<div class="fam${shut ? " shut" : ""}" data-fam="${esc(f)}" title="${
+      kids.length} sessions - click to ${shut ? "unfold" : "fold"}"><span class="car">${
+      shut ? "▸" : "▾"}</span><span>${esc(f)}</span><span class="dots">${dots}</span></div>` +
+      (shown.length ? `<div class="kids">${shown.map(s => tile(s, true)).join("")}</div>` : "");
+  }).join("");
+}
+
+// Folded project nodes, per browser: a viewing convenience, not shared state.
+const folded = new Set((() => {
+  try { return JSON.parse(localStorage.getItem("ccontrol.folded") || "[]"); }
+  catch (e) { return []; }
+})());
+function toggleFold(f){
+  if (folded.has(f)) folded.delete(f); else folded.add(f);
+  try { localStorage.setItem("ccontrol.folded", JSON.stringify([...folded])); } catch (e) {}
+  drawSessions();
 }
 
 function drawSessions(){
@@ -383,12 +500,12 @@ function drawSessions(){
     (a.attention?0:1) - (b.attention?0:1) ||
     (a.remote?1:0) - (b.remote?1:0) ||
     (stateOf(a)[0] === "d-idle" ? 1 : 0) - (stateOf(b)[0] === "d-idle" ? 1 : 0) ||
-    String(a.name||"").localeCompare(String(b.name||"")));
+    nameOf(a).localeCompare(nameOf(b)));
   if (selected && !sessions.some(s => key(s) === selected)) selected = null;
   if (!selected && sessions.length) selected = key(sessions[0]);
 
   const q = ($("#filter").value || "").trim().toLowerCase();
-  const hit = s => !q || [s.name, s.cwd, s.window_title, s.doing, s.host]
+  const hit = s => !q || [nameOf(s), s.name, s.project, s.cwd, s.window_title, s.doing, s.host]
     .some(v => String(v || "").toLowerCase().includes(q));
   const pinned = new Set(prefs.pinned || []), archived = new Set(prefs.archived || []);
   // Archive hides a session until it wants you; a blocked session always shows.
@@ -398,9 +515,14 @@ function drawSessions(){
   const groups = new Map();
   const top = shown.filter(s => pinned.has(pkey(s)));
   if (top.length) groups.set("pinned", top);
+  // A project's sessions stay together, in the group of its most urgent one
+  // (the list is already sorted that way); each tile keeps its own dot.
+  const famGroup = new Map();
   for (const s of shown){
     if (pinned.has(pkey(s))) continue;
-    const g = groupOf(s);
+    const f = projectOf(s);
+    if (!famGroup.has(f)) famGroup.set(f, groupOf(s));
+    const g = famGroup.get(f);
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(s);
   }
@@ -410,17 +532,19 @@ function drawSessions(){
   else if (prefs.group === "folder")
     names.sort((a,b) => a==="pinned" ? -1 : b==="pinned" ? 1 : a.localeCompare(b));
 
-  let html = names.map(g => (g || names.length > 1 ?
+  const byFolder = g => prefs.group === "folder" && g !== "pinned";
+  let html = names.map(g => (!byFolder(g) && (g || names.length > 1) ?
       `<div class="g"><span>${esc(g || "sessions")}</span><span>${groups.get(g).length}</span></div>` : "") +
-    groups.get(g).map(tile).join("")).join("");
+    tree(groups.get(g), g)).join("");
   if (hidden.length){
     html += `<div class="g fold" id="archfold"><span>${showArchived ? "▾" : "▸"} archived</span><span>${hidden.length}</span></div>`;
-    if (showArchived) html += hidden.map(tile).join("");
+    if (showArchived) html += hidden.map(s => tile(s)).join("");
   }
   $("#sessions").innerHTML = html || `<div class="note">${q ? "no match" : "no sessions"}</div>`;
 
   document.querySelectorAll(".s").forEach(el =>
-    el.onclick = () => { selected = el.dataset.k; lastSig = ""; drawSessions(); refreshTab(true); });
+    el.onclick = () => { selected = el.dataset.k; showCached(); drawSessions(); refreshTab(true); loadStatus(true); });
+  document.querySelectorAll("[data-fam]").forEach(el => el.onclick = () => toggleFold(el.dataset.fam));
   document.querySelectorAll("[data-pin]").forEach(el => el.onclick = e => {
     e.stopPropagation(); savePrefs({pinned: toggleIn("pinned", el.dataset.pin)}); });
   document.querySelectorAll("[data-arch]").forEach(el => el.onclick = e => {
@@ -437,7 +561,7 @@ function drawSessions(){
 function drawHead(){
   const s = current();
   if (view !== "session") return;
-  $("#title").textContent = s ? (s.name || s.id || "session") : "no session selected";
+  $("#title").textContent = s ? nameOf(s) : "no session selected";
   $("#sub").textContent = s ? [s.window_title, s.cwd].filter(Boolean).join("  ·  ") : "";
   $("#send").disabled = !s || !!s.remote;
   $("#queue").disabled = !s;
@@ -615,24 +739,152 @@ function renderText(text){
 }
 
 function renderBlocks(blocks){
-  return blocks.map(b => {
-    if (b.kind === "text")     return renderText(b.text);
-    if (b.kind === "thinking") return `<div class="think">${esc(b.text)}</div>`;
-    if (b.kind === "tool")     return `<div class="tool"><b>${esc(b.name)}</b> ${esc(b.summary)}</div>`;
-    if (b.kind === "result")   return `<div class="res${b.is_error?" err":""}">${
-      esc(b.text)}${b.truncated?"\n…":""}</div>`;
-    return "";
+  return blocks.map(renderBlock).join("");
+}
+
+function renderBlock(b){
+  if (b.kind === "text")     return renderText(b.text);
+  if (b.kind === "thinking") return `<div class="think">${esc(b.text)}</div>`;
+  if (b.kind === "tool")     return `<div class="tool"><b>${esc(b.name)}</b> ${esc(b.summary)}</div>`;
+  if (b.kind === "result")   return `<div class="res${b.is_error?" err":""}">${
+    esc(b.text)}${b.truncated?"\n…":""}</div>`;
+  return "";
+}
+
+// -- how each kind of text is shown ----------------------------------------
+// Full is the whole block, as it always was; Compact folds a block to its
+// first line, opened by a click; Hidden leaves it out. Kept in this browser,
+// the same for every session.
+const SHAPES = [["prompt", "Prompts"], ["reply", "Replies"], ["thinking", "Thinking"],
+  ["tool", "Tool calls"], ["result", "Tool results"], ["system", "System"]];
+const MODES = ["full", "compact", "hidden"];
+const SUMMARY_NOTE = "earlier conversation, summarised";
+let shape = {};
+try { shape = JSON.parse(localStorage.getItem("ccontrol.shape") || "{}") || {}; } catch (e) { shape = {}; }
+function modeOf(cat){ return MODES.includes(shape[cat]) ? shape[cat] : "full"; }
+
+function categoryOf(it, b){
+  if (it.note) return "system";
+  if (b.kind === "text") return it.speaker === "you" ? "prompt" : "reply";
+  return b.kind;
+}
+
+function oneLine(b){
+  const text = b.kind === "tool" ? b.summary : b.text;
+  return String(text || "").split("\n").map(l => l.trim()).find(l => l) || "";
+}
+
+function compactBlock(b, k, open){
+  const tag = b.kind === "tool" ? b.name : b.kind === "result" ? (b.is_error ? "error" : "result")
+            : b.kind === "thinking" ? "thinking" : "";
+  return `<details class="cmp" data-k="${k}"${open ? " open" : ""}><summary>${
+    tag ? `<span class="k${b.is_error ? " err" : ""}">${esc(tag)}</span>` : ""}<span class="ln">${
+    esc(oneLine(b))}</span></summary>${renderBlock(b)}</details>`;
+}
+
+// One turn's blocks as the controls say. `k` names a block by its place in
+// the conversation, so one opened by hand stays open across repaints.
+function shapeBlocks(it, i, opened){
+  return it.blocks.map((b, j) => {
+    const m = modeOf(categoryOf(it, b));
+    if (m === "hidden") return "";
+    const k = i + "." + j;
+    return m === "compact" ? compactBlock(b, k, opened.has(k)) : renderBlock(b);
   }).join("");
+}
+
+function drawShape(){
+  $("#shape").innerHTML = SHAPES.map(([cat, label]) => {
+    const m = modeOf(cat);
+    return `<label>${label}<select class="tiny${m === "full" ? " full" : ""}" data-shape="${cat}">${
+      MODES.map(x => `<option value="${x}"${x === m ? " selected" : ""}>${
+        x[0].toUpperCase() + x.slice(1)}</option>`).join("")}</select></label>`;
+  }).join("");
+}
+
+let logItems = [], opened = new Set(), openedFor = null;
+// A long session is thousands of elements, and building them all was most of
+// what switching to it cost, so the newest turns are drawn first and earlier
+// ones on request. `logShown` is how many, per selected session.
+const LOG_WINDOW = 60, LOG_STEP = 200;
+let logShown = LOG_WINDOW;
+// Pure: the index of the first item drawn.
+const logStart = (n, shown) => Math.max(0, n - shown);
+
+// Recently viewed sessions' items, so switching back paints at once and the
+// poll that follows only has to confirm nothing changed.
+const CONV_KEEP = 8;
+const convCache = new Map();  // session key -> {items, sig}, oldest first
+function rememberConv(k, items, sig){
+  convCache.delete(k);
+  convCache.set(k, {items, sig});
+  while (convCache.size > CONV_KEEP) convCache.delete(convCache.keys().next().value);
+}
+
+function setLog(items, sig, force){
+  lastSig = sig;
+  logItems = items;
+  drawLog(force);
+  const asked = items.filter(it => it.speaker === "you").pop();
+  currentPrompt = asked ? asked.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n\n") : "";
+  drawCurrent();
+}
+
+// A tile was clicked: show what this page last had for it, if anything.
+function showCached(){
+  const hit = convCache.get(selected);
+  if (hit){ setLog(hit.items, hit.sig, true); return; }
+  lastSig = "";
+  logItems = [];
+  $("#log").innerHTML = `<div class="note">loading…</div>`;
+}
+
+function showEarlier(all){
+  const log = $("#log"), below = log.scrollHeight - log.scrollTop;
+  logShown = all ? logItems.length : logShown + LOG_STEP;
+  drawLog();
+  log.scrollTop = log.scrollHeight - below;  // keep what was in view in view
+}
+
+function drawLog(force){
+  if (!selected) return;
+  const log = $("#log");
+  if (openedFor !== selected){ opened = new Set(); openedFor = selected; logShown = LOG_WINDOW; }
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  const start = logStart(logItems.length, logShown);
+  const earlier = start ? `<div class="earlier"><button data-earlier="1">show ${Math.min(start, LOG_STEP)} earlier</button>${
+    start > LOG_STEP ? ` <button data-earlier="all">show all ${start}</button>` : ""}</div>` : "";
+  log.innerHTML = earlier + logItems.slice(start).map((it, j) => {
+    const i = start + j;
+    // Where the session compacted: the summary that replaced everything above
+    // it, folded away, since the real conversation is now shown in full.
+    if (it.note === SUMMARY_NOTE)
+      return modeOf("system") === "hidden" ? "" : `<details class="compact"><summary>compacted here - show the summary it kept</summary>${
+        renderBlocks(it.blocks)}</details>`;
+    const body = shapeBlocks(it, i, opened);
+    if (!body) return "";
+    return `<div class="turn${it.speaker === "you" ? " you-turn" : ""}"><div class="who ${esc(it.speaker || it.role)}">${
+      esc(it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${body}</div>`;
+  }).join("") || `<div class="note">${logItems.length ? "everything here is hidden - see the display settings below" : "nothing yet"}</div>`;
+  if (force || atBottom) log.scrollTop = log.scrollHeight;
 }
 
 async function loadLog(force){
   if (!selected) { $("#log").innerHTML = `<div class="note">select a session</div>`; return; }
   let data;
   // The whole conversation, as the terminal shows it; the dispatcher answers
-  // "unchanged" when what this page already has is current.
-  const known = (!force && lastSig) ? "&known=" + encodeURIComponent(lastSig) : "";
-  try { data = await get("/api/conversation?session=" + encodeURIComponent(selected) + known); }
+  // "unchanged" when what this page already has is current - including
+  // what it had cached from an earlier visit.
+  const want = selected;
+  const known = lastSig ? "&known=" + encodeURIComponent(lastSig) : "";
+  try { data = await get("/api/conversation?session=" + encodeURIComponent(want) + known); }
   catch (e) { return; }
+  // A reply for a session no longer selected (a poll still in flight when a
+  // tile was clicked) must not paint over the new one.
+  if (want !== selected) {
+    if (data.items && data.sig) rememberConv(want, data.items, data.sig);
+    return;
+  }
   if (data.unchanged) return;
   if (data.error && !data.items.length){
     $("#log").innerHTML = `<div class="note">${esc(data.error)}</div>`;
@@ -640,24 +892,9 @@ async function loadLog(force){
   }
   // Only repaint when something changed, so the scroll position survives.
   const sig = data.sig || (JSON.stringify(data.items).length + ":" + data.items.length);
+  rememberConv(want, data.items, sig);
   if (!force && sig === lastSig) return;
-  lastSig = sig;
-
-  const log = $("#log");
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-  log.innerHTML = data.items.map(it => {
-    // Where the session compacted: the summary that replaced everything above
-    // it, folded away, since the real conversation is now shown in full.
-    if (it.note === "earlier conversation, summarised")
-      return `<details class="compact"><summary>compacted here - show the summary it kept</summary>${
-        renderBlocks(it.blocks)}</details>`;
-    return `<div class="turn${it.speaker === "you" ? " you-turn" : ""}"><div class="who ${esc(it.speaker || it.role)}">${
-      esc(it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${renderBlocks(it.blocks)}</div>`;
-  }).join("") || `<div class="note">nothing yet</div>`;
-  if (force || atBottom) log.scrollTop = log.scrollHeight;
-  const asked = data.items.filter(it => it.speaker === "you").pop();
-  currentPrompt = asked ? asked.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n\n") : "";
-  drawCurrent();
+  setLog(data.items, sig, force);
 }
 
 // -- the prompt being worked on --------------------------------------------
@@ -675,6 +912,133 @@ function drawCurrent(){
     : `<div class="note" style="padding:6px 0">no prompt yet in this session</div>`;
 }
 
+// -- the selected session, in numbers --------------------------------------
+// Under the send buttons: what the tile says, plus what only the transcript
+// and process tree know - background work, the prompt cache, tokens, cost.
+let statusData = null, statusFor = null, statusAt = 0, statusSkew = 0, statusFolded = false;
+try { statusFolded = localStorage.getItem("ccontrol.statusFolded") === "1"; } catch (e) {}
+
+function kfmt(n){
+  if (n == null) return "";
+  if (n >= 1e9) return (n/1e9).toFixed(2) + "B";
+  if (n >= 1e6) return (n/1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+  if (n >= 1e3) return (n/1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
+  return String(Math.round(n));
+}
+
+function span(sec){
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + "s";
+  if (sec < 3600) return Math.round(sec/60) + "m";
+  const h = Math.floor(sec/3600), m = Math.round((sec % 3600)/60);
+  if (h < 24) return h + "h" + (m ? " " + m + "m" : "");
+  return Math.floor(h/24) + "d " + (h % 24) + "h";
+}
+
+const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+
+async function loadStatus(force){
+  if (!selected){ $("#status").hidden = true; return; }
+  if (force || statusFor !== selected || Date.now() - statusAt >= 3000){
+    statusAt = Date.now();
+    const want = selected;
+    try {
+      const d = await get("/api/session_status?session=" + encodeURIComponent(want));
+      if (want !== selected) return;
+      statusData = d; statusFor = want;
+      if (d.now) statusSkew = d.now - Date.now()/1000;
+    } catch (e) {}
+  }
+  drawStatus();
+}
+
+// Pure: the panel's HTML for row `s` and its /api/session_status answer `d`.
+function statusHtml(s, d, now, folded){
+  const st = d.stat || {}, u = s.usage || {}, have = !!d.stat;
+  const [dot, label] = stateOf(s);
+  const cells = [], sum = [`<span class="dot ${dot}"></span>${esc(label)}`];
+  const cell = (k, v, title, cls) => {
+    if (v === "" || v == null) return;
+    cells.push(`<div class="c" title="${esc(title || "")}"><b>${esc(k)}</b><span class="${
+      cls || ""}">${esc(v)}</span></div>`);
+  };
+  const since = s.attention_since || s.status_changed_at;
+  cell("state", label + (since ? " · " + age(since) : ""), s.attention_reason || s.doing || "");
+  const ag = st.agents || [], sh = st.shells || [], mo = st.monitors || [];
+  if (have){
+    cell("subagents", String(ag.length), ag.map(a => a.label).join("\n"), ag.length ? "hot" : "");
+    cell("shells", String(sh.length), "commands it put in the background and has not seen finish\n" +
+      sh.map(x => x.label).join("\n"), sh.length ? "hot" : "");
+    cell("monitors", String(mo.length), mo.map(m => m.label).join("\n"), mo.length ? "hot" : "");
+    if (d.shell_processes != null)
+      cell("processes", String(d.shell_processes), "shell processes running under its claude " +
+        "process - commands and monitors alike, read from the process tree",
+        d.shell_processes ? "hot" : "");
+  }
+  if (ag.length) sum.push(plural(ag.length, "subagent"));
+  if (sh.length) sum.push(plural(sh.length, "shell"));
+  if (mo.length) sum.push(plural(mo.length, "monitor"));
+  const c = st.cache;
+  if (c && c.expires_at){
+    const left = c.expires_at - now;
+    cell("cache", (left > 0 ? `warm · ${span(left)} left` : `cold · ${span(-left)} ago`) +
+      (c.hit != null ? ` · ${Math.round(c.hit * 100)}% hit` : ""),
+      `prompt cache: ${c.ttl >= 3600 ? "1 hour" : "5 minute"} lifetime from the last reply; ` +
+      "a prompt after it expires re-sends the whole context at full price. " +
+      "Hit is the share of the last request read from cache.", left > 0 ? "ok" : "warn");
+    // Negative, like the tile's: it is counting down to expiry.
+    sum.push(left > 0 ? `cache -${span(left)}` : "cache cold");
+  }
+  if (u.context_pct != null || st.context_tokens)
+    cell("context", [u.context_pct != null ? Math.round(u.context_pct) + "%" : "",
+      st.context_tokens ? kfmt(st.context_tokens) + (u.context_size ? " / " + kfmt(u.context_size) : "") : ""
+    ].filter(Boolean).join(" · "), "", u.context_pct >= 80 ? "warn" : "");
+  if (u.cost_usd != null){
+    cell("cost", "$" + u.cost_usd.toFixed(2), "as Claude Code reports it to the statusline");
+    sum.push("$" + u.cost_usd.toFixed(2));
+  }
+  const t = st.tokens;
+  if (t){
+    cell("tokens", `${kfmt(t.input + t.cache_read + t.cache_write)} in · ${kfmt(t.output)} out`,
+      `input ${t.input}\ncache read ${t.cache_read}\ncache write ${t.cache_write}\noutput ${t.output}` +
+      "\n(this session's transcript; subagents keep their own)");
+    cell("cached", `${kfmt(t.cache_read)} read · ${kfmt(t.cache_write)} written`);
+  }
+  cell("model", u.model || st.model_id || "");
+  cell("mode", st.permission_mode || "", "permission mode");
+  if (st.prompts != null) cell("prompts", st.prompts + (st.turns ? ` · ${st.turns} turns` : ""));
+  if (st.last_turn_ms) cell("last turn", span(st.last_turn_ms / 1000));
+  if (st.started) cell("age", span(now - st.started));
+  if (u.api_duration_ms)
+    cell("API time", span(u.api_duration_ms / 1000) + (u.duration_ms ? " of " + span(u.duration_ms / 1000) : ""));
+  if (u.lines_added != null || u.lines_removed != null)
+    cell("lines", `+${u.lines_added || 0} −${u.lines_removed || 0}`);
+  if (st.compactions) cell("compactions", String(st.compactions));
+  if (s.queued) cell("queued", String(s.queued));
+  cell("branch", st.branch || "");
+  if (st.version) cell("version", st.version, "Claude Code");
+  if (d.note) cell("note", d.note);
+  if (d.error) cell("error", d.error, "", "warn");
+  const run = [...ag.map(x => ["agent", x]), ...sh.map(x => ["shell", x]), ...mo.map(x => ["monitor", x])]
+    .map(([k, x]) => `<div class="ri"><span class="k">${k}${x.foreground ? " · now" : ""}</span>${
+      esc(x.label || x.id)}${x.started ? " · " + age(x.started) : ""}${
+      x.expires ? " · ends in " + span(x.expires - now) : ""}</div>`).join("");
+  // Ends with the tile's work totals, so the folded line matches it. The
+  // tile's cache countdown is left out: "cache -Nm" above already says it.
+  const work = workHtml(s.work, Date.now() / 1000, "work", "cache");
+  return `<div class="hd"><span class="sum">${sum.join(" · ")}${work ? " · " + work : ""}</span><span>${folded ? "&#9656;" : "&#9662;"}</span></div>` +
+    `<div class="bd"><div class="grid">${cells.join("")}</div>${run ? `<div class="run">${run}</div>` : ""}</div>`;
+}
+
+function drawStatus(){
+  const box = $("#status"), s = current();
+  box.hidden = !s;
+  if (!s) return;
+  const d = statusFor === selected && statusData ? statusData : {};
+  box.classList.toggle("fold", statusFolded);
+  box.innerHTML = statusHtml(s, d, Date.now() / 1000 + statusSkew, statusFolded);
+}
+
 // -- jump between your prompts ---------------------------------------------
 function jump(dir){
   const log = $("#log");
@@ -684,6 +1048,8 @@ function jump(dir){
   const at = x => x.offsetTop - 8;
   const t = dir < 0 ? turns.filter(x => at(x) < top - 2).pop()
                     : turns.find(x => at(x) > top + 2);
+  // Above the first drawn prompt: draw the earlier turns and go on from there.
+  if (!t && dir < 0 && logStart(logItems.length, logShown) > 0){ showEarlier(); return jump(dir); }
   if (!t) return;
   log.scrollTop = at(t);
   t.classList.add("flash");
@@ -727,6 +1093,7 @@ async function tick(){
     if (ticks % 3 === 0) drawMeter();
     if (ticks % 2 === 0) drawPending();
     if (ticks % 20 === 0) loadPrefs();
+    loadStatus(false);
     await refreshTab(false);
   } catch (e) { /* dispatcher restarting; the page keeps what it has */ }
   ticks++;
@@ -813,6 +1180,7 @@ function setView(v){
   $("#tabs").hidden = v !== "session";
   $("#acts").hidden = v !== "session";
   $("#ask").hidden = v !== "session";
+  $("#strip").hidden = v !== "session" || tab !== "log";
   if (v === "history"){ $("#title").textContent = "past sessions"; $("#sub").textContent =
       "search every session on this machine - titles, first prompts, and full text"; $("#hq").focus(); search(); }
   if (v === "insights"){ $("#title").textContent = "insights"; $("#sub").textContent =
@@ -825,7 +1193,7 @@ function setTab(t){
   tab = t;
   document.querySelectorAll("#tabs button[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   ["log","changes","activity","worktrees"].forEach(n => $("#" + n).hidden = n !== t);
-  $("#jump").hidden = t !== "log";
+  $("#strip").hidden = t !== "log";
   drawCurrent();
   refreshTab(true);
 }
@@ -1117,6 +1485,9 @@ async function dictate(){
     $("#say").textContent = "dictated " + data.text.length + " chars";
   };
   rec.start();
+  // The model lives in its own process, ended when idle; start it now so it
+  // is built while you speak rather than after.
+  post("/api/voice/warm", {}).catch(() => {});
   $("#mic").classList.add("rec");
   $("#mic").textContent = "\u25A0 Stop";
   $("#say").textContent = "listening\u2026";
@@ -1194,7 +1565,32 @@ document.querySelectorAll("#tabs button[data-tab]").forEach(b => b.onclick = () 
 $("#curbtn").onclick = () => { showCurrent = !showCurrent; currentFolded = false; drawCurrent(); };
 $("#curhd").onclick = () => { currentFolded = !currentFolded; drawCurrent(); };
 $("#jprev").onclick = () => jump(-1);
+$("#status").addEventListener("click", e => {
+  if (!e.target.closest(".hd")) return;
+  statusFolded = !statusFolded;
+  try { localStorage.setItem("ccontrol.statusFolded", statusFolded ? "1" : ""); } catch (e) {}
+  drawStatus();
+});
 $("#jnext").onclick = () => jump(1);
+drawShape();
+$("#shape").addEventListener("change", e => {
+  const cat = e.target.dataset.shape;
+  if (!cat) return;
+  if (e.target.value === "full") delete shape[cat]; else shape[cat] = e.target.value;
+  try { localStorage.setItem("ccontrol.shape", JSON.stringify(shape)); } catch (e) {}
+  drawShape();
+  drawLog();
+});
+$("#log").addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-earlier]");
+  if (b) showEarlier(b.dataset.earlier === "all");
+});
+// `toggle` does not bubble; listen on the way down.
+$("#log").addEventListener("toggle", e => {
+  const d = e.target;
+  if (!d.matches || !d.matches("details.cmp")) return;
+  if (d.open) opened.add(d.dataset.k); else opened.delete(d.dataset.k);
+}, true);
 document.addEventListener("keydown", e => {
   if (!e.altKey || view !== "session" || tab !== "log") return;
   if (e.key === "ArrowUp"){ e.preventDefault(); jump(-1); }
@@ -1239,8 +1635,6 @@ def render_shell():
         '<div id=sessionpane><div id=current hidden><div class=hd id=curhd>'
         '<span id=curcap>current prompt</span><span id=curfold>&#9662;</span></div>'
         '<div class=bd id=curbody></div></div><div id=log></div>'
-        '<div id=jump><button class=ghost id=jprev title="previous prompt (alt+Up)">&#9650;</button>'
-        '<button class=ghost id=jnext title="next prompt (alt+Down)">&#9660;</button></div>'
         '<div id=changes class=panel hidden></div><div id=activity class=panel hidden></div>'
         '<div id=worktrees class=panel hidden></div></div>'
         '<div id=historypane class=panel hidden>'
@@ -1251,11 +1645,14 @@ def render_shell():
         '<div class=card><h3>Tool failures <select id=days class=tiny>'
         '<option value=1>last day</option><option value=7 selected>last 7 days</option>'
         '<option value=30>last 30 days</option></select></h3><div id=errs></div></div></div>'
+        '<div id=strip><div id=shape title="how each kind of text shows in the chat"></div>'
+        '<div id=jump><button class=ghost id=jprev title="previous prompt (alt+Up)">&#9650;</button>'
+        '<button class=ghost id=jnext title="next prompt (alt+Down)">&#9660;</button></div></div>'
         '<div id=ask><textarea id=prompt placeholder="message this session…"></textarea>'
         '<div id=bar><button id=send title="Enter">Send</button>'
         '<button id=queue class=ghost title="hold until its current turn ends (alt+Enter)">Queue</button>'
         '<button id=bg class=ghost title="a new background session (ctrl+Enter)">Background</button>'
         '<button id=mic class=ghost title="dictate (F9)">&#127908; Dictate</button>'
-        '<span id=say></span></div><div id=queued></div></div>'
+        '<span id=say></span></div><div id=status hidden></div><div id=queued></div></div>'
         "</div></div><script>%s</script></body></html>" % (CSS, SCRIPT)
     )

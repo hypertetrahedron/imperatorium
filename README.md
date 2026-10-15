@@ -13,6 +13,10 @@ window* is a symptom, not the problem: if you can dispatch without visiting a
 session, and be told when one actually wants you, most of the hunting stops
 being necessary.
 
+![The Imperatorium window: sessions grouped by what they need on the left, the selected session's conversation in the middle, its status panel underneath](docs/images/window.png)
+
+*Sessions down the left, grouped by what they need from you; the selected session's conversation, prompt box and status panel on the right. (Demo data.)*
+
 ## Install
 
 You need Python 3.9+, [Claude Code](https://claude.com/claude-code) 2.1.234+
@@ -86,11 +90,34 @@ The chat shows the whole conversation, back through every compaction - each
 one, including those Claude Code runs on its own while a session sits idle,
 is marked by a folded "compacted here" divider holding the summary it kept.
 What you send from the window shows as yours ("via inbox") even when it
-reached a session mid-turn. Claude Code's own messages - a background task
+reached a session mid-turn. A long conversation draws its latest 60 turns
+first, with **show earlier** above them (jumping up past the first one
+draws more), and the last few sessions you viewed are kept in the page, so
+switching back to one paints at once; the dispatcher parses a transcript
+again only when it has changed. Claude Code's own messages - a background task
 finishing, a slash command's output, a subagent's report - are captioned as
-such rather than as you. ▲/▼ at the chat's lower right (alt+Up/Down) jump
-between your prompts, and **Show Current Prompt** pins the prompt the session
-is working on above the chat.
+such rather than as you. A strip between the chat and the prompt box sets
+how each kind of text shows - prompts, replies, thinking, tool calls, tool
+results and Claude Code's own messages - as **Full**, **Compact** (one line,
+click to open) or **Hidden**, remembered in that browser; at its right, ▲/▼
+(alt+Up/Down) jump between your prompts. **Show Current Prompt** pins the
+prompt the session is working on above the chat.
+
+Under the Send buttons, a status panel (click its line to fold it) shows the
+selected session in more detail than its tile: subagents, backgrounded
+commands and Monitors still running, the shell processes under it, whether
+its prompt cache is still warm and for how long, context, cost and token
+totals, model, permission mode, prompts and turns, age, compactions and
+branch. Background work and the cache come from the session's transcript
+(`ccontrol/sessionstat.py`, read incrementally), cost and context from the
+statusline.
+
+Every local tile carries the same at a glance: `-58` is the minutes until
+the prompt cache expires (gone once it has), and `0/2/1/0` counts subagents /
+background shells / monitors / shell processes while the session's process
+lives - anything but zeros means other work is in progress. Hover either for
+the long form. The panel's line (the one left when it is folded) says the
+cache the same way, `cache -58m`, and ends with the tile's totals.
 
 Conversations are read through the Agent SDK: its private chain builder
 gives the same message order the supported `get_session_messages` does, and
@@ -110,7 +137,26 @@ filters; each tile says what the session is doing now, its context use and
 its PR. A session between turns that still has a background command running
 shows as working ("waiting on a background task"), not idle. The 5h and 7d
 usage bars carry a tick showing how far through each window the clock is, and
-a reset that is not today names its weekday. **history** searches every past session; **insights** tallies tool
+a reset that is not today names its weekday.
+
+A project with more than one session open gathers them under a node named
+for the project, its tiles indented beneath it and named without the
+project (`5b`, `fizzy-wondering-lark`). The node carries one dot per
+session, so how many there are and what each is doing reads at a glance;
+clicking it folds the family away (remembered in this browser), leaving
+only a session that needs you. The family sits in the group of its most
+urgent member. A session started in a worktree (`claude --worktree`, or
+any linked worktree) counts as its repository's and carries a branch icon:
+its made-up name `<worktree>-<id>` is shown as `<project>-<worktree>`,
+while a name someone chose is kept. Grouped by folder, the list becomes that
+tree outright: every project gets a node, even with one session.
+On the Stream Deck the same session takes a key under its project's name.
+
+![The Changes tab: branch, changed files and the diff against HEAD for the selected session](docs/images/changes.png)
+
+*The Changes tab of the same session. (Demo data.)*
+
+**history** searches every past session; **insights** tallies tool
 failures across projects and switches the phone and spoken alerts on.
 
 ## What it does
@@ -172,7 +218,8 @@ python test_hotkey.py && python test_ui.py        # test_ui needs node; skips wi
 .venv\Scripts\python.exe test_features.py        # the newer tabs, queue, usage, history
 python test_setup.py                               # the installer
 python test_impctl.py                              # the command line
-# 576 tests in total
+python test_convcache.py && python test_sessionstat.py  # conversation cache, status panel
+# 656 tests in total
 ```
 
 Individual pieces are runnable on their own, which is usually the fastest way
@@ -198,10 +245,12 @@ python -m ccontrol.deeplink Y:/projects-software/gem-trip "fix it"
 | GET | `/api/health` | liveness |
 | POST | `/hook` | Claude Code hook events |
 | POST | `/api/transcribe` | raw audio in, text out |
+| POST | `/api/voice/warm` | `{}` - start the dictation process now (the mic was pressed) |
 | POST | `/api/focus` | `{project}` or `{session_id}` - raise that session, or open one |
 | POST | `/api/dispatch` | `{text}` or `{project, prompt}`, plus `mode`, `confirm` |
 | GET | `/api/changes` | `?session=` - branch, changed files, diff against HEAD |
 | GET | `/api/activity` | `?session=` - tool-call timeline and counts |
+| GET | `/api/session_status` | `?session=` - background work, prompt cache, tokens and cost (the status panel) |
 | GET | `/api/worktrees` | `?project=` - linked worktrees, ahead/behind/dirty |
 | GET | `/api/worktree_diff` | `?project=&path=` - what a worktree's branch would bring |
 | POST | `/api/worktree` | `{project, path, action: merge\|pr\|discard, force}` |
@@ -295,9 +344,8 @@ list and the first candidate Windows grants wins.
 ## Dictation
 
 **f9**, or the Dictate button, starts and stops recording; the text lands in
-the prompt box. The browser records and the dispatcher transcribes on the
-model it already holds, so nothing leaves the machine and the only slow part -
-loading the model - happens once at startup.
+the prompt box. The browser records and a dictation process beside the
+dispatcher decodes and transcribes, so nothing leaves the machine.
 
 Voice fills the *prompt*, never the project. Project names here -
 `laser-ledger`, `amarantha`, `bookoferrantpages`, `fiducials` - are close to a
@@ -307,9 +355,16 @@ keystroke and removes that failure completely, leaving speech to do what it is
 good at: roughly 150 words a minute against 50 typed.
 
 Measured on this machine with `large-v3-turbo` at float16: 3.1s to load the
-model, then about 0.09s to transcribe five seconds of speech. The model is
-preloaded when the palette starts, so the first dictation is as quick as the
-rest; set `voice.preload` to false to trade that for ~2GB of VRAM.
+model, then about 0.09s to transcribe five seconds of speech.
+
+The model lives in its own child process, not in the dispatcher: with the
+CUDA runtime it takes a process to ~3.3 GB of private memory (plus ~2 GB of
+VRAM), and only ending the process gives all of that back. With
+`voice.preload` (the default) it starts with the dispatcher; after
+`voice.idle_unload` seconds without dictation (default 1800, 0 for never) it
+is ended, and pressing Dictate starts it again while you speak - a cold start
+is 3-4 s, mostly hidden behind the speaking. Only a config with a `voice`
+block turns dictation on.
 
 Near-silence returns nothing without ever calling the model - Whisper will
 happily invent words for a fumbled keypress.
@@ -357,12 +412,14 @@ ccontrol/projects.py    the catalogue, and turning speech into a project
 ccontrol/inbox.py       the named-pipe client
 ccontrol/deeplink.py    claude-cli://open URLs
 ccontrol/background.py  handing work to `claude --bg`
-ccontrol/voice.py       dictation, on the local GPU
+ccontrol/voice.py       dictation, on the local GPU, in a child process
 ccontrol/remote.py      sessions on other machines: polling, injection, tunnels, reading
 ccontrol/store.py       tokens and events that outlive a restart
 ccontrol/dispatcher.py  the HTTP server and the routing decisions
 ccontrol/ui.py          the window: sidebar, conversation, prompt
 ccontrol/conversation.py  session messages, ready to render
+ccontrol/convcache.py   parsed conversations, reread only when a transcript changes
+ccontrol/sessionstat.py background work, prompt cache and tokens, from the transcript
 ccontrol/window.py      opening it chromeless
 ccontrol/policy.py      what may be auto-approved, and what may not
 ccontrol/winfocus.py    raising a session's window, by process id

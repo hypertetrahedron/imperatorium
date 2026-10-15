@@ -154,6 +154,17 @@ class Layout(unittest.TestCase):
         surface.slots = []
         surface.on_press(None, 7, True)  # must not raise or call the API
 
+    def test_worktree_session_shares_its_projects_key(self):
+        wt = "Y:/projects-software/gem-trip/.claude/worktrees/lark"
+        self.by_path[os.path.normcase(os.path.abspath(wt))] = "lark"
+        surface = sd.Surface(FakeDeck(), pinned=["gem-trip"])
+        slots = surface.layout(
+            [row("Y:/projects-software/gem-trip", startedAt=1),
+             row(wt, startedAt=2, project="gem-trip", worktree="lark")],
+            self.by_path)
+        self.assertEqual(self.names(slots), ["gem-trip", "gem-trip"])
+        self.assertEqual([sl["count"] for sl in slots], ["1/2", "2/2"])
+
 
 @unittest.skipIf(sd is None, "surface module not importable")
 class Flash(unittest.TestCase):

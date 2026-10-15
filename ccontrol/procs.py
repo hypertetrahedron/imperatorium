@@ -137,11 +137,17 @@ def waiting_shells(pids, table=None, now=None, started=None):
 
 
 def annotate(rows):
-    """Set `background_tasks` on idle local rows still waiting on a shell."""
-    idle = {r["pid"]: r for r in rows
-            if r.get("status") == "idle" and isinstance(r.get("pid"), int)}
-    if not idle:
+    """Set `shell_processes` on every live local row (for its tile), and
+    `background_tasks` on idle ones still waiting on a shell. One process
+    table read for all of them."""
+    live = {r["pid"]: r for r in rows
+            if r.get("status") and isinstance(r.get("pid"), int)}
+    if not live:
         return rows
-    for pid, n in waiting_shells(idle).items():
-        idle[pid]["background_tasks"] = n
+    counts = waiting_shells(live)
+    for pid, row in live.items():
+        n = counts.get(pid, 0)
+        row["shell_processes"] = n
+        if n and row.get("status") == "idle":
+            row["background_tasks"] = n
     return rows

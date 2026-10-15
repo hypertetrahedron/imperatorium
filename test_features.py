@@ -1128,7 +1128,7 @@ class ActivityMethod(Base):
         self.live(status="idle")
         self.start_hook()
         orig = conversation.read
-        conversation.read = lambda sid, limit=200: [
+        conversation.read = lambda sid, limit=200, **kw: [
             tool_item("Read", "f.py", "t1"), result_item("t1", ok=False, text="ECONNREFUSED")]
         try:
             out = self.control.activity(SID)
@@ -1148,7 +1148,7 @@ class ErrorsMethod(Base):
         self.control.history.list = lambda max_age=30.0: rows
         reads = []
 
-        def fake_read(sid, limit=0):
+        def fake_read(sid, limit=0, **kw):
             reads.append(sid)
             if sid == "s1":
                 return [tool_item("Bash", "x", "t1"),

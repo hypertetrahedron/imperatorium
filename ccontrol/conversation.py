@@ -145,7 +145,7 @@ def _summarise_input(name, tool_input):
     return ", ".join(sorted(tool_input)[:6])[:INPUT_CHARS]
 
 
-def to_items(messages, limit=0, include_subagents=False):
+def to_items(messages, limit=0, include_subagents=False, merge=True):
     """Normalise SDK messages into render-ready items, oldest first.
 
     Each item is {speaker, role, blocks:[...]}, where a block is one of:
@@ -156,6 +156,8 @@ def to_items(messages, limit=0, include_subagents=False):
 
     A prompt that arrived through the inbox carries `via: "inbox"`.
     limit=0, the default, keeps the whole chain, as a terminal does.
+    merge=False leaves one item per message, for a caller that limits and
+    merges later (the dispatcher's cache).
     """
     items = []
     for entry in messages:
@@ -218,7 +220,8 @@ def to_items(messages, limit=0, include_subagents=False):
     # Limit first, then merge: the cap has to stay a cap on how much is read
     # off the wire, or a tool-heavy turn would collapse into one item and
     # drag the whole conversation into every 1.5s poll with it.
-    return merge_turns(items[-limit:] if limit else items)
+    items = items[-limit:] if limit else items
+    return merge_turns(items) if merge else items
 
 
 def speaker_of(role, blocks):
@@ -460,11 +463,12 @@ def _messages(sdk, session_id, directory):
         return sdk.get_session_messages(session_id, **kwargs)
 
 
-def read(session_id, limit=0, include_subagents=False, directory=None):
+def read(session_id, limit=0, include_subagents=False, directory=None, merge=True):
     """Items for one session. Raises RuntimeError when the SDK is absent."""
     try:
         import claude_agent_sdk as sdk
     except Exception as exc:
         raise RuntimeError("claude-agent-sdk is not installed: %s" % exc) from exc
     messages = _messages(sdk, session_id, directory)
-    return to_items(messages, limit=limit, include_subagents=include_subagents)
+    return to_items(messages, limit=limit, include_subagents=include_subagents,
+                    merge=merge)

@@ -228,6 +228,176 @@ class HookIngest(Base):
         self.assertEqual(self.control.store.events(1)[0]["error"], "rate_limit")
 
 
+class IdleWhileRunning(Base):
+    """`idle_prompt` arrives a minute after the prompt goes quiet, even when
+    the session is waiting on a Monitor or a backgrounded command. Seen on
+    hai-proof 5b: the tile said "waiting for you", the terminal "waiting on 1
+    monitor"."""
+
+    def notify(self, kind):
+        self.control.on_hook({"hook_event_name": "Notification", "session_id": SID,
+                              "cwd": CWD, "notification_type": kind})
+        self.control.invalidate()
+        return {r["sessionId"]: r for r in self.control.sessions()["sessions"]}[SID]
+
+    def test_idle_prompt_while_running_a_command_is_not_attention(self):
+        self.live(status="busy")
+        self.assertFalse(self.notify("idle_prompt").get("attention"))
+
+    def test_idle_prompt_with_a_background_shell_is_not_attention(self):
+        self.live(status="idle")
+        orig = registry.snapshot
+        def snap(creds=None):
+            out = orig(creds)
+            for r in out["sessions"]:
+                r["background_tasks"] = 1
+            return out
+        registry.snapshot = snap
+        try:
+            self.assertFalse(self.notify("idle_prompt").get("attention"))
+        finally:
+            registry.snapshot = orig
+
+    def test_truly_idle_still_waits_for_you(self):
+        self.live(status="idle")
+        self.assertTrue(self.notify("idle_prompt")["attention"])
+
+    def test_it_comes_back_once_the_command_is_done(self):
+        # Hidden, not cleared: if the session then sits idle, it is right.
+        self.live(status="busy")
+        self.notify("idle_prompt")
+        self.live(status="idle")
+        self.control.invalidate()
+        row = {r["sessionId"]: r for r in self.control.sessions()["sessions"]}[SID]
+        self.assertTrue(row["attention"])
+
+    def test_a_permission_prompt_still_raises_it(self):
+        self.live(status="busy")
+        self.assertTrue(self.notify("permission_prompt")["attention"])
+
+
+class RowLookup(Base):
+    """Finding a session's row for the chat must not wait on `claude agents`."""
+
+    def setUp(self):
+        super().setUp()
+        self.calls = 0
+
+        def agents(*a, **k):
+            self.calls += 1
+            return list(self.agent_rows)
+        registry.agents = agents
+        self._orig_read = conversation.read
+        conversation.read = lambda sid, limit=0, **kw: []
+
+    def tearDown(self):
+        conversation.read = self._orig_read
+        super().tearDown()
+
+    def age(self, seconds):
+        self.control._cache["at"] -= seconds
+
+    def test_a_few_seconds_old_snapshot_is_good_enough(self):
+        self.live()
+        self.control.sessions()
+        self.age(5)
+        self.control.conversation(SID)
+        self.control.session_status(SID)
+        self.assertEqual(self.calls, 1)
+
+    def test_an_unknown_session_looks_in_a_fresh_snapshot(self):
+        self.control.sessions()
+        self.age(5)
+        self.live()  # it appeared since
+        self.assertEqual(self.control.conversation(SID)["name"], "ll-1")
+        self.assertEqual(self.calls, 2)
+
+    def test_an_old_snapshot_is_rebuilt(self):
+        self.live()
+        self.control.sessions()
+        self.age(60)
+        self.control.conversation(SID)
+        self.assertEqual(self.calls, 2)
+
+
+class Dictation(Base):
+    """Dictation runs in a child process, and only when config asks for it."""
+
+    def test_no_voice_block_means_no_dictation_process(self):
+        # Tests build Controls without config; none should start a model.
+        self.assertIsNone(self.control._voice)
+        self.assertFalse(self.control.warm_voice()["ok"])
+        self.assertFalse(self.control.transcribe(b"x")["ok"])
+
+    def test_a_voice_block_makes_a_worker_that_starts_nothing_without_preload(self):
+        from ccontrol import voice
+        orig = voice.available
+        voice.available = lambda: True
+        try:
+            c = dispatcher.Control(Store(os.path.join(self.dir, "v.json")), roots=[],
+                                   config={"voice": {"preload": False}})
+        finally:
+            voice.available = orig
+        self.assertIsInstance(c._voice, voice.Worker)
+        self.assertFalse(c._voice.running)
+
+    def test_disabled_voice_makes_no_worker(self):
+        c = dispatcher.Control(Store(os.path.join(self.dir, "v.json")), roots=[],
+                               config={"voice": {"enabled": False}})
+        self.assertIsNone(c._voice)
+
+
+class SessionStatus(Base):
+    """The panel's route: transcript numbers, and none of its background work
+    once the session's process is gone."""
+
+    STAT = {"agents": [{"id": "a"}], "shells": [{"id": "b"}], "monitors": [],
+            "tokens": {"input": 1}}
+
+    def setUp(self):
+        super().setUp()
+        self.control.stats.read = lambda sid, now: {k: list(v) if isinstance(v, list) else v
+                                                    for k, v in self.STAT.items()}
+
+    def test_unknown_session(self):
+        self.assertFalse(self.control.session_status("nope")["ok"])
+
+    def test_a_live_session_keeps_its_background_work(self):
+        self.live(status="idle")
+        self.agent_rows[0]["pid"] = 999999
+        got = self.control.session_status(SID)
+        self.assertTrue(got["alive"])
+        self.assertEqual(len(got["stat"]["shells"]), 1)
+        self.assertIn("shell_processes", got)
+
+    def test_an_ended_session_has_nothing_running(self):
+        self.live(status="idle")
+        got = self.control.session_status(SID)
+        self.assertFalse(got["alive"])
+        self.assertEqual((got["stat"]["agents"], got["stat"]["shells"]), ([], []))
+        self.assertEqual(got["stat"]["tokens"], {"input": 1})
+
+    def test_every_local_row_carries_its_work_at_a_glance(self):
+        from ccontrol import procs
+        self.STAT = dict(self.STAT, cache={"expires_at": 1234.0})
+        self.live(status="busy")
+        self.agent_rows[0]["pid"] = 999999
+        real = procs.waiting_shells
+        procs.waiting_shells = lambda pids: {999999: 3}
+        try:
+            row = self.control.sessions()["sessions"][0]
+        finally:
+            procs.waiting_shells = real
+        self.assertEqual(row["work"], {"cache_expires_at": 1234.0, "alive": True,
+                                       "agents": 1, "shells": 1, "monitors": 0,
+                                       "processes": 3})
+
+    def test_an_ended_rows_work_has_no_counts(self):
+        self.live(status="idle")
+        row = self.control.sessions()["sessions"][0]
+        self.assertEqual(row["work"], {"cache_expires_at": None, "alive": False})
+
+
 class FailedTurns(Base):
     """A turn that died on an API error is exactly when a person is wanted.
 
@@ -874,7 +1044,7 @@ class ConversationRoute(Base):
         self.items = [{"speaker": "you", "role": "user", "via": "inbox",
                        "blocks": [{"kind": "text", "text": "hi"}]}]
         self._orig_read = conversation.read
-        conversation.read = lambda sid, limit=0: (self.limits.append(limit)
+        conversation.read = lambda sid, limit=0, **kw: (self.limits.append(limit)
                                                   or self.items)
 
     def tearDown(self):
@@ -962,7 +1132,7 @@ class RemoteConversation(RemoteBase):
     def test_a_local_session_never_goes_to_a_host(self):
         self.live()
         orig = conversation.read
-        conversation.read = lambda sid, limit=60: []
+        conversation.read = lambda sid, limit=60, **kw: []
         try:
             self.control.conversation(SID)
         finally:

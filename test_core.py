@@ -582,11 +582,76 @@ class BackgroundTasks(unittest.TestCase):
             procs.waiting_shells = real
         self.assertEqual(rows[0].get("background_tasks"), 1)
         self.assertNotIn("background_tasks", rows[1])
+        # Every live row's tile shows its count, busy ones included.
+        self.assertEqual([r.get("shell_processes") for r in rows], [1, 1])
+
+    def test_annotate_counts_zero_and_skips_ended_rows(self):
+        rows = [{"pid": 100, "status": "busy"}, {"pid": 200}, {"status": "idle"}]
+        real = procs.waiting_shells
+        procs.waiting_shells = lambda pids: {}
+        try:
+            procs.annotate(rows)
+        finally:
+            procs.waiting_shells = real
+        self.assertEqual([r.get("shell_processes") for r in rows], [0, None, None])
+        self.assertNotIn("background_tasks", rows[0])
 
     def test_live_table_reads(self):
         # This process is in the table, under its parent.
         rows = {pid: ppid for pid, ppid, _, _ in procs.process_table()}
         self.assertEqual(rows.get(os.getpid()), os.getppid())
+
+
+
+class Worktrees(unittest.TestCase):
+    """A worktree session is named for, and grouped with, its project."""
+
+    def test_claude_worktree_path_on_either_platform(self):
+        for cwd in (r"C:\src\hai-proof\.claude\worktrees\fizzy-wondering-lark",
+                    "/home/me/hai-proof/.claude/worktrees/fizzy-wondering-lark/"):
+            self.assertEqual(registry.place(cwd), ("hai-proof", "fizzy-wondering-lark"))
+
+    def test_plain_folder_is_its_own_project(self):
+        self.assertEqual(registry.place(r"C:\src\hai-proof"), ("hai-proof", None))
+        self.assertEqual(registry.place(None), (None, None))
+
+    def test_linked_worktree_elsewhere_read_from_its_git_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            wt = os.path.join(d, "side-branch")
+            os.mkdir(wt)
+            with open(os.path.join(wt, ".git"), "w", encoding="utf-8") as fh:
+                fh.write("gitdir: C:/src/hai-proof/.git/worktrees/side-branch\n")
+            self.assertEqual(registry.place(wt), ("hai-proof", "side-branch"))
+
+    def row(self, cwd, name):
+        r = {"cwd": cwd, "name": name}
+        r["project"], r["worktree"] = registry.place(cwd)
+        return r
+
+    def test_default_worktree_name_becomes_project_and_worktree(self):
+        r = self.row(r"C:\src\hai-proof\.claude\worktrees\fizzy-wondering-lark",
+                     "fizzy-wondering-lark-c9")
+        self.assertEqual(registry.label(r), "hai-proof-fizzy-wondering-lark")
+
+    def test_chosen_name_and_plain_sessions_keep_theirs(self):
+        wt = r"C:\src\hai-proof\.claude\worktrees\fizzy-wondering-lark"
+        self.assertEqual(registry.label(self.row(wt, "Proof checker")), "Proof checker")
+        self.assertEqual(registry.label(self.row(r"C:\src\hai-proof", "hai-proof-5b")),
+                         "hai-proof-5b")
+
+    def test_short_name_drops_what_the_node_already_says(self):
+        wt = r"C:\src\hai-proof\.claude\worktrees\fizzy-wondering-lark"
+        self.assertEqual(registry.short_label(self.row(wt, "fizzy-wondering-lark-c9")),
+                         "fizzy-wondering-lark")
+        self.assertEqual(registry.short_label(self.row(r"C:\src\hai-proof", "hai-proof-5b")),
+                         "5b")
+        self.assertEqual(registry.short_label(self.row(wt, "Proof checker")), "Proof checker")
+
+    def test_merge_fills_the_fields(self):
+        rows = registry.merge([{"sessionId": "a", "name": "lark-c9",
+                                "cwd": "/r/hai-proof/.claude/worktrees/lark"}], {})
+        self.assertEqual((rows[0]["project"], rows[0]["worktree"], rows[0]["display_name"]),
+                         ("hai-proof", "lark", "hai-proof-lark"))
 
 
 if __name__ == "__main__":

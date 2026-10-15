@@ -14,9 +14,21 @@ model is built on first use and kept.
 
 Needs the project venv (faster-whisper, sounddevice); the rest of the control
 plane stays standard-library only.
+
+The dispatcher does not hold the model itself: `Worker` runs it in a child
+process. Importing faster-whisper commits ~0.8 GB and the loaded model takes
+a process to ~3.3 GB of private memory; dropping the model in-process only
+gets back to ~1.5 GB (the CUDA runtime stays), while ending the child gives
+all of it back. So the child is started on preload or when the mic is
+pressed, and ended after `idle_unload` seconds without dictation.
 """
+import importlib.util
+import json
 import os
+import subprocess
+import sys
 import threading
+import time
 
 SAMPLE_RATE = 16000  # what Whisper wants; resampling anything else is waste
 CHANNELS = 1
@@ -33,6 +45,9 @@ DEFAULTS = {
     # ~2GB of VRAM held, buys a first dictation that is as fast as the rest.
     "preload": True,
     "enabled": True,
+    # End the dictation process after this long unused (0: never). Pressing
+    # the mic starts it again while you speak.
+    "idle_unload": 1800,
 }
 
 
@@ -41,13 +56,16 @@ class VoiceError(RuntimeError):
 
 
 def available():
-    """True when this interpreter can actually record and transcribe."""
+    """True when this interpreter can actually record and transcribe.
+
+    Looks the packages up without importing them: importing faster-whisper
+    commits ~0.8 GB, and the dispatcher only asks so it can start a `Worker`.
+    """
     try:
-        import faster_whisper  # noqa: F401
-        import sounddevice  # noqa: F401
+        return all(importlib.util.find_spec(name) is not None
+                   for name in ("faster_whisper", "sounddevice"))
     except Exception:
         return False
-    return True
 
 
 def list_inputs():
@@ -199,10 +217,14 @@ class Transcriber:
         return " ".join(segment.text for segment in segments).strip()
 
 
+def settings_from(block):
+    """A `voice` config block over the defaults, unknown keys dropped."""
+    block = block if isinstance(block, dict) else {}
+    return dict(DEFAULTS, **{k: v for k, v in block.items() if k in DEFAULTS})
+
+
 def load_settings(config_path=None):
     """The `voice` block of config.json, over the defaults."""
-    import json
-
     path = config_path or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json"
     )
@@ -211,10 +233,235 @@ def load_settings(config_path=None):
             block = (json.load(fh) or {}).get("voice") or {}
     except (OSError, ValueError):
         block = {}
-    return dict(DEFAULTS, **{k: v for k, v in block.items() if k in DEFAULTS})
+    return settings_from(block)
+
+
+# -- the model in a child process ---------------------------------------------
+# One request at a time over the child's stdin, one JSON line back on its
+# stdout:
+#   {"op": "load"}                                  -> {"ok": true}
+#   {"op": "transcribe", "hint": h, "bytes": n} + n bytes of encoded audio
+#                                                   -> {"ok": true, "text": t}
+# Failures come back as {"ok": false, "error": ...}. The child exits when its
+# stdin closes, so it does not outlive the dispatcher.
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPLY_TIMEOUT = 180.0  # a cold load plus a long utterance on CPU, with room
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def worker_command(settings, exe=None):
+    exe = exe or sys.executable
+    # pythonw has no stdio to speak of; python with CREATE_NO_WINDOW shows no
+    # console either, and its stdio is exactly the pipes it is given.
+    if os.path.basename(exe).lower() == "pythonw.exe":
+        console = os.path.join(os.path.dirname(exe), "python.exe")
+        if os.path.exists(console):
+            exe = console
+    return [exe, "-m", "ccontrol.voice", "--worker", json.dumps(settings)]
+
+
+def _spawn(settings):
+    return subprocess.Popen(
+        worker_command(settings), cwd=PROJECT_ROOT,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        creationflags=NO_WINDOW)
+
+
+def _kill_tree(proc):
+    # On Windows a venv's python.exe is a launcher with the real interpreter
+    # as its child, so killing `proc` alone would leave the model running.
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=NO_WINDOW)
+        else:
+            proc.kill()
+    except Exception:
+        pass
+
+
+class Worker:
+    """`Transcriber`, run in a child process that can be ended to free it."""
+
+    REAP_EVERY = 30.0
+
+    def __init__(self, settings=None, spawn=None, clock=time.time, kill=None):
+        self.settings = dict(DEFAULTS, **(settings or {}))
+        self._spawn = spawn or _spawn
+        self._kill = kill or _kill_tree
+        self._clock = clock
+        self._proc = None
+        self._used = 0.0
+        self._lock = threading.Lock()  # one request at a time; start and stop
+        self._reaper = None
+        self.starts = 0
+
+    @property
+    def running(self):
+        return self._proc is not None and self._proc.poll() is None
+
+    def _ensure(self):
+        if not self.running:
+            self._stop_locked()
+            self._proc = self._spawn(self.settings)
+            self.starts += 1
+            self._used = self._clock()
+            if self._reaper is None and self.settings.get("idle_unload"):
+                self._reaper = threading.Thread(target=self._reap_loop,
+                                                name="whisper-reaper", daemon=True)
+                self._reaper.start()
+        return self._proc
+
+    def _stop_locked(self):
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        try:
+            proc.stdin.close()  # the child's cue to exit
+            proc.wait(5)
+        except Exception:
+            self._kill(proc)
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+
+    def _call(self, header, payload=b""):
+        proc = self._ensure()
+        timer = threading.Timer(REPLY_TIMEOUT, self._kill, args=(proc,))
+        timer.daemon = True
+        timer.start()
+        try:
+            proc.stdin.write(json.dumps(header).encode("utf-8") + b"\n" + payload)
+            proc.stdin.flush()
+            line = proc.stdout.readline()
+        except (OSError, ValueError) as exc:
+            self._stop_locked()
+            raise VoiceError("the dictation process failed: %s" % exc) from exc
+        finally:
+            timer.cancel()
+        self._used = self._clock()
+        if not line:
+            self._stop_locked()
+            raise VoiceError("the dictation process exited")
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            self._stop_locked()
+            raise VoiceError("the dictation process answered nonsense")
+        if not reply.get("ok"):
+            raise VoiceError(reply.get("error") or "transcription failed")
+        return reply
+
+    def load(self):
+        """Start the child if needed and wait until its model is built."""
+        with self._lock:
+            return self._call({"op": "load"})
+
+    def warm(self):
+        """`load` in the background: a preload, or a mic just pressed."""
+        def run():
+            try:
+                self.load()
+            except Exception:
+                pass
+        threading.Thread(target=run, name="whisper-warm", daemon=True).start()
+
+    def transcribe_bytes(self, data, hint=None):
+        """Encoded audio (any container PyAV reads) to text."""
+        if not data:
+            return ""
+        with self._lock:
+            return self._call({"op": "transcribe", "hint": hint, "bytes": len(data)},
+                              bytes(data)).get("text") or ""
+
+    def stop(self):
+        with self._lock:
+            self._stop_locked()
+
+    def reap(self, now=None):
+        """End the child if it has been idle past `idle_unload`. True if it did."""
+        idle = float(self.settings.get("idle_unload") or 0)
+        now = self._clock() if now is None else now
+        if not idle or not self.running or now - self._used < idle:
+            return False
+        if not self._lock.acquire(blocking=False):
+            return False  # in use right now
+        try:
+            if now - self._used < idle:
+                return False
+            self._stop_locked()
+            return True
+        finally:
+            self._lock.release()
+
+    def _reap_loop(self):
+        while True:
+            time.sleep(self.REAP_EVERY)
+            try:
+                self.reap()
+            except Exception:
+                pass
+
+
+def _read_exactly(stream, n):
+    chunks, got = [], 0
+    while got < n:
+        chunk = stream.read(n - got)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        got += len(chunk)
+    return b"".join(chunks)
+
+
+def _decode(data):
+    import io
+
+    from faster_whisper.audio import decode_audio
+
+    return decode_audio(io.BytesIO(data), sampling_rate=SAMPLE_RATE)
+
+
+def serve_worker(settings, inp=None, out=None, transcriber=None, decode=_decode):
+    """The child's loop: requests on stdin, replies on stdout, until EOF."""
+    if out is None:
+        # Keep the real stdout for replies and point fd 1 at stderr, so a
+        # library that prints cannot corrupt the protocol.
+        out = os.fdopen(os.dup(1), "wb", buffering=0)
+        os.dup2(2, 1)
+        sys.stdout = sys.stderr
+    inp = inp or sys.stdin.buffer
+    t = transcriber or Transcriber(settings)
+
+    def reply(obj):
+        out.write(json.dumps(obj).encode("utf-8") + b"\n")
+        out.flush()
+
+    while True:
+        line = inp.readline()
+        if not line:
+            return
+        try:
+            req = json.loads(line)
+            if req.get("op") == "load":
+                t.load()
+                reply({"ok": True, "device": t.settings.get("device")})
+            elif req.get("op") == "transcribe":
+                data = _read_exactly(inp, int(req.get("bytes") or 0))
+                reply({"ok": True, "text": t.transcribe(decode(data), hint=req.get("hint"))})
+            else:
+                reply({"ok": False, "error": "unknown op %r" % req.get("op")})
+        except Exception as exc:
+            reply({"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)})
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "--worker":
+        serve_worker(settings_from(json.loads(sys.argv[2])))
+        sys.exit(0)
     print("available :", available())
     if available():
         print("default   :", default_input())

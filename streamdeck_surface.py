@@ -225,7 +225,10 @@ class Surface:
             cwd = row.get("cwd")
             if not cwd or row.get("remote") or state_for(row) == "none":
                 continue
-            name = (projects_by_path.get(os.path.normcase(os.path.abspath(cwd)))
+            # A worktree session belongs on its project's key, not one named
+            # after the worktree folder (the catalogue may list that folder).
+            name = ((row.get("worktree") and row.get("project"))
+                    or projects_by_path.get(os.path.normcase(os.path.abspath(cwd)))
                     or os.path.basename(cwd.rstrip("/\\")) or cwd)
             by_project.setdefault(name, []).append(row)
         for rows in by_project.values():
