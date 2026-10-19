@@ -91,8 +91,19 @@ def _write_pipe(path, payload, timeout):
     # in practice.
     if not path.startswith("\\\\"):
         raise InboxError("not a named-pipe path: %r" % (path,))
+    # Claude Code creates the pipe with the default DACL: full control for
+    # the creating user, SYSTEM and Administrators, read-only for everyone
+    # else. Ask for write only - nothing is ever read back - so a policy that
+    # grants write without read does not refuse the open.
     try:
-        fd = os.open(path, os.O_RDWR | os.O_BINARY)
+        fd = os.open(path, os.O_WRONLY | os.O_BINARY)
+    except PermissionError as exc:
+        raise InboxError(
+            "access denied opening %s: the session's pipe does not grant this "
+            "process write access. The usual cause is a Claude Code session "
+            "running elevated (Run as administrator) or as another user while "
+            "the dispatcher runs unelevated; start the session unelevated as "
+            "the same user." % (path,)) from exc
     except OSError as exc:
         raise InboxError("cannot open %s: %s" % (path, exc)) from exc
     try:

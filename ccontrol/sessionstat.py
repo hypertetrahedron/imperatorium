@@ -94,6 +94,7 @@ class Fold:
 
     def __init__(self):
         self.calls = {}         # unanswered tool_use id -> (name, input)
+        self.call_at = {}       # unanswered tool_use id -> when it was made
         self.tasks = {}         # task id -> {kind, label, started, expires}
         self.ended = set()      # task ids seen to end
         self.seen_msgs = set()
@@ -151,6 +152,7 @@ class Fold:
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         self.calls[block.get("id")] = (block.get("name"), block.get("input"))
+                        self.call_at[block.get("id")] = at
         elif kind in ("user", "attachment"):
             if kind == "user" and not side and entry.get("promptId"):
                 self.prompts.add(entry["promptId"])
@@ -160,6 +162,7 @@ class Fold:
                         cid = block.get("tool_use_id")
                         _started(self.tasks, self.ended, entry, cid, self.calls, at)
                         self.calls.pop(cid, None)
+                        self.call_at.pop(cid, None)
             for text in _texts(entry):
                 for note in NOTE.findall(text):
                     status = STATUS.search(note)
@@ -176,13 +179,17 @@ class Fold:
         # A call still waiting on its result is running in the foreground - a
         # subagent or a command the turn is blocked on.
         for cid, (name, tool_input) in self.calls.items():
-            item = {"id": cid, "label": _label(tool_input), "foreground": True}
+            item = {"id": cid, "label": _label(tool_input), "foreground": True,
+                    "started": self.call_at.get(cid)}
             if name in AGENT_TOOLS:
                 running["agents"].append(dict(item, kind="agents"))
             elif name in SHELL_TOOLS:
                 running["shells"].append(dict(item, kind="shells"))
 
         out.update(running)
+        # Every task id the transcript has named, running or not: an output
+        # file under none of them belongs to a command still in the foreground.
+        out["known_tasks"] = sorted(set(self.tasks) | self.ended)
         out["tokens"] = dict(self.tokens)
         out["prompts"] = len(self.prompts)
         if self.last:

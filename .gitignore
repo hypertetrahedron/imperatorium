@@ -15,3 +15,5 @@ vendor/
 *.tmp
 # Claude Code's per-project runtime files.
 .claude/
+# Windows Explorer's thumbnail cache.
+Thumbs.db

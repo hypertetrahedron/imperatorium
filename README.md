@@ -103,14 +103,38 @@ click to open) or **Hidden**, remembered in that browser; at its right, ▲/▼
 (alt+Up/Down) jump between your prompts. **Show Current Prompt** pins the
 prompt the session is working on above the chat.
 
+While the session is waiting on something, a drawer under the chat has a
+tab for each running shell, Monitor and subagent. A shell's or Monitor's
+tab shows the end of what it has printed. A subagent's tab shows what it
+has said, a `> Tool what` line for each call it made and an `x` line for
+each call that failed, read from its own transcript under the session's
+`subagents/` folder. With several, an **Auto** tab comes first and follows
+whichever wrote last. Drag the drawer's top edge to resize it.
+
 Under the Send buttons, a status panel (click its line to fold it) shows the
 selected session in more detail than its tile: subagents, backgrounded
 commands and Monitors still running, the shell processes under it, whether
 its prompt cache is still warm and for how long, context, cost and token
 totals, model, permission mode, prompts and turns, age, compactions and
 branch. Background work and the cache come from the session's transcript
-(`ccontrol/sessionstat.py`, read incrementally), cost and context from the
-statusline.
+(`ccontrol/sessionstat.py`, read incrementally), context from the
+statusline, and cost and tokens from the transcripts: the whole session,
+subagents included, estimated at API list prices (`ccontrol/costs.py`).
+
+Spend comes in two parts, both read from the transcripts, so a restart loses
+neither. **Global** is everything sent from this machine in the account's
+windows: the 5-hour and 7-day windows on a Pro or Max subscription, the
+calendar month on any other account. **Current sessions** is the sessions
+open in Imperatorium, each over its whole life. The sidebar meter shows only
+its bars until you click it; then it also shows both spend lines (the detail
+is in their tooltips) and a **model mix**: a stacked bar for each window and
+for the open sessions, splitting output tokens by model family (haiku,
+sonnet, opus, fable, other) in cost order, after claude-lens's model mix
+chart. Click again to fold it. The Chat Matrix's status tile starts with the
+same bars and model mix, then shows both spend parts in full. Usage from claude.ai or other machines isn't
+in these transcripts, so it shows only in the meters' percentages. The last
+rate-limit reading is kept in `limits.json` beside the state file, so the
+meters are back as soon as the dispatcher restarts.
 
 Every local tile carries the same at a glance: `-58` is the minutes until
 the prompt cache expires (gone once it has), and `0/2/1/0` counts subagents /
@@ -137,14 +161,24 @@ filters; each tile says what the session is doing now, its context use and
 its PR. A session between turns that still has a background command running
 shows as working ("waiting on a background task"), not idle. The 5h and 7d
 usage bars carry a tick showing how far through each window the clock is, and
-a reset that is not today names its weekday.
+a reset that is not today names its weekday. When a window resets, its bar
+drops to 0% and waits there (the tip says so) until a session's status line
+reports the new window. Only a claude.ai Pro or Max plan
+has those windows (and a Claude apps gateway its spend limit); a session on
+AWS Bedrock, Google Vertex AI, Microsoft Foundry, an API key or a gateway, or a
+Team or Enterprise login, has none, so the space names the plan instead -
+"AWS Bedrock" - and beside real bars it adds "also AWS Bedrock - no limits".
+The statusline script reads the provider from the session's environment
+(`CLAUDE_CODE_USE_BEDROCK` and the like), the model id is the fallback, and
+the Team or Enterprise plan comes from `organizationType` in `~/.claude.json`.
 
 A project with more than one session open gathers them under a node named
 for the project, its tiles indented beneath it and named without the
 project (`5b`, `fizzy-wondering-lark`). The node carries one dot per
 session, so how many there are and what each is doing reads at a glance;
-clicking it folds the family away (remembered in this browser), leaving
-only a session that needs you. The family sits in the group of its most
+clicking it folds the family away and clicking again shows it all;
+double-clicking hides only the sessions waiting for you (both remembered in
+this browser). The family sits in the group of its most
 urgent member. A session started in a worktree (`claude --worktree`, or
 any linked worktree) counts as its repository's and carries a branch icon:
 its made-up name `<worktree>-<id>` is shown as `<project>-<worktree>`,
@@ -156,8 +190,80 @@ On the Stream Deck the same session takes a key under its project's name.
 
 *The Changes tab of the same session. (Demo data.)*
 
+The gear at the top left of the sidebar opens **Settings**, a window of its
+own for what you would otherwise edit in `config.json`: project folders,
+Send As Typed, quick phrases, background-session options, notifications, usage alerts, dictation, remote
+sessions, the palette hotkeys and the Stream Deck's pinned projects. Each
+setting says when it takes effect; notifications, alert thresholds and
+background options apply at once, the rest after the restart the window
+names. A save checks every value first and changes nothing if one is wrong,
+keeps the previous file as `config.json.bak`, and keeps its `_comment` keys.
+Some things are left to `config.json` by design: the auto-approval rules
+(`policy.json`), a bypass permission mode, the ntfy token, and adding or
+removing remote hosts (`setup_machine.py remote add|remove`).
+The bottom of the window lists every keyboard shortcut, with the ones you
+can set showing their current keys.
+
+![The Settings window's keyboard shortcut list, grouped by where each key works](docs/images/shortcuts.png)
+
+*The shortcut list at the bottom of Settings. (Demo data.)*
+
+**Quick phrases.** In the prompt box, the quick-phrase shortcut (Ctrl+Space
+unless you change it) opens a list of your stock phrases - "implement as
+recommended", "continue as recommended" and whatever else you add under
+Quick phrases in Settings, one per line. Type to filter, then Enter, a
+click, or 1-9 before typing puts the phrase into the box at the cursor;
+nothing is sent until you send it. To set the shortcut, click its field and
+press the keys; one the window already uses (Ctrl+Enter, Ctrl+K, Alt+1-9, ...)
+is refused.
+
+![The quick phrase list open over the prompt box, with five stock phrases](docs/images/quick-phrases.png)
+
+*Ctrl+Space in the prompt box. The phrases and the shortcut are set in Settings:*
+
+![The Quick phrases section of the Settings window: the shortcut and one phrase per line](docs/images/settings.png)
+
+Next to it, the grid icon opens the **Chat Matrix**, a window of
+its own (click again to close it) with a tile for every running session.
+The grid is whichever one makes 1-by-1.5 tiles biggest for the window's
+size; the tiles then stretch to fill the window. Each holds only Claude's
+replies, newest at the bottom with a dashed rule between turns (nothing
+scrolls; older replies run off the top), and under them the one step in
+flight: a tool call while it runs, or a thought while it lasts. A working
+session with neither says what it is waiting on instead, such as
+`waiting on 1 background shell · 1 process`.
+Double-click a tile to show that session in the main window. Prompts, tool results and finished
+steps are left out. A session waiting for you gets an amber border and says
+why. When the grid has spare cells, they always come at the end and become
+one status tile: the usage meters and model mix, what the open sessions
+have cost and how many tokens they have used over their whole lives, this
+machine's spend in each of the account's windows, and each session's
+share. The
+condensing is done by the dispatcher (`ccontrol/matrix.py`, `GET
+/api/matrix`), so the page polls one small answer.
+
+**Keys:** j/k move through the session list, n (or alt+N from anywhere)
+goes to the next session waiting for you, alt+1-9 picks the nth tile, /
+filters, and ctrl+K opens a palette to jump to any session by name. A
+session that finished a turn while you were looking elsewhere carries a
+**new** badge until you open it. The window's title counts the sessions
+waiting for you, "(2) Imperatorium", and its tab icon takes the most urgent
+state's colour and shape. A tile also warns `cold 178k` when a large context
+sits behind an expired prompt cache, and the prompt box says so in words (and
+when the context is nearly full). The session list arrives over server-sent
+events (`/api/stream`), so a session asking for you shows at once; the page
+falls back to polling if the stream drops.
+
+**ctrl+F** (or the find box under the chat) searches the open conversation -
+all text, tool calls only, or failed results only - and steps between
+matches, newest first. In the **Changes** tab, click a line of the diff to
+leave a comment on it; the comments go to the session as one prompt, or into
+the prompt box to edit first.
+
 **history** searches every past session; **insights** tallies tool
-failures across projects and switches the phone and spoken alerts on.
+failures across projects, estimates what the last 7/30/90 days of tokens
+would cost at API list prices (by day, project and model, from the
+transcripts), and switches the phone, spoken and desktop alerts on.
 
 ## What it does
 
@@ -219,7 +325,11 @@ python test_hotkey.py && python test_ui.py        # test_ui needs node; skips wi
 python test_setup.py                               # the installer
 python test_impctl.py                              # the command line
 python test_convcache.py && python test_sessionstat.py  # conversation cache, status panel
-# 656 tests in total
+python test_costs.py                               # cost history
+python test_settings.py && python test_quick.py    # Settings window, quick phrases
+python test_closing.py && python test_slash.py     # closing a session, typed commands
+python test_matrix.py && python test_taskout.py    # Chat Matrix, task output
+# 936 tests in total
 ```
 
 Individual pieces are runnable on their own, which is usually the fastest way
@@ -238,6 +348,7 @@ python -m ccontrol.deeplink Y:/projects-software/gem-trip "fix it"
 | GET | `/` | the window |
 | GET | `/api/conversation` | `?session=<id>&limit=N` - what a session said |
 | GET | `/api/sessions` | merged registry |
+| GET | `/api/stream` | server-sent events: the merged registry whenever it changes |
 | GET | `/api/projects` | the project catalogue |
 | GET | `/api/events` | recent attention events |
 | GET | `/api/decisions` | recent auto-approval verdicts |
@@ -247,18 +358,28 @@ python -m ccontrol.deeplink Y:/projects-software/gem-trip "fix it"
 | POST | `/api/transcribe` | raw audio in, text out |
 | POST | `/api/voice/warm` | `{}` - start the dictation process now (the mic was pressed) |
 | POST | `/api/focus` | `{project}` or `{session_id}` - raise that session, or open one |
-| POST | `/api/dispatch` | `{text}` or `{project, prompt}`, plus `mode`, `confirm` |
+| POST | `/api/dispatch` | `{text}` or `{project, prompt}`, plus `mode`, `confirm`; a prompt starting with `/` is typed at the session's prompt instead (see below) |
+| POST | `/api/typed` | `{session_id, prompt}` - Send As Typed; only from the window (its Origin and token), and only when turned on in Settings |
 | GET | `/api/changes` | `?session=` - branch, changed files, diff against HEAD |
 | GET | `/api/activity` | `?session=` - tool-call timeline and counts |
 | GET | `/api/session_status` | `?session=` - background work, prompt cache, tokens and cost (the status panel) |
+| GET | `/api/awaited` | `?session=` - the end of what each running shell and Monitor has printed, and what each running subagent has said and called (the process drawer) |
 | GET | `/api/worktrees` | `?project=` - linked worktrees, ahead/behind/dirty |
 | GET | `/api/worktree_diff` | `?project=&path=` - what a worktree's branch would bring |
 | POST | `/api/worktree` | `{project, path, action: merge\|pr\|discard, force}` |
 | GET | `/api/history` | `?q=` - search past sessions |
 | POST | `/api/resume` | `{session_id, where: window\|background, fork, prompt}` |
+| POST | `/api/new` | `{session_id, cwd, close}` - a fresh session in that project, in a new tab; answers its `session_id`. With `close`, the old session is then ended (typed `/exit`, killed if it stays) |
+| POST | `/api/close` | `{session_id}` - end a running local session and its terminal tab |
 | GET/POST | `/api/queue`, `/api/unqueue` | prompts held until a session's turn ends |
-| GET | `/api/usage` | rate-limit windows and their pace (needs the statusline) |
+| GET | `/matrix` | the Chat Matrix window |
+| GET | `/settings` | the Settings window |
+| GET | `/api/quick` | the quick-phrase shortcut and phrases, for the prompt box |
+| GET/POST | `/api/settings` | the settings form; POST `{changes: {key: value}}` checks them all, writes `config.json` (old copy in `.bak`) and applies what it can at once |
+| GET | `/api/matrix` | every running session's replies and current step, plus total spend |
+| GET | `/api/usage` | rate-limit windows and their pace (needs the statusline; the last reading survives a restart), plus `spend`: global and current-session tokens and estimated cost |
 | GET | `/api/errors` | `?days=` - tool failures by cause, tool and project |
+| GET | `/api/costs` | `?days=` - estimated cost by day, project and model, from transcripts |
 | GET/POST | `/api/prefs` | pinned, archived, grouping |
 | GET/POST | `/api/notify` | ntfy and speech channels, on/off |
 | GET | `/api/pending` | parked permission requests; `POST /api/decide` answers one |
@@ -296,6 +417,28 @@ Code is explicit that such a message is not user consent: it cannot answer a
 pending permission prompt, cannot change settings or `CLAUDE.md`, and a slash
 command in its text arrives as inert text. What the token buys is delivery
 *without an approval dialog*, not authority.
+
+**Slash commands are typed, not sent.** Because an inbox message cannot run a
+command, a chat message that starts with `/` (`/compact`, `/clear`,
+`/model opus`, a skill's command) is instead typed at the session's prompt
+through its console, the way `/exit` is typed to close a session. That is
+real terminal input, so it only happens when the session is idle at its
+prompt with no permission decision parked for it - Enter would otherwise
+answer the dialog. A draft at the prompt is cleared first. Commands that open
+a menu in the terminal (`/config`, `/permissions`, `/model` with no
+argument, ...) are refused, since the window cannot drive the menu. Queued, a
+command is typed when the turn ends. Local Windows sessions only for now.
+
+**Send As Typed** (the arrow beside Send) does the same for an ordinary
+prompt, so it arrives as you typing at that terminal rather than as a peer -
+it can approve what a sent message cannot, such as spending a budget. The
+text is made one line (line breaks become spaces, control characters go, a
+leading `!` or `#` is dropped so it cannot switch the input mode). It is off
+until you turn it on in Settings, under Chat, and only the window can use it
+or turn it on: the request must come from the page's own origin with the
+token the page was served with. That keeps `impctl`, scripts and other
+sessions from typing as you by accident; it is not a wall against a process
+on this machine that sets out to forge it.
 
 Claude Code also tells the receiving agent the message came from "another
 Claude session" and to answer by `SendMessage` to its sender - but a
@@ -357,6 +500,17 @@ good at: roughly 150 words a minute against 50 typed.
 Measured on this machine with `large-v3-turbo` at float16: 3.1s to load the
 model, then about 0.09s to transcribe five seconds of speech.
 
+With no usable GPU (none, or no CUDA runtime) the model is loaded on the
+CPU instead, at int8, and as `voice.cpu_model` (default `small`) rather
+than `voice.model`: `large-v3-turbo` on a CPU makes every dictation a wait.
+A config that names a model other than the default but sets no `cpu_model`
+keeps that model on the CPU. `"device": "cpu"` goes straight there. The Say
+Line then reads "listening on CPU (small)…" and "dictated N chars on CPU
+(small)", so a slow dictation explains itself. On this machine, a
+six-second sentence: `small` on the CPU loaded in 6.1 s and transcribed in
+1.9 s; `large-v3-turbo` on the CPU took 8.0 s and 6.7 s; on the GPU, 4.0 s
+and 0.5 s (first call after loading). All three got the sentence right.
+
 The model lives in its own child process, not in the dispatcher: with the
 CUDA runtime it takes a process to ~3.3 GB of private memory (plus ~2 GB of
 VRAM), and only ending the process gives all of that back. With
@@ -405,6 +559,10 @@ registers the vendor directory with `os.add_dll_directory` at import.
 
 ## Layout
 
+The parts of the window itself are named in
+[docs/ui-names.md](docs/ui-names.md). Use those names when talking about
+the UI.
+
 ```
 ccontrol/registry.py    who is running, from `claude agents --json`
 ccontrol/procs.py       is an idle session still waiting on a shell it started
@@ -417,9 +575,13 @@ ccontrol/remote.py      sessions on other machines: polling, injection, tunnels,
 ccontrol/store.py       tokens and events that outlive a restart
 ccontrol/dispatcher.py  the HTTP server and the routing decisions
 ccontrol/ui.py          the window: sidebar, conversation, prompt
+ccontrol/fonts/         Atkinson Hyperlegible Next and Mono, served to the window
+ccontrol/matrix.py      the Chat Matrix: replies and the step in flight, and spend
+ccontrol/closing.py     ending a session cleanly, so its terminal tab closes
 ccontrol/conversation.py  session messages, ready to render
 ccontrol/convcache.py   parsed conversations, reread only when a transcript changes
 ccontrol/sessionstat.py background work, prompt cache and tokens, from the transcript
+ccontrol/taskout.py     what awaited shells, Monitors and subagents have written
 ccontrol/window.py      opening it chromeless
 ccontrol/policy.py      what may be auto-approved, and what may not
 ccontrol/winfocus.py    raising a session's window, by process id
@@ -427,6 +589,7 @@ ccontrol/changes.py     git status/diff, and background-session worktrees
 ccontrol/activity.py    tool-call timelines, "doing" lines, failure tallies
 ccontrol/history.py     searching past sessions; resume and fork
 ccontrol/usage.py       statusline readings, rate-limit pace, thresholds
+ccontrol/costs.py       estimated cost history from transcripts, at list prices
 ccontrol/prs.py         the PR for a session's branch, off the request path
 ccontrol/notify.py      ntfy pushes and spoken alerts (both off by default)
 setup_machine.py        installing on a new machine; check; uninstall;
@@ -627,4 +790,5 @@ surveyed and rejected, and why.
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE). The bundled fonts in `ccontrol/fonts/` are Atkinson Hyperlegible
+Next and Mono, under the SIL Open Font License 1.1 (licence files alongside them).

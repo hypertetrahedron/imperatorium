@@ -470,12 +470,22 @@ class UsageTracking(unittest.TestCase):
                                                        "resets_at": 100000}}}, now=3.0)
         self.assertEqual(u._history["five_hour"], [(3.0, 90.0)])
 
-    def test_summary_drops_windows_that_already_reset(self):
+    def test_a_window_that_reset_waits_at_zero_for_a_new_reading(self):
+        # Peer report 2026-10-18: the meters vanished at each reset until a
+        # session rendered again. The row now stays, at 0%, marked waiting.
         u = usage.Usage()
         u.ingest("s1", {"rate_limits": {"five_hour": {"used_percentage": 10,
                                                        "resets_at": 50}}}, now=1.0)
-        out = u.summary(now=1000.0)
-        self.assertNotIn("five_hour", out["limits"])
+        w = u.summary(now=1000.0)["limits"]["five_hour"]
+        self.assertEqual((w["used"], w["resets_at"], w["reset_at"], w["waiting"]),
+                         (0.0, None, 50, True))
+        self.assertIsNone(w["pace"])
+        # The new window's first reading replaces it.
+        u.ingest("s1", {"rate_limits": {"five_hour": {"used_percentage": 3,
+                                                       "resets_at": 18050}}}, now=1001.0)
+        w = u.summary(now=1002.0)["limits"]["five_hour"]
+        self.assertEqual((w["used"], w["resets_at"]), (3.0, 18050))
+        self.assertNotIn("waiting", w)
 
     def test_forget_drops_a_sessions_reading(self):
         u = usage.Usage()
@@ -809,8 +819,19 @@ class Resume(unittest.TestCase):
         self.assertEqual(got["action"], "new")
         cmd, cwd = calls[0]
         self.assertEqual(cwd, self.dir)
-        self.assertEqual(cmd[-1], "claude")
+        self.assertEqual(cmd[-3:], ["claude", "--session-id", got["session_id"]])
         self.assertNotIn("--resume", cmd)
+
+    def test_launches_drop_the_calling_sessions_identity(self):
+        env = history.launch_env({"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "x",
+                                  "CLAUDE_CODE_MESSAGING_SOCKET": "p", "PATH": "/bin"})
+        self.assertEqual(env, {"PATH": "/bin"})
+
+    def test_new_session_gets_a_fresh_id_each_time_or_the_one_given(self):
+        launch = lambda cwd, **k: history.new_session(cwd, popen=lambda *a: None, **k)
+        a, b = launch(self.dir), launch(self.dir)
+        self.assertNotEqual(a["session_id"], b["session_id"])
+        self.assertEqual(launch(self.dir, session_id="fixed")["session_id"], "fixed")
 
     def test_new_session_requires_a_real_directory(self):
         with self.assertRaises(history.ResumeError):
@@ -1029,6 +1050,99 @@ class StatuslineLine(unittest.TestCase):
         self.assertEqual(got, "")
 
 
+class StatuslineProvider(unittest.TestCase):
+    def test_cloud_flags_win_in_claude_codes_order(self):
+        self.assertEqual(cc_statusline.provider({"CLAUDE_CODE_USE_BEDROCK": "1"}), "bedrock")
+        self.assertEqual(cc_statusline.provider({"CLAUDE_CODE_USE_VERTEX": "true",
+                                                 "ANTHROPIC_API_KEY": "k"}), "vertex")
+        self.assertEqual(cc_statusline.provider({"CLAUDE_CODE_USE_FOUNDRY": "1"}), "foundry")
+
+    def test_a_flag_set_to_zero_is_off(self):
+        self.assertIsNone(cc_statusline.provider({"CLAUDE_CODE_USE_BEDROCK": "0"}))
+
+    def test_keys_and_gateways(self):
+        self.assertEqual(cc_statusline.provider({"ANTHROPIC_API_KEY": "k"}), "api")
+        self.assertEqual(cc_statusline.provider({"ANTHROPIC_BASE_URL": "https://gw"}), "gateway")
+
+    def test_the_claude_ai_login_is_none(self):
+        self.assertIsNone(cc_statusline.provider({}))
+
+    def test_the_line_names_the_provider_only_without_windows(self):
+        got = cc_statusline.line({"model": {"display_name": "Opus"},
+                                  "ccontrol_provider": "bedrock"})
+        self.assertEqual(got, "Opus · Bedrock")
+        got = cc_statusline.line({"ccontrol_provider": "api",
+                                  "rate_limits": {"five_hour": {"used_percentage": 5}}})
+        self.assertEqual(got, "5h 5%")
+
+
+class PlanWithoutWindows(unittest.TestCase):
+    def test_provider_comes_from_the_script_or_the_model_id(self):
+        self.assertEqual(usage.provider_of({"ccontrol_provider": "vertex"}), "vertex")
+        for mid in ("us.anthropic.claude-opus-5-5-v1:0", "anthropic.claude-sonnet-5-5-v1:0",
+                    "arn:aws:bedrock:us-east-1:123:inference-profile/x"):
+            self.assertEqual(usage.provider_of({"model": {"id": mid}}), "bedrock", mid)
+        self.assertEqual(usage.provider_of({"model": {"id": "claude-opus-5-5@20260801"}}),
+                         "vertex")
+        self.assertIsNone(usage.provider_of({"model": {"id": "claude-opus-5-5"}}))
+        self.assertIsNone(usage.provider_of({"ccontrol_provider": "nonsense"}))
+
+    def test_all_bedrock_sessions_name_bedrock_in_place_of_meters(self):
+        u = usage.Usage(account=lambda: None)
+        u.ingest("s1", {"ccontrol_provider": "bedrock"}, now=1.0)
+        self.assertEqual(u.summary(now=2.0)["plan"],
+                         {"label": "AWS Bedrock", "providers": ["bedrock"],
+                          "alongside": False})
+
+    def test_a_pro_or_max_login_before_its_first_reading_shows_nothing(self):
+        u = usage.Usage(account=lambda: None)
+        u.ingest("s1", {"model": {"id": "claude-opus-5-5"}}, now=1.0)
+        self.assertIsNone(u.summary(now=2.0)["plan"])
+
+    def test_an_enterprise_login_names_the_plan(self):
+        u = usage.Usage(account=lambda: "Claude Enterprise")
+        u.ingest("s1", {}, now=1.0)
+        self.assertEqual(u.summary(now=2.0)["plan"]["label"], "Claude Enterprise")
+        # Every session on Bedrock: the login does not apply to them.
+        u = usage.Usage(account=lambda: "Claude Enterprise")
+        u.ingest("s1", {"ccontrol_provider": "bedrock"}, now=1.0)
+        self.assertEqual(u.summary(now=2.0)["plan"]["label"], "AWS Bedrock")
+
+    def test_beside_real_windows_only_the_uncovered_providers_are_named(self):
+        u = usage.Usage(account=lambda: "Claude Team")
+        u.ingest("s1", {"rate_limits": {"five_hour": {"used_percentage": 10,
+                                                       "resets_at": 5000}}}, now=1.0)
+        self.assertIsNone(u.summary(now=2.0)["plan"])
+        u.ingest("s2", {"ccontrol_provider": "bedrock"}, now=1.5)
+        self.assertEqual(u.summary(now=2.0)["plan"],
+                         {"label": "AWS Bedrock", "providers": ["bedrock"],
+                          "alongside": True})
+
+    def test_a_session_gone_quiet_stops_counting(self):
+        u = usage.Usage(account=lambda: None)
+        u.ingest("s1", {"ccontrol_provider": "bedrock"}, now=1.0)
+        self.assertIsNone(u.summary(now=1.0 + usage.PLAN_SPAN + 1)["plan"])
+
+    def test_account_plan_reads_only_the_organization_type(self):
+        d = tempfile.mkdtemp()
+        try:
+            path = os.path.join(d, "claude.json")
+            for kind, want in (("claude_enterprise", "Claude Enterprise"),
+                               ("claude_team", "Claude Team"), ("claude_max", None)):
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump({"oauthAccount": {"organizationType": kind}}, fh)
+                os.utime(path, (time.time(), time.time() + len(kind)))
+                self.assertEqual(usage.account_plan(path), want, kind)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("{broken")
+            os.utime(path, (time.time(), time.time() + 99))
+            self.assertIsNone(usage.account_plan(path))
+            self.assertIsNone(usage.account_plan(os.path.join(d, "missing.json")))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+
 # -- dispatcher.py: queue, statusline ingest, activity/errors, resume,------
 # -- finish_worktree guard, HTTP routes ------------------------------------
 class Queue(Base):
@@ -1215,15 +1329,70 @@ class ResumeMethod(Base):
         calls = []
         orig = dispatcher.history.new_session
         dispatcher.history.new_session = lambda cwd: calls.append(cwd) or {
-            "ok": True, "action": "new", "command": "claude"}
+            "ok": True, "action": "new", "command": "claude", "session_id": "new-sid"}
         try:
             out = self.control.new_session(SID)
         finally:
             dispatcher.history.new_session = orig
         self.assertTrue(out["ok"])
+        self.assertEqual(out["session_id"], "new-sid")
+        self.assertNotIn("closed", out)
         self.assertEqual(calls, [CWD])
         self.assertTrue(any(e.get("kind") == "new"
                             for e in self.control.store.events(10)))
+
+    def _new_and_close(self, pid):
+        self.live(status="idle")
+        if pid:
+            self.files[SID]["pid"] = pid
+        self.start_hook()
+        order = []
+        orig_new, orig_close = dispatcher.history.new_session, dispatcher.closing.close
+        dispatcher.history.new_session = lambda cwd: order.append(("new", cwd)) or {
+            "ok": True, "action": "new", "command": "claude", "session_id": "new-sid"}
+        dispatcher.closing.close = lambda p: order.append(("close", p)) or {
+            "ok": True, "how": "exit", "tab_closed": True}
+        try:
+            out = self.control.new_session(SID, close=True)
+        finally:
+            dispatcher.history.new_session = orig_new
+            dispatcher.closing.close = orig_close
+        return out, order
+
+    def test_new_and_close_launches_first_then_closes_the_old_one(self):
+        out, order = self._new_and_close(4242)
+        self.assertTrue(out["ok"])
+        self.assertEqual(order, [("new", CWD), ("close", 4242)])
+        self.assertEqual(out["closed"]["how"], "exit")
+        self.assertTrue(any(e.get("kind") == "close" and e.get("session_id") == SID
+                            for e in self.control.store.events(10)))
+
+    def test_close_session_ends_its_process(self):
+        self.live(status="idle")
+        self.files[SID]["pid"] = 4242
+        self.start_hook()
+        calls = []
+        orig = dispatcher.closing.close
+        dispatcher.closing.close = lambda p: calls.append(p) or {
+            "ok": True, "how": "exit", "tab_closed": True}
+        try:
+            out = self.control.close_session(SID)
+        finally:
+            dispatcher.closing.close = orig
+        self.assertEqual((out["how"], calls), ("exit", [4242]))
+        self.assertTrue(any(e.get("kind") == "close"
+                            for e in self.control.store.events(10)))
+
+    def test_close_session_without_a_process_is_refused(self):
+        self.live(status="idle")
+        self.start_hook()
+        self.assertFalse(self.control.close_session(SID)["ok"])
+        self.assertFalse(self.control.close_session("nope")["ok"])
+
+    def test_new_and_close_without_a_process_launches_nothing(self):
+        out, order = self._new_and_close(None)
+        self.assertFalse(out["ok"])
+        self.assertEqual(order, [])
 
     def test_a_resume_error_is_reported_not_raised(self):
         orig = dispatcher.history.resume
@@ -1327,10 +1496,39 @@ class HttpRoutes(Base):
         self.assertEqual(status, 200)
         self.assertFalse(body["ok"])
 
+    def test_post_close_for_an_unknown_session_answers_200_not_ok(self):
+        status, body = self._post("/api/close", {"session_id": "nope-nope"})
+        self.assertEqual(status, 200)
+        self.assertFalse(body["ok"])
+
     def test_post_new_without_a_project_answers_200_not_ok(self):
         status, body = self._post("/api/new", {"session_id": "nope-nope"})
         self.assertEqual(status, 200)
         self.assertFalse(body["ok"])
+
+    def test_bundled_fonts_are_served_and_cached(self):
+        url = "http://127.0.0.1:%d/fonts/next-latin.woff2" % self.port
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            self.assertEqual(resp.headers["Content-Type"], "font/woff2")
+            self.assertIn("max-age", resp.headers["Cache-Control"])
+            self.assertEqual(resp.read(4), b"wOF2")
+
+    def test_only_fonts_in_the_folder_are_served(self):
+        for name in ("nope.woff2", "..%2fui.py", "../ui.py", "OFL-AtkinsonHyperlegibleNext.txt"):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen("http://127.0.0.1:%d/fonts/%s" % (self.port, name),
+                                       timeout=5)
+            self.assertEqual(caught.exception.code, 404, name)
+
+    def test_the_chat_matrix_page_and_its_data(self):
+        url = "http://127.0.0.1:%d/matrix" % self.port
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            self.assertIn("text/html", resp.headers["Content-Type"])
+            self.assertIn(b"<title>Chat Matrix</title>", resp.read())
+        status, body = self._get("/api/matrix")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["tiles"], [])
+        self.assertIn("spend", body)
 
     def test_get_api_errors(self):
         status, body = self._get("/api/errors")

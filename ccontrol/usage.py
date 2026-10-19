@@ -8,12 +8,23 @@ statusline script (`hooks/cc_statusline.py`) forwards that object here.
 
 Kept in memory, not in the store: a statusline renders several times a
 minute per session, and the store rewrites its whole file on every change.
-Losing these on restart costs one render to rebuild.
+The account's windows are the exception. They are written to a small file
+of their own whenever a reading changes them, and read back at start, so a
+restarted dispatcher shows the meters (and knows where each window began)
+before any session renders again.
+
+A window whose reset time has passed stays on the meter at 0%, marked as
+waiting: Claude Code only reports the new window when a session's
+statusline next renders, which can be a long while on a quiet machine, and
+a meter that vanished at every reset read as broken.
 
 The forecast is a straight line through the recent five-hour readings. That
 is crude, and it is also exactly the question - "at this pace, do I run out
 before it resets?" - so it is stated as a pace, not a prediction.
 """
+import json
+import os
+import tempfile
 import threading
 import time
 
@@ -23,11 +34,80 @@ PACE_SPAN = 45 * 60.0
 MIN_SPAN = 5 * 60.0
 DEFAULT_THRESHOLDS = (80.0, 95.0)
 
+# Who serves a session that has no rate-limit windows. The statusline script
+# reads the provider from the session's environment (`ccontrol_provider`);
+# the model id is the fallback for a script too old to send it - Bedrock
+# names models by ARN or "us.anthropic.claude-...", Vertex as "claude-...@date".
+PROVIDERS = {"bedrock": "AWS Bedrock", "vertex": "Google Vertex AI",
+             "foundry": "Microsoft Foundry", "api": "Anthropic API",
+             "gateway": "API gateway"}
+# A session that has not rendered its statusline for this long no longer
+# says what the account is on.
+PLAN_SPAN = 30 * 60.0
+# The claude.ai plan behind the login, from Claude Code's own profile cache.
+# Only Pro and Max carry rate_limits; Team and Enterprise seats do not.
+ACCOUNT_FILE = os.path.join(os.path.expanduser("~"), ".claude.json")
+ACCOUNT_PLANS = (("enterprise", "Claude Enterprise"), ("team", "Claude Team"))
+
 
 def _num(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def provider_of(payload):
+    """'bedrock', 'vertex', ... or None for the claude.ai login. Pure."""
+    named = payload.get("ccontrol_provider")
+    if named in PROVIDERS:
+        return named
+    mid = str((payload.get("model") or {}).get("id") or "")
+    if mid.startswith("arn:aws:bedrock") or ".anthropic.claude" in mid             or mid.startswith("anthropic.claude"):
+        return "bedrock"
+    if mid.startswith("claude-") and "@" in mid:
+        return "vertex"
+    return None
+
+
+def _org_type(path=None, _cache={}):
+    """`oauthAccount.organizationType` from Claude Code's profile cache,
+    lower-cased ("claude_max", "claude_enterprise", ...), or "". Nothing
+    else in that file is read. Re-read when the file changes."""
+    path = path or ACCOUNT_FILE
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return ""
+    if _cache.get("key") != (path, mtime):
+        kind = ""
+        try:
+            with open(path, encoding="utf-8") as fh:
+                kind = str(((json.load(fh) or {}).get("oauthAccount") or {})
+                           .get("organizationType") or "")
+        except (OSError, ValueError, AttributeError):
+            pass
+        _cache.update(key=(path, mtime), kind=kind.lower())
+    return _cache["kind"]
+
+
+def account_plan(path=None):
+    """'Claude Enterprise' or 'Claude Team' when the login is one, else None.
+
+    Pro and Max return None: their meters say all there is to say.
+    """
+    kind = _org_type(path)
+    for word, label in ACCOUNT_PLANS:
+        if word in kind:
+            return label
+    return None
+
+
+def subscription(path=None):
+    """Whether the login is a Pro or Max subscription - the plans with a
+    five-hour and a seven-day window - so the windows are known before any
+    session has rendered its statusline."""
+    kind = _org_type(path)
+    return "max" in kind or "pro" in kind
 
 
 def reading(payload):
@@ -50,6 +130,7 @@ def reading(payload):
         "lines_added": _num(cost.get("total_lines_added")),
         "lines_removed": _num(cost.get("total_lines_removed")),
         "model": model.get("display_name") or model.get("id"),
+        "provider": provider_of(payload),
         "limits": limits,
     }
 
@@ -87,7 +168,8 @@ def pace(samples, now, resets_at=None):
 
 
 class Usage:
-    def __init__(self, thresholds=DEFAULT_THRESHOLDS, on_crossing=None):
+    def __init__(self, thresholds=DEFAULT_THRESHOLDS, on_crossing=None,
+                 account=account_plan, path=None, now=None):
         self._lock = threading.Lock()
         self.sessions = {}   # session key -> reading + at
         self.limits = {}     # window -> {used, resets_at, at}
@@ -96,6 +178,54 @@ class Usage:
         self._window = {}    # window -> resets_at when it was first seen
         self.thresholds = tuple(sorted(float(t) for t in thresholds))
         self.on_crossing = on_crossing
+        self.account = account
+        self.path = path     # where the windows are kept across restarts
+        self._saved = None
+        self._load(time.time() if now is None else now)
+
+    def _load(self, now):
+        """The windows the last dispatcher saw; one that has reset since
+        shows as waiting (see `summary`). The thresholds they had crossed
+        stay crossed, so a restart does not announce them again."""
+        if not self.path:
+            return
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                got = json.load(fh)
+        except (OSError, ValueError):
+            return
+        for name, w in ((got or {}).get("limits") or {}).items():
+            if name not in WINDOWS or not isinstance(w, dict):
+                continue
+            used, resets, at = _num(w.get("used")), _num(w.get("resets_at")), _num(w.get("at"))
+            if used is None:
+                continue
+            self.limits[name] = {"used": used, "resets_at": resets, "at": at or now}
+            self._window[name] = resets
+            self._history[name] = []
+            for t in self.thresholds:
+                if used >= t:
+                    self._fired.add((name, resets, t))
+        self._saved = self._signature()
+
+    def _signature(self):
+        return sorted((n, w.get("used"), w.get("resets_at")) for n, w in self.limits.items())
+
+    def _save(self):
+        """Write the windows if a reading changed them. Call with the lock
+        held; a failed write only costs the meters after a restart."""
+        if not self.path or self._signature() == self._saved:
+            return
+        try:
+            folder = os.path.dirname(self.path) or "."
+            os.makedirs(folder, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=folder, prefix=".limits-", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"limits": self.limits}, fh)
+            os.replace(tmp, self.path)
+            self._saved = self._signature()
+        except OSError:
+            pass
 
     def ingest(self, key, payload, now=None):
         """One statusline payload from session `key`. Returns crossings fired."""
@@ -130,6 +260,7 @@ class Usage:
                         crossings.append({"window": name, "threshold": t,
                                           "used": w["used"],
                                           "resets_at": w["resets_at"]})
+            self._save()
         if crossings:
             top = max(crossings, key=lambda c: c["threshold"])
             if self.on_crossing:
@@ -154,8 +285,38 @@ class Usage:
             for name, w in self.limits.items():
                 resets = w.get("resets_at")
                 if resets and resets < now:
-                    continue  # Claude Code drops a window once it resets.
+                    # Reset, and no session has reported the new window
+                    # yet: 0%, its next reset unknown, until one does.
+                    out[name] = {"used": 0.0, "resets_at": None, "at": w.get("at"),
+                                 "reset_at": resets, "waiting": True, "pace": None}
+                    continue
                 entry = dict(w)
                 entry["pace"] = pace(self._history.get(name, []), now, resets)
                 out[name] = entry
-        return {"limits": out, "thresholds": list(self.thresholds)}
+            seen = [s.get("provider") for s in self.sessions.values()
+                    if now - s.get("at", 0) <= PLAN_SPAN]
+        return {"limits": out, "thresholds": list(self.thresholds),
+                "plan": self.plan(seen, bool(out))}
+
+    def plan(self, seen, has_limits):
+        """What to show where the meters go: {label, providers} or None.
+
+        `seen` is the provider of each recently heard-from session (None for
+        the claude.ai login). With no windows, the label names what the
+        sessions run on instead - "AWS Bedrock" - because a blank space
+        reads as "the meter is broken". Beside real windows it names only
+        the other providers, which those windows do not cover.
+        """
+        others = sorted({p for p in seen if p})
+        labels = [PROVIDERS[p] for p in others]
+        if not has_limits and (not others or None in seen):
+            try:
+                acct = self.account() if self.account else None
+            except Exception:
+                acct = None
+            if acct:
+                labels.insert(0, acct)
+        if not labels:
+            return None
+        return {"label": " · ".join(labels), "providers": others,
+                "alongside": has_limits}

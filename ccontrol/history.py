@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 from . import background, conversation
 
@@ -214,15 +215,39 @@ def resume(session_id, cwd, where="window", fork=False, prompt=None,
     raise ResumeError("where must be window or background")
 
 
-def new_session(cwd, popen=None):
-    """A fresh `claude` in a new tab, in `cwd`. Nothing carried over."""
+def new_session(cwd, popen=None, session_id=None):
+    """A fresh `claude` in a new tab, in `cwd`. Nothing carried over.
+
+    It is given its session id up front so the window can select it as soon
+    as it appears, rather than guessing which new tile is the one it opened.
+    """
     if not cwd or not os.path.isdir(cwd):
         raise ResumeError("its directory is gone: %s" % (cwd,))
-    (popen or _popen)(terminal_command(cwd, ["claude"]), cwd)
-    return {"ok": True, "action": "new", "where": "window", "command": "claude"}
+    session_id = session_id or str(uuid.uuid4())
+    cmd = ["claude", "--session-id", session_id]
+    (popen or _popen)(terminal_command(cwd, cmd), cwd)
+    return {"ok": True, "action": "new", "where": "window",
+            "command": " ".join(cmd), "session_id": session_id}
+
+
+# Set by a running Claude Code session for its own child processes. `wt`
+# hands its caller's environment to the new tab, so a dispatcher started from
+# inside a session (`impctl run`) would launch a `claude` that takes itself
+# for that session's child: it sits on its banner and never registers.
+SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+               "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+               "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT",
+               "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "AI_AGENT")
+
+
+def launch_env(env=None):
+    env = dict(os.environ if env is None else env)
+    for name in SESSION_ENV:
+        env.pop(name, None)
+    return env
 
 
 def _popen(cmd, cwd):
-    subprocess.Popen(cmd, cwd=cwd, close_fds=True,
+    subprocess.Popen(cmd, cwd=cwd, close_fds=True, env=launch_env(),
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
                      if WINDOWS else 0)

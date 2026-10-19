@@ -18,9 +18,10 @@
     "permission_mode": "acceptEdits"
   },
   "voice": {
-    "_comment": "Dictation (F9). Local GPU; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice). The model runs in its own process; preload starts it with the dispatcher, idle_unload (seconds, 0 = never) ends it when unused.",
+    "_comment": "Dictation (F9). Local GPU; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice). The model runs in its own process; preload starts it with the dispatcher, idle_unload (seconds, 0 = never) ends it when unused. With no usable GPU it falls back to the CPU and cpu_model, a smaller model, and the window says so.",
     "enabled": false,
     "model": "large-v3-turbo",
+    "cpu_model": "small",
     "device": "cuda",
     "compute_type": "float16",
     "language": "en",

@@ -12,12 +12,31 @@ import tempfile
 import time
 import unittest
 
-from ccontrol import (background, conversation, deeplink, dispatcher, inbox,
-                      projects, registry, remote, winfocus)
+from ccontrol import (background, closing, conversation, costs, deeplink, dispatcher,
+                      inbox, procs, projects, registry, remote, slash, winfocus)
 from ccontrol.store import Store
 
 SID = "11111111-1111-1111-1111-111111111111"
 CWD = os.path.join("Y:", os.sep, "projects-software", "laser-ledger")
+
+
+def write_transcript(folder, sid, messages, project="proj"):
+    """A transcript for `sid` under `folder`/projects: one assistant message
+    per (id, input tokens, output tokens[, epoch]), on claude-sonnet-4-5."""
+    import json
+    from datetime import datetime, timezone
+    base = os.path.join(folder, "projects", project)
+    os.makedirs(base, exist_ok=True)
+    path = os.path.join(base, sid + ".jsonl")
+    with open(path, "a", encoding="utf-8") as fh:
+        for mid, tin, tout, *at in messages:
+            when = datetime.fromtimestamp(at[0] if at else time.time(), timezone.utc)
+            fh.write(json.dumps({"type": "assistant", "cwd": CWD,
+                                 "timestamp": when.isoformat().replace("+00:00", "Z"),
+                                 "message": {"id": mid, "model": "claude-sonnet-4-5",
+                                             "usage": {"input_tokens": tin,
+                                                       "output_tokens": tout}}}) + "\n")
+    return path
 
 
 class Base(unittest.TestCase):
@@ -26,6 +45,10 @@ class Base(unittest.TestCase):
         self.control = dispatcher.Control(
             Store(os.path.join(self.dir, "state.json")), roots=[]
         )
+        # Spend is read from transcripts: an empty folder here, never the
+        # machine's own, and the login's plan is not read either.
+        self.control.cost_history = costs.History(root=os.path.join(self.dir, "projects"))
+        self.control.subscribed = lambda: True
         self.agent_rows = []
         self.files = {}
         self.sent = []
@@ -347,6 +370,39 @@ class Dictation(Base):
         self.assertIsNone(c._voice)
 
 
+class Awaited(Base):
+    """The panel under the chat: output of what a live session waits on."""
+
+    def setUp(self):
+        super().setUp()
+        self.control.stats.read = lambda sid, now: {
+            "shells": [{"id": "b1", "label": "make"}], "monitors": [], "agents": [],
+            "known_tasks": ["b1"]}
+        self._dir = dispatcher.taskout.tasks_dir
+        dispatcher.taskout.tasks_dir = lambda sid: None
+
+    def tearDown(self):
+        dispatcher.taskout.tasks_dir = self._dir
+        super().tearDown()
+
+    def test_unknown_session(self):
+        self.assertFalse(self.control.awaited("nope")["ok"])
+
+    def test_a_live_session_lists_its_tasks(self):
+        self.live(status="busy")
+        self.agent_rows[0]["pid"] = 999999
+        got = self.control.awaited(SID)
+        self.assertEqual([t["id"] for t in got["tasks"]], ["b1"])
+
+    def test_an_ended_session_waits_on_nothing(self):
+        self.live(status="idle")
+        self.assertEqual(self.control.awaited(SID)["tasks"], [])
+
+    def test_status_does_not_carry_the_id_list(self):
+        self.live(status="idle")
+        self.assertNotIn("known_tasks", self.control.session_status(SID)["stat"])
+
+
 class SessionStatus(Base):
     """The panel's route: transcript numbers, and none of its background work
     once the session's process is gone."""
@@ -388,14 +444,18 @@ class SessionStatus(Base):
             row = self.control.sessions()["sessions"][0]
         finally:
             procs.waiting_shells = real
-        self.assertEqual(row["work"], {"cache_expires_at": 1234.0, "alive": True,
+        self.assertEqual(row["work"], {"cache_expires_at": 1234.0, "context_tokens": None,
+                                       "resume_cost_usd": None,
+                                       "alive": True,
                                        "agents": 1, "shells": 1, "monitors": 0,
                                        "processes": 3})
 
     def test_an_ended_rows_work_has_no_counts(self):
         self.live(status="idle")
         row = self.control.sessions()["sessions"][0]
-        self.assertEqual(row["work"], {"cache_expires_at": None, "alive": False})
+        self.assertEqual(row["work"], {"cache_expires_at": None, "context_tokens": None,
+                                      "resume_cost_usd": None,
+                                      "alive": False})
 
 
 class FailedTurns(Base):
@@ -740,6 +800,120 @@ class Routing(Base):
 
 
 
+class SlashCommands(Base):
+    """A slash command is typed at the prompt, never sent to the inbox."""
+
+    def setUp(self):
+        super().setUp()
+        self.typed = []
+        self._saved = (slash.type_command, procs.waiting_shells, closing.WINDOWS)
+        slash.type_command = lambda pid, text: self.typed.append((pid, text)) or True
+        procs.waiting_shells = lambda pids: {}
+        closing.WINDOWS = True
+
+    def tearDown(self):
+        slash.type_command, procs.waiting_shells, closing.WINDOWS = self._saved
+        super().tearDown()
+
+    def ready(self, status="idle"):
+        self.live(status=status)
+        self.agent_rows[0]["pid"] = 4242
+        self.start_hook()
+        self.control.invalidate()
+
+    def test_the_chat_types_it_into_an_idle_session(self):
+        self.ready()
+        out = self.control.dispatch(prompt="/compact", session_id=SID)
+        self.assertEqual(out["action"], "command")
+        self.assertEqual(self.typed, [(4242, "/compact")])
+        self.assertEqual(self.sent, [], "an inbox copy would arrive as inert text")
+
+    def test_a_busy_session_is_refused_not_typed_into(self):
+        self.ready(status="busy")
+        out = self.control.dispatch(prompt="/compact", session_id=SID)
+        self.assertFalse(out["ok"])
+        self.assertIn("queue", out["error"])
+        self.assertEqual((self.typed, self.sent), ([], []))
+
+    def test_a_parked_permission_prompt_is_never_answered_by_it(self):
+        self.ready()
+        self.control.pending._items["x"] = {"id": "x", "at": 0, "session_id": SID,
+                                            "verdict": None}
+        out = self.control.dispatch(prompt="/clear", session_id=SID)
+        self.assertFalse(out["ok"])
+        self.assertEqual(self.typed, [])
+
+    def test_a_menu_command_is_refused(self):
+        self.ready()
+        out = self.control.dispatch(prompt="/config", session_id=SID)
+        self.assertIn("menu", out["error"])
+        self.assertEqual(self.typed, [])
+
+    def test_by_project_name_it_runs_in_that_project_and_never_launches(self):
+        out = self.control.dispatch(text="project: laser ledger, /compact")
+        self.assertFalse(out["ok"])
+        self.assertEqual(self.launched, [])
+        self.ready()
+        out = self.control.dispatch(text="project: laser ledger, /compact")
+        self.assertEqual(out["action"], "command")
+        self.assertEqual(self.typed, [(4242, "/compact")])
+
+    def test_queued_it_is_typed_when_the_turn_ends(self):
+        self.ready(status="busy")
+        self.assertTrue(self.control.enqueue(SID, "/compact")["ok"])
+        self.assertEqual(self.typed, [])
+        self.agent_rows[0]["status"] = "idle"
+        self.control.invalidate()
+        self.control.sweep_queue()
+        self.assertEqual(self.typed, [(4242, "/compact")])
+        self.assertEqual(self.sent, [])
+
+    def test_what_could_never_be_typed_is_not_queued(self):
+        self.ready(status="busy")
+        self.assertFalse(self.control.enqueue(SID, "/permissions")["ok"])
+        self.assertFalse(self.control.store.queued())
+
+    def test_an_ordinary_prompt_still_goes_to_the_inbox(self):
+        self.ready()
+        out = self.control.dispatch(prompt="explain /compact", session_id=SID)
+        self.assertEqual(out["action"], "inject")
+        self.assertEqual(self.typed, [])
+
+
+class SendTyped(SlashCommands):
+    """Send As Typed: off until turned on, and then typed as one line."""
+
+    def test_off_by_default(self):
+        self.ready()
+        out = self.control.send_typed(SID, "i approve")
+        self.assertIn("Settings", out["error"])
+        self.assertEqual(self.typed, [])
+
+    def test_typed_as_one_line_into_an_idle_session(self):
+        self.control.send_as_typed = True
+        self.ready()
+        out = self.control.send_typed(SID, "spend up to $40" + chr(10) + "then stop")
+        self.assertEqual((out["action"], out["cleaned"]), ("typed", True))
+        self.assertEqual(self.typed, [(4242, "spend up to $40 then stop")])
+        self.assertEqual(self.sent, [])
+
+    def test_never_into_a_busy_session(self):
+        self.control.send_as_typed = True
+        self.ready(status="busy")
+        self.assertFalse(self.control.send_typed(SID, "i approve")["ok"])
+        self.assertEqual(self.typed, [])
+
+    def test_a_command_goes_the_command_way(self):
+        self.control.send_as_typed = True
+        self.ready()
+        self.assertEqual(self.control.send_typed(SID, "/compact")["action"], "command")
+        self.assertIn("menu", self.control.send_typed(SID, "/config")["error"])
+
+    def test_the_setting_applies_live(self):
+        self.control._apply_settings({}, {"chat.send_as_typed": True})
+        self.assertTrue(self.control.send_as_typed)
+
+
 PI = {"name": "pi", "claude": "c", "label": "pi", "python": "python3",
       "tunnel": {"local_port": 0, "remote_port": 8792}}
 RSID = "22222222-2222-2222-2222-222222222222"
@@ -1030,6 +1204,53 @@ class Origins(Base):
         self.assertEqual(self.post("null"), 403)
 
 
+class WindowOnly(Origins):
+    """Only the window's own page, with its token, may type as you."""
+
+    def call(self, path, body, origin=True, token=True):
+        import json
+        import urllib.error
+        import urllib.request
+        headers = {"Content-Type": "application/json"}
+        if origin:
+            headers["Origin"] = "http://127.0.0.1:%d" % self.port
+        if token:
+            headers["X-Imperatorium-Window"] = (self.control.window_token
+                                                if token is True else token)
+        req = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path),
+                                     data=json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_a_plain_api_call_cannot_type(self):
+        for origin, token in ((False, False), (False, True), (True, False),
+                              (True, "guessed")):
+            code, _ = self.call("/api/typed", {"session_id": SID, "prompt": "i approve"},
+                                origin, token)
+            self.assertEqual(code, 403, (origin, token))
+
+    def test_the_window_reaches_it(self):
+        code, body = self.call("/api/typed", {"session_id": SID, "prompt": "hi"})
+        self.assertEqual(code, 200)
+        self.assertIn("Settings", body["error"])  # reached, and still off
+
+    def test_only_the_window_turns_it_on(self):
+        code, body = self.call("/api/settings", {"changes": {"chat.send_as_typed": True}},
+                               origin=False, token=False)
+        self.assertIn("chat.send_as_typed", body["errors"])
+        self.assertFalse(self.control.send_as_typed)
+
+    def test_the_page_carries_the_token(self):
+        import urllib.request
+        for path in ("/", "/settings"):
+            with urllib.request.urlopen("http://127.0.0.1:%d%s" % (self.port, path),
+                                        timeout=5) as resp:
+                self.assertIn(self.control.window_token, resp.read().decode())
+
+
 class ConversationRoute(Base):
     """The window polls this every 1.5s for the whole conversation."""
 
@@ -1138,6 +1359,111 @@ class RemoteConversation(RemoteBase):
         finally:
             conversation.read = orig
         self.assertEqual(self.reads, [])
+
+
+class EventStream(Base):
+    """/api/stream pushes the session list, and a hook wakes it at once."""
+
+    def setUp(self):
+        super().setUp()
+        import threading
+        dispatcher.Handler.control = self.control
+        self.srv = dispatcher.Server(("127.0.0.1", 0), dispatcher.Handler)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.port = self.srv.server_address[1]
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        super().tearDown()
+
+    def events(self, resp, n):
+        """The next `n` session lists from an open stream."""
+        import json
+        out, data = [], None
+        while len(out) < n:
+            line = resp.readline().decode("utf-8").rstrip("\r\n")
+            if line.startswith("data: "):
+                data = line[6:]
+            elif not line and data is not None:
+                out.append(json.loads(data))
+                data = None
+        return out
+
+    def test_the_list_is_pushed_and_a_hook_pushes_the_change(self):
+        import time
+        import urllib.request
+        self.live()
+        resp = urllib.request.urlopen("http://127.0.0.1:%d/api/stream" % self.port, timeout=10)
+        try:
+            self.assertTrue(resp.headers["Content-Type"].startswith("text/event-stream"))
+            first = self.events(resp, 1)[0]
+            self.assertEqual([r["sessionId"] for r in first["sessions"]], [SID])
+            self.assertFalse(first["sessions"][0].get("attention"))
+            t0 = time.time()
+            self.start_hook()
+            self.control.on_hook({"hook_event_name": "Notification", "session_id": SID,
+                                  "cwd": CWD, "notification_type": "permission_prompt",
+                                  "message": "Claude needs your permission"})
+            row = None
+            while not (row and row.get("attention")):
+                row = self.events(resp, 1)[0]["sessions"][0]
+            self.assertLess(time.time() - t0, 3.0)
+        finally:
+            resp.close()
+
+    def test_an_unchanged_list_is_not_resent(self):
+        import socket
+        self.live()
+        old = (dispatcher.Handler.STREAM_EVERY, dispatcher.Handler.STREAM_MIN_GAP)
+        dispatcher.Handler.STREAM_EVERY = dispatcher.Handler.STREAM_MIN_GAP = 0.05
+        try:
+            s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            s.sendall(b"GET /api/stream HTTP/1.1\r\nHost: x\r\n\r\n")
+            got = b""
+            # The first list can take a while to build; after it, half a
+            # second of looks at an unchanged list must send nothing.
+            while b"event: sessions" not in got:
+                got += s.recv(65536)
+            s.settimeout(0.5)
+            try:
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    got += chunk
+            except socket.timeout:
+                pass
+            s.close()
+        finally:
+            dispatcher.Handler.STREAM_EVERY, dispatcher.Handler.STREAM_MIN_GAP = old
+        self.assertEqual(got.count(b"event: sessions"), 1)
+
+
+class CostRoute(Base):
+    def test_costs_come_from_the_history_and_errors_are_answers(self):
+        class Fake:
+            def summary(self, days):
+                return {"ok": True, "window_days": days}
+
+        class Broken:
+            def summary(self, days):
+                raise OSError("disk gone")
+
+        self.control.cost_history = Fake()
+        self.assertEqual(self.control.costs(7), {"ok": True, "window_days": 7})
+        self.control.cost_history = Broken()
+        got = self.control.costs(7)
+        self.assertFalse(got["ok"])
+        self.assertIn("disk gone", got["error"])
+
+
+class WorkContext(Base):
+    def test_the_tile_row_carries_the_context_size(self):
+        self.control.stats.read = lambda sid, now: {"cache": {"expires_at": 5.0},
+                                                    "context_tokens": 230000}
+        got = self.control._work({"sessionId": SID, "pid": 1, "status": "idle"})
+        self.assertEqual((got["context_tokens"], got["cache_expires_at"]), (230000, 5.0))
 
 
 if __name__ == "__main__":

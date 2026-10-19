@@ -61,6 +61,20 @@ class Settings(unittest.TestCase):
         self.write({"enabled": False})
         self.assertFalse(voice.load_settings(self.path)["enabled"])
 
+    def test_the_cpu_gets_a_smaller_model_by_default(self):
+        settings = voice.settings_from({})
+        self.assertEqual(settings["cpu_model"], "small")
+        cpu = voice.on_cpu(settings)
+        self.assertEqual((cpu["device"], cpu["model"], cpu["compute_type"]),
+                         ("cpu", "small", "int8"))
+
+    def test_a_model_named_in_config_is_kept_on_the_cpu(self):
+        self.assertEqual(voice.on_cpu(voice.settings_from({"model": "medium"}))["model"], "medium")
+        # config.example.json names the default; that is not a choice for the CPU
+        self.assertEqual(voice.on_cpu(voice.settings_from({"model": "large-v3-turbo"}))["model"], "small")
+        both = voice.settings_from({"model": "medium", "cpu_model": "base"})
+        self.assertEqual(voice.on_cpu(both)["model"], "base")
+
     def test_an_input_device_index_survives(self):
         self.write({"input_device": 16})
         self.assertEqual(voice.load_settings(self.path)["input_device"], 16)
@@ -108,6 +122,40 @@ class RecorderState(unittest.TestCase):
         r = voice.Recorder({"max_seconds": 5})
         self.assertEqual(r.settings["max_seconds"], 5)
         self.assertEqual(r.settings["model"], voice.DEFAULTS["model"])
+
+
+class Fallback(unittest.TestCase):
+    """Loading with no usable GPU: the CPU, with the CPU model."""
+
+    def setUp(self):
+        import sys
+        import types
+        self.built = []
+        built = self.built
+
+        def whisper_model(model, device, compute_type):
+            if device == "cuda":
+                raise RuntimeError("CUDA driver version is insufficient")
+            built.append((model, device, compute_type))
+            return object()
+
+        fake = types.ModuleType("faster_whisper")
+        fake.WhisperModel = whisper_model
+        saved = sys.modules.get("faster_whisper")
+        sys.modules["faster_whisper"] = fake
+        self.addCleanup(lambda: sys.modules.__setitem__("faster_whisper", saved)
+                        if saved else sys.modules.pop("faster_whisper", None))
+
+    def test_no_gpu_falls_back_to_the_cpu_model(self):
+        t = voice.Transcriber(voice.settings_from({}))
+        t.load()
+        self.assertEqual(self.built, [("small", "cpu", "int8")])
+        self.assertEqual(t.settings["device"], "cpu")
+
+    def test_a_cpu_config_starts_on_the_cpu_model(self):
+        t = voice.Transcriber(voice.settings_from({"device": "cpu"}))
+        t.load()
+        self.assertEqual(self.built, [("small", "cpu", "int8")])
 
 
 class FakeModel:
@@ -184,6 +232,12 @@ class WorkerProcess(unittest.TestCase):
         self.assertEqual(len(self.procs), 1)
         w.stop()
         self.assertFalse(self.procs[0].thread.is_alive())  # stdin closed: it exits
+
+    def test_the_worker_learns_where_the_model_runs(self):
+        w = self.worker()
+        self.assertIsNone(w.where)
+        w.transcribe_bytes(b"abc")
+        self.assertEqual(w.where, {"device": "cpu", "model": None})
 
     def test_nothing_recorded_never_starts_a_process(self):
         w = self.worker()

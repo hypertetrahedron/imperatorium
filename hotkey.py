@@ -13,6 +13,7 @@ thread, so this process is essentially one message loop.
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -79,8 +80,10 @@ def candidates(override=None):
 def is_app_title(title):
     """Exact, not a substring: a browser tab on the GitHub repo is titled
     "hypertetrahedron/imperatorium: ... - Google Chrome", and matching it
-    raised that tab instead of the app."""
-    return (title or "").strip().lower() == WINDOW_TITLE.lower()
+    raised that tab instead of the app. The window puts a count of sessions
+    waiting for you in front, "(2) Imperatorium", so that prefix is allowed."""
+    title = re.sub(r"^\(\d+\)\s+", "", (title or "").strip())
+    return title.lower() == WINDOW_TITLE.lower()
 
 
 def find_window():

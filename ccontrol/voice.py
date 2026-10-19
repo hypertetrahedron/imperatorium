@@ -35,6 +35,12 @@ CHANNELS = 1
 
 DEFAULTS = {
     "model": "large-v3-turbo",
+    # What runs when there is no usable GPU. large-v3-turbo on a CPU makes
+    # every dictation a wait; small is quick enough there and still good at
+    # prompt-length English. A config that names a model other than the
+    # default but not this one gets that model on the CPU too - an explicit
+    # choice is kept.
+    "cpu_model": "small",
     "device": "cuda",
     "compute_type": "float16",
     "language": "en",
@@ -97,7 +103,7 @@ class Recorder:
     """
 
     def __init__(self, settings=None):
-        self.settings = dict(DEFAULTS, **(settings or {}))
+        self.settings = settings_from(settings)
         self._stream = None
         self._frames = []
         self._lock = threading.Lock()
@@ -160,7 +166,7 @@ class Transcriber:
     """Holds the model. Built on first use, then kept - loading dominates."""
 
     def __init__(self, settings=None):
-        self.settings = dict(DEFAULTS, **(settings or {}))
+        self.settings = settings_from(settings)
         self._model = None
         self._lock = threading.Lock()
 
@@ -172,29 +178,25 @@ class Transcriber:
                 from faster_whisper import WhisperModel
             except Exception as exc:
                 raise VoiceError("faster-whisper is not installed: %s" % exc) from exc
+            if self.settings["device"] == "cpu":
+                self.settings = on_cpu(self.settings)
             try:
-                self._model = WhisperModel(
-                    self.settings["model"],
-                    device=self.settings["device"],
-                    compute_type=self.settings["compute_type"],
-                )
+                self._model = self._build(WhisperModel)
             except Exception as exc:
-                # A missing CUDA runtime is the usual cause; CPU still works,
-                # just slower, and that beats no dictation at all.
-                if self.settings["device"] != "cpu":
-                    self.settings = dict(self.settings, device="cpu",
-                                         compute_type="int8")
-                    try:
-                        from faster_whisper import WhisperModel
-
-                        self._model = WhisperModel(
-                            self.settings["model"], device="cpu", compute_type="int8"
-                        )
-                    except Exception as inner:
-                        raise VoiceError("could not load the model: %s" % inner) from inner
-                else:
+                # No GPU, or a missing CUDA runtime; CPU still works, just
+                # slower, and that beats no dictation at all.
+                if self.settings["device"] == "cpu":
                     raise VoiceError("could not load the model: %s" % exc) from exc
+                self.settings = on_cpu(self.settings)
+                try:
+                    self._model = self._build(WhisperModel)
+                except Exception as inner:
+                    raise VoiceError("could not load the model: %s" % inner) from inner
             return self._model
+
+    def _build(self, whisper_model):
+        return whisper_model(self.settings["model"], device=self.settings["device"],
+                             compute_type=self.settings["compute_type"])
 
     def transcribe(self, audio, hint=None):
         """Audio (float32, 16 kHz) to text. `hint` biases rare words."""
@@ -220,7 +222,18 @@ class Transcriber:
 def settings_from(block):
     """A `voice` config block over the defaults, unknown keys dropped."""
     block = block if isinstance(block, dict) else {}
-    return dict(DEFAULTS, **{k: v for k, v in block.items() if k in DEFAULTS})
+    out = dict(DEFAULTS, **{k: v for k, v in block.items() if k in DEFAULTS})
+    # Setup copies config.example.json, which names the default model; that
+    # is not a choice of one for the CPU.
+    if block.get("model") not in (None, "", DEFAULTS["model"]) and not block.get("cpu_model"):
+        out["cpu_model"] = block["model"]
+    return out
+
+
+def on_cpu(settings):
+    """`settings` as they run on the CPU: the CPU model, at int8."""
+    return dict(settings, device="cpu", compute_type="int8",
+                model=settings.get("cpu_model") or settings["model"])
 
 
 def load_settings(config_path=None):
@@ -239,9 +252,11 @@ def load_settings(config_path=None):
 # -- the model in a child process ---------------------------------------------
 # One request at a time over the child's stdin, one JSON line back on its
 # stdout:
-#   {"op": "load"}                                  -> {"ok": true}
+#   {"op": "load"}                    -> {"ok": true, "device": d, "model": m}
 #   {"op": "transcribe", "hint": h, "bytes": n} + n bytes of encoded audio
-#                                                   -> {"ok": true, "text": t}
+#                                     -> {"ok": true, "text": t, "device": d, "model": m}
+# `device` is "cpu" once it has fallen back, so the window can say why a
+# dictation is slow.
 # Failures come back as {"ok": false, "error": ...}. The child exits when its
 # stdin closes, so it does not outlive the dispatcher.
 
@@ -288,7 +303,7 @@ class Worker:
     REAP_EVERY = 30.0
 
     def __init__(self, settings=None, spawn=None, clock=time.time, kill=None):
-        self.settings = dict(DEFAULTS, **(settings or {}))
+        self.settings = settings_from(settings)
         self._spawn = spawn or _spawn
         self._kill = kill or _kill_tree
         self._clock = clock
@@ -297,6 +312,7 @@ class Worker:
         self._lock = threading.Lock()  # one request at a time; start and stop
         self._reaper = None
         self.starts = 0
+        self.where = None  # {device, model} the child last said it runs on
 
     @property
     def running(self):
@@ -353,6 +369,8 @@ class Worker:
             raise VoiceError("the dictation process answered nonsense")
         if not reply.get("ok"):
             raise VoiceError(reply.get("error") or "transcription failed")
+        if reply.get("device"):
+            self.where = {"device": reply["device"], "model": reply.get("model")}
         return reply
 
     def load(self):
@@ -436,6 +454,9 @@ def serve_worker(settings, inp=None, out=None, transcriber=None, decode=_decode)
     inp = inp or sys.stdin.buffer
     t = transcriber or Transcriber(settings)
 
+    def where():
+        return {"device": t.settings.get("device"), "model": t.settings.get("model")}
+
     def reply(obj):
         out.write(json.dumps(obj).encode("utf-8") + b"\n")
         out.flush()
@@ -446,12 +467,14 @@ def serve_worker(settings, inp=None, out=None, transcriber=None, decode=_decode)
             return
         try:
             req = json.loads(line)
+            # Which device and model, after the call: a load can fall back.
             if req.get("op") == "load":
                 t.load()
-                reply({"ok": True, "device": t.settings.get("device")})
+                reply(dict(where(), ok=True))
             elif req.get("op") == "transcribe":
                 data = _read_exactly(inp, int(req.get("bytes") or 0))
-                reply({"ok": True, "text": t.transcribe(decode(data), hint=req.get("hint"))})
+                text = t.transcribe(decode(data), hint=req.get("hint"))
+                reply(dict(where(), ok=True, text=text))
             else:
                 reply({"ok": False, "error": "unknown op %r" % req.get("op")})
         except Exception as exc:

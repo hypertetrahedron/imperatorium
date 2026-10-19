@@ -152,6 +152,24 @@ class InboxFrames(unittest.TestCase):
         with self.assertRaises(inbox.InboxError):
             inbox.send("\\\\.\\pipe\\x", None, "hello")
 
+    def test_pipe_is_opened_write_only(self):
+        # The default pipe DACL grants others read only; asking for read as
+        # well as write is never needed and can be what a policy refuses.
+        flags = []
+        real_open = inbox.os.open
+        def fake_open(path, f, *a):
+            flags.append(f)
+            raise PermissionError(13, "Access is denied")
+        inbox.os.open = fake_open
+        try:
+            with self.assertRaises(inbox.InboxError) as ctx:
+                inbox._write_pipe("\\\\.\\pipe\\x", b"x\n", 1.0)
+        finally:
+            inbox.os.open = real_open
+        self.assertTrue(flags[0] & os.O_WRONLY)
+        self.assertFalse(flags[0] & os.O_RDWR)
+        self.assertIn("elevated", str(ctx.exception))
+
 
 class BackgroundCommand(unittest.TestCase):
     def test_prompt_is_the_last_argument(self):

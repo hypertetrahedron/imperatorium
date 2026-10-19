@@ -12,16 +12,21 @@ this server's own: a cross-origin fetch with a plain-text body is a CORS
 "simple request", so a page the user merely had open could otherwise drive
 this.
 """
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import (activity, background, changes, conversation, convcache, deeplink,
-               history, inbox, notify, pending, procs, projects, prs, registry,
-               remote, sessionstat, ui, usage, voice, winfocus)
+from . import (activity, background, changes, closing, conversation, convcache,
+               deeplink, history, inbox, matrix, notify, pending, procs, projects,
+               prs, registry, remote, sessionstat, slash, taskout, ui, usage, voice,
+               winfocus)
+from . import settings as settingsmod
 from .store import Store
 
 HOST = "127.0.0.1"
@@ -92,6 +97,9 @@ def remote_key(host, session_id):
     return "%s/%s" % (host, session_id)
 
 
+NOT_RUNNING = "that session is not running here, so there is nothing to close"
+
+
 class Control:
     """Everything the request handler needs, so the handler stays dumb."""
 
@@ -116,7 +124,16 @@ class Control:
         self.background_options = background_options or {}
         self._cache = {"at": 0.0, "snapshot": None}
         self._lock = threading.Lock()
+        self._changed = threading.Condition()
+        self._settings_lock = threading.Lock()
+        self._restart_needed = set()  # processes a saved setting waits on
         config = config or {}
+        # Handed to the window's pages when they load and never written down:
+        # what Send As Typed, and turning it on, ask for (see send_typed).
+        self.window_token = secrets.token_urlsafe(24)
+        self.send_as_typed = bool((config.get("chat") or {}).get("send_as_typed"))
+        self.quick = {"key": settingsmod.value(config, settingsmod.BY_KEY["quick.key"]),
+                      "phrases": settingsmod.value(config, settingsmod.BY_KEY["quick.phrases"])}
 
         budget = config.get("budget") or {}
         self.notifier = notify.Notifier(config, still_waiting=self._still_waiting)
@@ -124,9 +141,14 @@ class Control:
         for channel, on in prefs.items():
             if channel in self.notifier.cfg:
                 self.notifier.set_enabled(channel, on)
+        # The account's windows are kept beside the store, so a restart shows
+        # the meters at once rather than after the next statusline render.
+        store_path = getattr(store, "path", None)
         self.usage = usage.Usage(
             thresholds=budget.get("thresholds") or usage.DEFAULT_THRESHOLDS,
-            on_crossing=self._budget_crossed)
+            on_crossing=self._budget_crossed,
+            path=os.path.join(os.path.dirname(store_path), "limits.json")
+            if isinstance(store_path, str) else None)
         self.live = activity.Live()
         self.stats = sessionstat.Reader()
         # Parsed transcripts, reread only when one changes: the chat poll,
@@ -135,6 +157,8 @@ class Control:
             reader=lambda sid: conversation.read(sid, limit=0, merge=False))
         self.prs = prs.Tracker()
         self.history = history.Index()
+        self.cost_history = None  # costs.History, built on first ask
+        self.subscribed = usage.subscription  # Pro/Max login: 5h and 7d windows
         self._doing = {}  # session id -> (at, line)
         self._errors = {"at": 0.0, "key": None, "result": None}
         self._tallies = {}  # session id -> (size, tally)
@@ -242,7 +266,14 @@ class Control:
         except Exception:
             stat = {}
         alive = isinstance(row.get("pid"), int) and bool(row.get("status"))
-        out = {"cache_expires_at": (stat.get("cache") or {}).get("expires_at"),
+        # Context size rides along so the window can warn before a prompt
+        # re-sends a large context to a cold cache, with what that costs.
+        from . import costs
+        cache = stat.get("cache") or {}
+        out = {"cache_expires_at": cache.get("expires_at"),
+               "context_tokens": stat.get("context_tokens"),
+               "resume_cost_usd": costs.rewrite_cost(stat.get("model_id"), stat.get("context_tokens"),
+                                                     cache.get("ttl")),
                "alive": alive}
         if alive:
             for name in ("agents", "shells", "monitors"):
@@ -377,6 +408,60 @@ class Control:
         out["title"] = got["title"]
         return out
 
+    # A remote tile reads this much of the tail over SSH on every poll, not
+    # the whole conversation; the replies it keeps are recent anyway.
+    MATRIX_REMOTE_ITEMS = 150
+
+    def matrix(self):
+        """The chat matrix's tiles: each running session's replies and the
+        step it is on, plus what they have cost between them.
+
+        Ordered by name, so a tile stays where it is while sessions change
+        state around it.
+        """
+        rows = sorted((r for r in self.sessions()["sessions"] if matrix.active(r)),
+                      key=lambda r: ((r.get("name") or "").lower(), r.get("key") or ""))
+        now = time.time()
+        account = self.usage.summary()
+        try:
+            spent = self.spend(now, budget=1.0, limits=account.get("limits") or {})
+        except Exception:
+            spent = {"global": {"windows": []}, "current": {"each": []}}
+        per = {e["sessionId"]: e for e in spent["current"]["each"]}
+        tiles = []
+        for row in rows:
+            sid = row["sessionId"]
+            tile = {k: row.get(k) for k in
+                    ("key", "sessionId", "name", "cwd", "status", "state", "attention",
+                     "attention_kind", "attention_reason", "waitingFor",
+                     "last_notification", "background_tasks", "remote", "host", "work")}
+            mine = per.get(sid) or {}
+            # The whole session's estimate; the statusline's figure only
+            # covers Claude Code's current run, and is gone after a restart.
+            tile["cost_usd"] = mine.get("cost_usd")
+            tile["context_pct"] = (row.get("usage") or {}).get("context_pct")
+            if row.get("remote"):
+                got = self._remote_conversation(row, self.MATRIX_REMOTE_ITEMS)
+                items, error = got.get("items") or [], got.get("error")
+            else:
+                try:
+                    items, _ = self.convs.conversation(sid)
+                    error = None
+                except Exception as exc:
+                    items, error = [], "%s: %s" % (type(exc).__name__, exc)
+                tile["tokens"] = mine.get("tokens")
+            tile.update(matrix.focus(items, live=matrix.working(row)
+                                     or bool(row.get("attention"))))
+            if error:
+                tile["error"] = error
+            tiles.append(tile)
+        spend = matrix.spend(tiles, account.get("limits"))
+        spend["plan"] = account.get("plan")
+        spend["global"] = spent["global"]
+        spend["models"] = spent["current"]["models"]
+        spend["complete"] = spent.get("complete", True)
+        return {"tiles": tiles, "now": now, "spend": spend}
+
     def transcribe(self, audio_bytes, hint=None):
         """Browser-recorded audio to text, in the dictation process.
 
@@ -391,14 +476,16 @@ class Control:
             text = self._voice.transcribe_bytes(audio_bytes, hint=hint)
         except Exception as exc:
             return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
-        return {"ok": True, "text": text}
+        return dict(self._voice.where or {}, ok=True, text=text)
 
     def warm_voice(self):
         """The mic was pressed: build the model while the user speaks."""
         if self._voice is None:
             return {"ok": False, "error": "dictation is not available"}
         self._voice.warm()
-        return {"ok": True, "running": self._voice.running}
+        # Where the last load landed, so the window can say "on CPU" while
+        # the user is still speaking; None before the first load finishes.
+        return dict(self._voice.where or {}, ok=True, running=self._voice.running)
 
     def decisions(self, limit=60):
         """Recent auto-approval verdicts, newest first.
@@ -456,6 +543,209 @@ class Control:
     def invalidate(self):
         with self._lock:
             self._cache = {"at": 0.0, "snapshot": None}
+        # Wakes the window's event streams, so a hook's news reaches the page
+        # now rather than on its next poll.
+        with self._changed:
+            self._changed.notify_all()
+
+    def wait_change(self, timeout):
+        """Block until something invalidates the snapshot, or `timeout`."""
+        with self._changed:
+            self._changed.wait(timeout)
+
+    def _costs(self):
+        if self.cost_history is None:
+            from . import costs
+            self.cost_history = costs.History()
+        return self.cost_history
+
+    def costs(self, days=30.0):
+        """Estimated spend by day, project and model, from transcripts."""
+        try:
+            return self._costs().summary(days=days)
+        except Exception as exc:
+            return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+
+    # The windows a subscription's global figures cover, by length.
+    SPAN = {"five_hour": 5 * 3600.0, "seven_day": 7 * 86400.0}
+
+    def _global_windows(self, limits, now):
+        """[(name, since, resets_at)] the global figures are counted over.
+
+        A subscription's are its rate-limit windows: each began its length
+        before it resets. Once it has reset, and until a session reports the
+        new one, it runs from that reset. With no reading at all it is the
+        last five hours or seven days. Either way `resets_at` is None. Any other account - Enterprise, Team, an
+        API key, a cloud provider - has no windows to show, and gets the
+        calendar month so far, the period such accounts are usually billed by.
+        """
+        if any(limits.get(n) for n in self.SPAN) or self.subscribed():
+            out = []
+            for name, span in self.SPAN.items():
+                w = limits.get(name) or {}
+                resets = w.get("resets_at")
+                if resets:
+                    out.append((name, resets - span, resets))
+                elif w.get("waiting"):
+                    # Reset, the new window not reported yet: it began then at the earliest.
+                    out.append((name, w["reset_at"], None))
+                else:
+                    out.append((name, (now - span) // 60 * 60, None))
+            return out
+        start = datetime.fromtimestamp(now).replace(day=1, hour=0, minute=0, second=0,
+                                                    microsecond=0)
+        return [("month", start.timestamp(), None)]
+
+    def spend(self, now=None, budget=3.0, limits=None):
+        """Tokens and estimated cost in two parts, both from the transcripts,
+        so a restart loses neither.
+
+        `global` is everything sent from this machine within the account's
+        windows (see `_global_windows`) - every session, open or not. Usage
+        from other machines or claude.ai is not in a transcript here, so it
+        can only show in the meters' percentages.
+
+        `current` is the sessions open in Imperatorium (process up, not
+        ended), each over its whole life, subagents included - not only
+        since this dispatcher started. A remote session's transcript is not
+        here; it counts with the cost its statusline reported, if any.
+
+        Costs are estimates at list prices (see costs.py), the API price of
+        the same tokens; on a subscription that is a measure, not a bill.
+        """
+        now = time.time() if now is None else now
+        if limits is None:
+            limits = self.usage.summary(now)["limits"]
+        hist = self._costs()
+        complete = True
+        windows = []
+        for name, since, resets in self._global_windows(limits, now):
+            got = hist.totals(since, now=now, budget=budget)
+            complete = complete and got.pop("complete")
+            windows.append(dict(got, name=name, since=since, resets_at=resets))
+        rows = [r for r in self.sessions()["sessions"] if matrix.active(r)]
+        local = [r["sessionId"] for r in rows if not r.get("remote")]
+        per, ok = hist.sessions(local, budget=budget)
+        complete = complete and ok
+        each, tokens, cost, models = [], {}, 0.0, {}
+        for row in rows:
+            got = per.get(row["sessionId"]) if not row.get("remote") else None
+            usd = got["cost_usd"] if got else (row.get("usage") or {}).get("cost_usd")
+            tk = got["tokens"] if got else None
+            for k, v in (tk or {}).items():
+                tokens[k] = tokens.get(k, 0) + v
+            # Summed into a new dict: `got` is shared with the history's memo.
+            for name, m in ((got or {}).get("models") or {}).items():
+                into = models.setdefault(name, {"output": 0, "total_tokens": 0, "cost_usd": 0.0})
+                for k in into:
+                    into[k] += m[k]
+            if isinstance(usd, (int, float)):
+                cost += usd
+            each.append({"key": row.get("key"), "sessionId": row["sessionId"],
+                         "name": row.get("name"), "tokens": tk,
+                         "total_tokens": got["total_tokens"] if got else 0,
+                         "cost_usd": usd})
+        each.sort(key=lambda e: -(e["cost_usd"] or 0))
+        return {"global": {"windows": windows},
+                "current": {"sessions": len(rows), "tokens": tokens,
+                            "total_tokens": sum(tokens.values()),
+                            "cost_usd": cost, "models": models, "each": each},
+                "estimated": True, "complete": complete, "now": now}
+
+    # -- settings ----------------------------------------------------------
+    # config.json's path; serve() sets it. None (a test's Control) has no
+    # Settings window.
+    config_path = None
+
+    def settings_view(self):
+        """`GET /api/settings`: the Settings window's form (see settings.py)."""
+        if not self.config_path:
+            return {"ok": False, "error": "this dispatcher has no config file"}
+        try:
+            cfg = settingsmod.load(self.config_path)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": "config.json cannot be read: %s" % exc}
+        out = settingsmod.describe(cfg)
+        # The Insights toggles keep their state beside the store and win
+        # over config.json at start, so the live state is the true one.
+        for f in out["fields"]:
+            if f["key"] in ("notify.ntfy.enabled", "notify.speak.enabled"):
+                f["value"] = self.notifier.enabled(f["key"].split(".")[1])
+        return dict(out, ok=True, path=self.config_path,
+                    waiting=sorted(self._restart_needed),
+                    shortcuts=[{"where": w, "keys": k, "what": t}
+                               for w, k, t in ui.SHORTCUTS])
+
+    def save_settings(self, changes):
+        """`POST /api/settings {changes: {key: value}}`: check every change,
+        write config.json once, and apply at once what can be applied. The
+        rest waits for a restart, which the answer names."""
+        if not self.config_path:
+            return {"ok": False, "error": "this dispatcher has no config file"}
+        if not isinstance(changes, dict) or not changes:
+            return {"ok": False, "error": "nothing to save"}
+        with self._settings_lock:
+            try:
+                cfg = settingsmod.load(self.config_path)
+                new = settingsmod.apply(cfg, changes)
+            except settingsmod.Invalid as exc:
+                return {"ok": False, "errors": exc.args[0] if isinstance(exc.args[0], dict) else {},
+                        "error": "some values were not accepted"}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": "config.json cannot be read: %s" % exc}
+            try:
+                settingsmod.save(self.config_path, new)
+            except OSError as exc:
+                return {"ok": False, "error": "config.json cannot be written: %s" % exc}
+            self._apply_settings(new, changes)
+            need = settingsmod.restarts(changes)
+            self._restart_needed.update(need)
+        return dict(self.settings_view(), saved=sorted(changes), restart=need)
+
+    def _apply_settings(self, config, changes):
+        """What the running dispatcher can take without a restart."""
+        if "chat.send_as_typed" in changes:
+            self.send_as_typed = bool(changes["chat.send_as_typed"])
+        for name in ("key", "phrases"):
+            if "quick." + name in changes:
+                self.quick[name] = settingsmod.value(
+                    config, settingsmod.BY_KEY["quick." + name])
+        fresh = notify.settings(config)
+        for name, cfg in fresh.items():
+            key = "notify.%s.enabled" % name
+            cfg["enabled"] = (bool(changes[key]) if key in changes
+                              else self.notifier.enabled(name))
+        self.notifier.cfg = fresh
+        flips = {k.split(".")[1]: bool(v) for k, v in changes.items()
+                 if k in ("notify.ntfy.enabled", "notify.speak.enabled")}
+        if flips:
+            # Kept where the Insights toggles keep theirs, which win at start.
+            saved = dict(self.store.prefs().get("notify") or {})
+            saved.update(flips)
+            self.store.set_prefs(notify=saved)
+        if "budget.thresholds" in changes:
+            with self.usage._lock:
+                self.usage.thresholds = tuple(sorted(
+                    float(t) for t in (config.get("budget") or {}).get("thresholds") or ()))
+        if any(k.startswith("background.") for k in changes):
+            self.background_options = dict(config.get("background") or {})
+
+    def usage_summary(self):
+        """`GET /api/usage`: the meters, with the spend beside them."""
+        out = self.usage.summary()
+        try:
+            out["spend"] = self.spend(budget=1.0, limits=out["limits"])
+        except Exception as exc:
+            out["spend"] = {"error": "%s: %s" % (type(exc).__name__, exc)}
+        return out
+
+    def warm_spend(self):
+        """Read the transcripts once at start, so the first look at the
+        spend has it all rather than what one request's budget allowed."""
+        try:
+            self.spend(budget=120.0)
+        except Exception:
+            pass
 
     # -- hooks -----------------------------------------------------------
     def on_hook(self, payload, host=None):
@@ -648,6 +938,12 @@ class Control:
         row = self._row(session_id)
         if row is None:
             return {"ok": False, "error": "no such session"}
+        if slash.is_command(prompt):
+            # Refuse now what could never be typed, rather than leave it at
+            # the head of the queue failing on every sweep.
+            why = slash.refusal(prompt) or slash.unreachable(row)
+            if why:
+                return {"ok": False, "error": why}
         key = row.get("key") or session_id
         item = self.store.enqueue(key, prompt)
         self.invalidate()
@@ -668,7 +964,11 @@ class Control:
         item = self.store.take_queued(key)
         if item is None:
             return None
-        error = self._deliver(row, item["prompt"])
+        if slash.is_command(item["prompt"]):
+            got = self.run_command(row, item["prompt"])
+            error = None if got["ok"] else got["error"]
+        else:
+            error = self._deliver(row, item["prompt"])
         if error:
             self.store.requeue_front(key, item, error)
             return None
@@ -790,6 +1090,28 @@ class Control:
                 "tally": activity.tally(calls),
                 "current": self.live.current(key)}
 
+    def awaited(self, session_id):
+        """The panel under the chat: the end of what each shell and monitor
+        the session is waiting on has printed, and what each subagent has
+        said and done, read from the files Claude Code writes them to.
+        Empty once the session's process has gone."""
+        row = self._row(session_id, max_age=self.LOOKUP_AGE)
+        if row is None:
+            return {"ok": False, "error": "no such session"}
+        now = time.time()
+        if row.get("remote") or not (isinstance(row.get("pid"), int)
+                                     and row.get("status")):
+            return {"ok": True, "now": now, "tasks": []}
+        try:
+            stat = self.stats.read(row["sessionId"], now) or {}
+            folder = taskout.tasks_dir(row["sessionId"])
+            agents = taskout.subagents_dir(sessionstat.transcript_path(row["sessionId"])) \
+                if stat.get("agents") else None
+            tasks = taskout.awaited(stat, folder, agents=agents)
+        except Exception as exc:
+            return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+        return {"ok": True, "now": now, "tasks": tasks}
+
     def session_status(self, session_id):
         """The window's status panel: what the transcript and process tree add
         to the row - background work, prompt cache, tokens.
@@ -809,7 +1131,14 @@ class Control:
             stat = self.stats.read(row["sessionId"], now)
         except Exception as exc:
             return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+        if stat:
+            stat.pop("known_tasks", None)
         out = {"ok": True, "now": now, "stat": stat or {}}
+        try:
+            got, _ = self._costs().sessions([row["sessionId"]], budget=1.0)
+            out["spend"] = got.get(row["sessionId"])
+        except Exception:
+            out["spend"] = None
         pid = row.get("pid")
         alive = isinstance(pid, int) and bool(row.get("status"))
         out["alive"] = alive
@@ -897,19 +1226,47 @@ class Control:
         self.invalidate()
         return got
 
-    def new_session(self, session_id=None, cwd=None):
-        """A fresh session in the same project as `session_id`, in a new tab."""
+    def new_session(self, session_id=None, cwd=None, close=False):
+        """A fresh session in the same project as `session_id`, in a new tab.
+
+        With `close`, the old session is ended once the new one is launched -
+        for moving to a clean context without hunting for the old tab.
+        """
         row = self._row(session_id) if session_id else None
         if row and row.get("remote"):
             return {"ok": False, "error": "starting a session on %s is not "
                     "supported yet" % row.get("host")}
+        if close and not (row and row.get("pid")):
+            return {"ok": False, "error": NOT_RUNNING}
         cwd = cwd or (row or {}).get("cwd")
         try:
             got = history.new_session(cwd)
         except history.ResumeError as exc:
             return {"ok": False, "error": str(exc)}
-        self.store.add_event({"kind": "new", "cwd": cwd, "summary": "claude"})
+        self.store.add_event({"kind": "new", "cwd": cwd, "summary": got["command"],
+                              "session_id": got["session_id"]})
+        if close:
+            got["closed"] = self._close_row(row)
         self.invalidate()
+        return got
+
+    def close_session(self, session_id):
+        """End a local session and, with it, its terminal tab."""
+        row = self._row(session_id) if session_id else None
+        if row and row.get("remote"):
+            return {"ok": False, "error": "closing a session on %s is not "
+                    "supported yet" % row.get("host")}
+        if not (row and row.get("pid")):
+            return {"ok": False, "error": NOT_RUNNING}
+        got = self._close_row(row)
+        self.invalidate()
+        return got
+
+    def _close_row(self, row):
+        got = closing.close(row["pid"])
+        self.store.add_event({"kind": "close", "cwd": row.get("cwd"),
+                              "session_id": row["sessionId"],
+                              "summary": got.get("how") or got.get("error")})
         return got
 
     # -- dispatch --------------------------------------------------------
@@ -926,6 +1283,8 @@ class Control:
                         if r["sessionId"] == session_id), None)
             if row is None:
                 return {"ok": False, "error": "no such session"}
+            if slash.is_command(prompt):
+                return self.run_command(row, prompt)
             if not row.get("dispatchable"):
                 return {"ok": False, "error":
                         "that session is not reachable (no credential yet - it "
@@ -970,6 +1329,17 @@ class Control:
         out["project"] = match
         if mode == "dry-run":
             out.update(ok=True, action="dry-run")
+            return out
+
+        if slash.is_command(prompt):
+            # Never a launch or a background run: a new session started on
+            # "/compact" would be a stranger doing nothing useful.
+            target = None if match.get("host") else self._session_for(match["path"])
+            if target is None:
+                out.update(ok=False, error="no running session on this machine "
+                           "for that project to run the command in")
+                return out
+            out.update(self.run_command(target, prompt))
             return out
 
         if match.get("host"):
@@ -1168,6 +1538,60 @@ class Control:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "action": "launch", "url": url}
 
+    def run_command(self, row, text):
+        """Type slash command `text` at `row`'s prompt (see slash.py)."""
+        why = slash.refusal(text)
+        if why:
+            return {"ok": False, "error": why}
+        # Status moves under us; decide on a fresh look, not the one the
+        # caller found the row in.
+        self.invalidate()
+        row = self._row(row.get("key") or row["sessionId"]) or row
+        why = slash.blocked(row, self.pending.waiting())
+        if why:
+            return {"ok": False, "error": why}
+        if not slash.type_command(row["pid"], text):
+            return {"ok": False, "error": "could not type into its terminal"}
+        self.store.add_event({"kind": "command", "session_id": row["sessionId"],
+                              "cwd": row.get("cwd"), "summary": text.strip()[:280]})
+        self.invalidate()
+        return {"ok": True, "action": "command", "command": text.strip(),
+                "session": row["sessionId"], "session_name": row.get("name")}
+
+    def send_typed(self, session_id, text):
+        """Send As Typed: type `text` at the session's prompt as one line.
+
+        Typed input is the person's own, with all the authority of a prompt
+        typed at the terminal - which is the point (an inbox message is a
+        peer's), and why this is off until they turn it on in Settings and
+        reached only from the window (Handler checks its token). Text is
+        cleaned to one line; a slash command goes the run_command way.
+        """
+        if not self.send_as_typed:
+            return {"ok": False, "error": "Send As Typed is off - turn it on "
+                    "in Settings, under Chat"}
+        row = self._row(session_id) if session_id else None
+        if row is None:
+            return {"ok": False, "error": "no such session"}
+        clean, changed = slash.clean_typed(text)
+        why = slash.typed_refusal(clean)
+        if why:
+            return {"ok": False, "error": why}
+        if slash.is_command(clean):
+            return dict(self.run_command(row, clean), cleaned=changed)
+        self.invalidate()
+        row = self._row(row.get("key") or row["sessionId"]) or row
+        why = slash.blocked(row, self.pending.waiting())
+        if why:
+            return {"ok": False, "error": why}
+        if not slash.type_command(row["pid"], clean):
+            return {"ok": False, "error": "could not type into its terminal"}
+        self.store.add_event({"kind": "typed", "session_id": row["sessionId"],
+                              "cwd": row.get("cwd"), "summary": clean[:280]})
+        self.invalidate()
+        return {"ok": True, "action": "typed", "cleaned": changed,
+                "session": row["sessionId"], "session_name": row.get("name")}
+
     def _deliver(self, row, prompt):
         """Put `prompt` in `row`'s inbox, wherever it is. None, or the error."""
         prompt = conversation.with_origin(prompt)
@@ -1223,7 +1647,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+    def _send(self, code, body, ctype="application/json; charset=utf-8",
+              cache="no-store"):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode("utf-8")
         elif isinstance(body, str):
@@ -1231,9 +1656,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(body)
+
+    def _from_window(self):
+        """This server's own page, carrying the token it was served with.
+
+        Anything running as you can still forge both, so this is not a
+        boundary against a determined process; it keeps a plain API call -
+        impctl, curl, another session - from typing as you by accident.
+        """
+        origin = self.headers.get("Origin")
+        token = self.headers.get("X-Imperatorium-Window") or ""
+        return (origin is not None and self._same_origin()
+                and hmac.compare_digest(token, self.control.window_token))
 
     def _same_origin(self):
         """No Origin (curl, hooks, the palette), or this server's own page.
@@ -1287,6 +1724,56 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length)
 
+    # A stream is ended after this long and the browser's EventSource opens
+    # a new one, so a page that vanished without closing its socket costs a
+    # thread for minutes, not forever.
+    STREAM_SECONDS = 600.0
+    STREAM_EVERY = 1.0      # how often the session list is looked at
+    STREAM_MIN_GAP = 0.5    # and never more often than this
+    STREAM_KEEPALIVE = 15.0
+
+    def _stream(self):
+        """Server-sent events: the session list, sent whenever it changes.
+
+        A hook event wakes the loop at once (Control.invalidate), so a
+        session asking for you shows without waiting for a poll; otherwise
+        the list is looked at every second and sent only when it differs.
+        """
+        c = self.control
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.close_connection = True
+        last, quiet, end = None, time.time(), time.time() + self.STREAM_SECONDS
+        looked = 0.0
+        try:
+            while time.time() < end:
+                # Tool hooks can arrive many times a second; each clears the
+                # snapshot, so looks are spaced out or every one would fork
+                # `claude agents`.
+                gap = self.STREAM_MIN_GAP - (time.time() - looked)
+                if gap > 0:
+                    time.sleep(gap)
+                looked = time.time()
+                snap = c.sessions(max_age=self.STREAM_EVERY)
+                # `at` is when the snapshot was taken, new every time; the
+                # rest is what decides whether anything changed.
+                same = json.dumps({k: v for k, v in snap.items() if k != "at"},
+                                  sort_keys=True)
+                if same != last:
+                    self.wfile.write(b"event: sessions\ndata: "
+                                     + json.dumps(snap).encode("utf-8") + b"\n\n")
+                    self.wfile.flush()
+                    last, quiet = same, time.time()
+                elif time.time() - quiet >= self.STREAM_KEEPALIVE:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    quiet = time.time()
+                c.wait_change(self.STREAM_EVERY)
+        except (OSError, ValueError):
+            pass  # the page went away
+
     def _arg(self, name, default=""):
         from urllib.parse import parse_qs, urlparse
         return (parse_qs(urlparse(self.path).query).get(name) or [default])[0]
@@ -1295,9 +1782,30 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
         c = self.control
         if path == "/":
-            self._send(200, ui.render_shell(), "text/html; charset=utf-8")
+            self._send(200, ui.render_shell(c.window_token), "text/html; charset=utf-8")
+        elif path == "/matrix":
+            self._send(200, ui.render_matrix(), "text/html; charset=utf-8")
+        elif path == "/settings":
+            self._send(200, ui.render_settings(c.window_token), "text/html; charset=utf-8")
+        elif path == "/api/matrix":
+            self._send(200, c.matrix())
+        elif path.startswith("/fonts/"):
+            data = ui.font(path[len("/fonts/"):])
+            if data is None:
+                self._send(404, {"error": "no such font"})
+            else:
+                # Fonts only change with the code, so a day's cache is safe.
+                self._send(200, data, "font/woff2", cache="max-age=86400")
         elif path == "/api/sessions":
             self._send(200, c.sessions())
+        elif path == "/api/stream":
+            self._stream()
+        elif path == "/api/costs":
+            try:
+                days = max(1, min(90, int(self._arg("days") or 30)))
+            except ValueError:
+                days = 30
+            self._send(200, c.costs(days))
         elif path == "/api/projects":
             self._send(200, {"projects": c.catalogue()})
         elif path == "/api/events":
@@ -1332,6 +1840,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, c.worktrees(self._arg("project")))
         elif path == "/api/worktree_diff":
             self._send(200, c.worktree_diff(self._arg("project"), self._arg("path")))
+        elif path == "/api/awaited":
+            self._send(200, c.awaited(self._arg("session")))
         elif path == "/api/session_status":
             self._send(200, c.session_status(self._arg("session")))
         elif path == "/api/activity":
@@ -1343,7 +1853,7 @@ class Handler(BaseHTTPRequestHandler):
                 days = 7.0
             self._send(200, c.errors(days))
         elif path == "/api/usage":
-            self._send(200, c.usage.summary())
+            self._send(200, c.usage_summary())
         elif path == "/api/history":
             self._send(200, c.search(self._arg("q")))
         elif path == "/api/queue":
@@ -1352,6 +1862,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"prefs": c.store.prefs()})
         elif path == "/api/notify":
             self._send(200, c.notifier.status())
+        elif path == "/api/settings":
+            self._send(200, c.settings_view())
+        elif path == "/api/quick":
+            self._send(200, dict(c.quick, ok=True))
         elif path == "/api/pending":
             self._send(200, {"pending": c.pending.waiting()})
         elif path == "/api/hosts":
@@ -1384,7 +1898,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, c.focus(payload.get("project"),
                                     payload.get("session_id")))
         elif path in ("/api/queue", "/api/unqueue", "/api/worktree",
-                      "/api/resume", "/api/new", "/api/prefs", "/api/notify"):
+                      "/api/resume", "/api/new", "/api/close", "/api/prefs",
+                      "/api/notify", "/api/settings"):
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})
                 return
@@ -1399,6 +1914,16 @@ class Handler(BaseHTTPRequestHandler):
             ok = c.pending.decide(payload.get("id"), payload.get("verdict"),
                                   payload.get("who") or "window")
             self._send(200 if ok else 409, {"ok": ok})
+        elif path == "/api/typed":
+            if not isinstance(payload, dict):
+                self._send(400, {"error": "expected an object"})
+                return
+            if not self._from_window():
+                self._send(403, {"ok": False, "error": "Send As Typed is only "
+                                 "available from the Imperatorium window"})
+                return
+            self._send(200, c.send_typed(payload.get("session_id"),
+                                         payload.get("prompt")))
         elif path == "/api/dispatch":
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})
@@ -1434,7 +1959,10 @@ class Handler(BaseHTTPRequestHandler):
                             fork=bool(p.get("fork")), prompt=p.get("prompt"),
                             cwd=p.get("cwd"))
         if path == "/api/new":
-            return c.new_session(p.get("session_id"), cwd=p.get("cwd"))
+            return c.new_session(p.get("session_id"), cwd=p.get("cwd"),
+                                 close=bool(p.get("close")))
+        if path == "/api/close":
+            return c.close_session(p.get("session_id"))
         if path == "/api/prefs":
             allowed = {k: p[k] for k in ("pinned", "archived", "group", "filter")
                        if k in p}
@@ -1448,6 +1976,16 @@ class Handler(BaseHTTPRequestHandler):
             saved[p.get("channel")] = bool(p.get("enabled"))
             c.store.set_prefs(notify=saved)
             return dict(c.notifier.status(), ok=True)
+        if path == "/api/settings":
+            ch = p.get("changes")
+            # Turning Send As Typed on lets a message speak as you, so only
+            # the Settings window may do it. Turning it off is anyone's.
+            if (isinstance(ch, dict) and ch.get("chat.send_as_typed")
+                    and not self._from_window()):
+                return {"ok": False, "errors": {"chat.send_as_typed":
+                        "can only be turned on from the Settings window"},
+                        "error": "some values were not accepted"}
+            return c.save_settings(ch)
         return {"ok": False, "error": "no such path"}
 
 
@@ -1537,6 +2075,7 @@ def serve(host=HOST, port=PORT, state_path=STATE_PATH, roots=None):
         hosts=remote.load_hosts(config),
         config=config,
     )
+    Handler.control.config_path = os.path.join(PROJECT_DIR, "config.json")
     srv = Server((host, port), Handler)
     print("ccontrol listening on http://%s:%d" % (host, port))
     start_tunnels(Handler.control)
@@ -1544,6 +2083,8 @@ def serve(host=HOST, port=PORT, state_path=STATE_PATH, roots=None):
     # to bind never runs a second set of gh calls or queue deliveries.
     Handler.control.prs.start()
     threading.Thread(target=Handler.control._sweep_loop, name="queue",
+                     daemon=True).start()
+    threading.Thread(target=Handler.control.warm_spend, name="spend",
                      daemon=True).start()
     try:
         srv.serve_forever()
