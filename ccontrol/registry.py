@@ -170,6 +170,9 @@ def merge(agent_rows, files, creds=None):
         # terminal, so a person hunting for a console will not find them.
         row["entrypoint"] = rec.get("entrypoint")
         row["desktop_app"] = rec.get("entrypoint") == "claude-desktop"
+        # Likewise one inside VS Code's Claude panel, not a terminal.
+        if rec.get("entrypoint") == "claude-vscode":
+            row["ide"] = "vscode"
         # When this session's status last changed. `claude agents --json`
         # reports the status but not its age, and the age is the only thing
         # that can tell a live "waiting for you" from one the session has

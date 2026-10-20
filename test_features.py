@@ -1285,6 +1285,67 @@ class ErrorsMethod(Base):
         self.assertEqual(reads, ["s1", "s2"])  # not re-read for the cached call
 
 
+class IdleAfterStop(Base):
+    """Claude Code stopped sending `idle_prompt` (2.1.303); Stop stands in."""
+
+    def setUp(self):
+        super().setUp()
+        self.announced = []
+        self.control._announce = lambda key, caption: self.announced.append((key, caption))
+
+    def stop(self):
+        self.control.on_hook({"hook_event_name": "Stop", "session_id": SID, "cwd": CWD})
+        (delay, check), = [x for x in self.scheduled]
+        self.scheduled.clear()
+        self.assertEqual(delay, dispatcher.IDLE_AFTER)
+        return check
+
+    def row(self):
+        self.control.invalidate()
+        return next(r for r in self.control.sessions()["sessions"] if r["sessionId"] == SID)
+
+    def test_an_idle_session_a_minute_after_stop_is_waiting_for_you(self):
+        self.live(status="idle")
+        self.start_hook()
+        self.stop()()
+        self.assertEqual(self.announced, [(SID, "waiting for you")])
+        row = self.row()
+        self.assertTrue(row["attention"])
+        self.assertEqual(row["last_notification"], "idle_prompt")
+        self.assertTrue(any(e.get("kind") == "idle_prompt" for e in self.control.store.events(5)))
+
+    def test_only_the_latest_turns_check_counts(self):
+        self.live(status="idle")
+        self.start_hook()
+        first = self.stop()
+        time.sleep(0.01)
+        second = self.stop()
+        first()
+        self.assertEqual(self.announced, [])
+        self.assertFalse(self.row()["attention"])
+        second()
+        self.assertEqual(len(self.announced), 1)
+
+    def test_a_busy_session_or_one_with_background_work_is_not_waiting(self):
+        self.live(status="busy")
+        self.start_hook()
+        self.stop()()
+        self.live(status="idle")
+        self.agent_rows[0]["background_tasks"] = [{"id": "x"}]
+        self.stop()()
+        self.assertEqual(self.announced, [])
+
+    def test_a_real_idle_prompt_first_is_not_announced_again(self):
+        self.live(status="idle")
+        self.start_hook()
+        check = self.stop()
+        self.control.on_hook({"hook_event_name": "Notification", "session_id": SID, "cwd": CWD,
+                              "notification_type": "idle_prompt"})
+        self.assertEqual(len(self.announced), 1)
+        check()
+        self.assertEqual(len(self.announced), 1)
+
+
 class ResumeMethod(Base):
     def test_refuses_to_resume_a_still_running_session_into_a_window(self):
         self.live(status="idle")
@@ -1388,6 +1449,46 @@ class ResumeMethod(Base):
         self.start_hook()
         self.assertFalse(self.control.close_session(SID)["ok"])
         self.assertFalse(self.control.close_session("nope")["ok"])
+
+    def _keys(self):
+        return [r["key"] for r in self.control.sessions()["sessions"]]
+
+    def test_dismissing_a_session_with_no_process_takes_it_off_the_list(self):
+        self.live(status="idle")
+        self.start_hook()
+        self.control.store.set_prefs(archived=[SID, "other"])
+        out = self.control.dismiss_session(SID)
+        self.assertEqual(out, {"ok": True, "how": "dismissed"})
+        self.assertNotIn(SID, self._keys())
+        self.assertEqual(self.control.store.prefs()["archived"], ["other"])
+        self.assertNotIn(SID, self.control.store.tokens())
+        self.assertTrue(any(e.get("kind") == "dismiss"
+                            for e in self.control.store.events(10)))
+        # It stays off across a dispatcher restart.
+        again = dispatcher.Control(Store(self.control.store.path), roots=[])
+        self.assertIn(SID, again.store.dismissed())
+
+    def test_a_running_session_is_not_dismissed(self):
+        self.live(status="idle")
+        self.files[SID]["pid"] = 4242
+        self.start_hook()
+        self.assertFalse(self.control.dismiss_session(SID)["ok"])
+        self.assertFalse(self.control.dismiss_session("nope")["ok"])
+        self.assertIn(SID, self._keys())
+
+    def test_a_dismissed_session_comes_back_when_it_runs_again(self):
+        self.live(status="idle")
+        self.control.dismiss_session(SID)
+        self.files[SID]["pid"] = 4242
+        self.control.invalidate()
+        self.assertIn(SID, self._keys())
+        self.assertNotIn(SID, self.control.store.dismissed())
+
+    def test_a_dismissed_session_comes_back_on_session_start(self):
+        self.live(status="idle")
+        self.control.dismiss_session(SID)
+        self.start_hook()
+        self.assertIn(SID, self._keys())
 
     def test_new_and_close_without_a_process_launches_nothing(self):
         out, order = self._new_and_close(None)
@@ -1498,6 +1599,21 @@ class HttpRoutes(Base):
 
     def test_post_close_for_an_unknown_session_answers_200_not_ok(self):
         status, body = self._post("/api/close", {"session_id": "nope-nope"})
+        self.assertEqual(status, 200)
+        self.assertFalse(body["ok"])
+
+    def test_pages_and_health_name_the_same_dispatcher(self):
+        _, health = self._get("/api/health")
+        boot = health["boot"]
+        self.assertEqual(boot, self.control.boot_id)
+        for path in ("/", "/matrix", "/settings"):
+            with urllib.request.urlopen("http://127.0.0.1:%d%s" % (self.port, path), timeout=5) as r:
+                self.assertIn('<meta name=imp-boot content="%s">' % boot, r.read().decode(), path)
+        other = dispatcher.Control(Store(os.path.join(self.dir, "other.json")), roots=[])
+        self.assertNotEqual(other.boot_id, boot)
+
+    def test_post_dismiss_for_an_unknown_session_answers_200_not_ok(self):
+        status, body = self._post("/api/dismiss", {"session_id": "nope-nope"})
         self.assertEqual(status, 200)
         self.assertFalse(body["ok"])
 

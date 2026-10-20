@@ -86,6 +86,14 @@ ATTENTION_NOTIFICATIONS = {
 # finish actively erased the flag. It is handled on its own below.
 CLEARING = {"Stop", "SubagentStop", "TaskCompleted"}
 
+# Claude Code sends `idle_prompt` once a finished turn has sat a minute with
+# nothing typed. Since 2.1.303 (2026-10-18) none has arrived here, though
+# Stop still does, so no session started "waiting for you" and nothing was
+# spoken, pushed or shown on the desktop. The dispatcher raises the same
+# thing itself from Stop after this long; a real one, if it comes, is the
+# same raise and is not announced twice.
+IDLE_AFTER = 60.0
+
 # How a session came to want a human. A permission prompt is answered by a
 # person, so the session resuming work proves it was answered; a failed turn
 # is not resolved by the session retrying, only by it finishing or by you.
@@ -131,12 +139,16 @@ class Control:
         # Handed to the window's pages when they load and never written down:
         # what Send As Typed, and turning it on, ask for (see send_typed).
         self.window_token = secrets.token_urlsafe(24)
+        # Which dispatcher this is: an open page that sees it change reloads,
+        # so it does not keep running the code the last dispatcher served.
+        self.boot_id = secrets.token_hex(8)
         self.send_as_typed = bool((config.get("chat") or {}).get("send_as_typed"))
         self.quick = {"key": settingsmod.value(config, settingsmod.BY_KEY["quick.key"]),
                       "phrases": settingsmod.value(config, settingsmod.BY_KEY["quick.phrases"])}
 
         budget = config.get("budget") or {}
         self.notifier = notify.Notifier(config, still_waiting=self._still_waiting)
+        self.idle_after = IDLE_AFTER
         prefs = store.prefs().get("notify") or {}
         for channel, on in prefs.items():
             if channel in self.notifier.cfg:
@@ -220,9 +232,25 @@ class Control:
         queued = self.store.queued()
         for row in snap["sessions"]:
             self._decorate(row, queued)
+        snap["sessions"] = self._undismissed(snap["sessions"])
         with self._lock:
             self._cache = {"at": time.time(), "snapshot": snap}
         return snap
+
+    def _undismissed(self, rows):
+        """Rows less the ones dismissed from the window. A dismissed session
+        that has a process again was resumed, so it comes back."""
+        dismissed = self.store.dismissed()
+        if not dismissed:
+            return rows
+        kept = []
+        for row in rows:
+            if row["key"] in dismissed:
+                if not row.get("pid"):
+                    continue
+                self.store.undismiss(row["key"])
+            kept.append(row)
+        return kept
 
     def _decorate(self, row, queued):
         """What the newer features add to a row: doing, usage, PR, queue."""
@@ -666,13 +694,15 @@ class Control:
         except (OSError, ValueError) as exc:
             return {"ok": False, "error": "config.json cannot be read: %s" % exc}
         out = settingsmod.describe(cfg)
-        # The Insights toggles keep their state beside the store and win
-        # over config.json at start, so the live state is the true one.
+        # The on/off switches are also kept beside the store (`/api/notify`,
+        # impctl) and win over config.json at start, so the live state is
+        # the true one.
         for f in out["fields"]:
             if f["key"] in ("notify.ntfy.enabled", "notify.speak.enabled"):
                 f["value"] = self.notifier.enabled(f["key"].split(".")[1])
         return dict(out, ok=True, path=self.config_path,
                     waiting=sorted(self._restart_needed),
+                    notify_error=self.notifier.last_error,
                     shortcuts=[{"where": w, "keys": k, "what": t}
                                for w, k, t in ui.SHORTCUTS])
 
@@ -719,7 +749,7 @@ class Control:
         flips = {k.split(".")[1]: bool(v) for k, v in changes.items()
                  if k in ("notify.ntfy.enabled", "notify.speak.enabled")}
         if flips:
-            # Kept where the Insights toggles keep theirs, which win at start.
+            # Kept where `/api/notify` keeps its switches, which win at start.
             saved = dict(self.store.prefs().get("notify") or {})
             saved.update(flips)
             self.store.set_prefs(notify=saved)
@@ -787,6 +817,7 @@ class Control:
         if event == "SessionStart":
             meta["name"] = payload.get("session_name")
             self.store.register(key, token=token, **meta)
+            self.store.undismiss(key)
             self.invalidate()
             self._event(host,
                 {"kind": "session_start", "session_id": sid, "cwd": meta.get("cwd")}
@@ -864,12 +895,51 @@ class Control:
             }
         )
         if event == "Stop":
+            self.schedule(self.idle_after,
+                          lambda: self._idle_check(key, meta["last_event_at"], host, sid))
             # The turn is over, so this is the moment a queued prompt was
             # waiting for. One per turn: a queue of three is three turns.
             delivered = self.drain(key)
             if delivered:
                 return {"ok": True, "delivered": delivered}
         return {"ok": True}
+
+    @staticmethod
+    def schedule(delay, fn):
+        """Run `fn` once after `delay` seconds. Tests replace it."""
+        def run():
+            try:
+                fn()
+            except Exception:
+                pass  # a background check must not take a thread down noisily
+        t = threading.Timer(delay, run)
+        t.daemon = True
+        t.start()
+
+    def _idle_check(self, key, stop_at, host=None, sid=None):
+        """The `idle_prompt` Claude Code no longer sends: a minute after
+        `Stop`, a session that is idle, has had no hook since and has
+        nothing running is waiting for you. True when it raised it."""
+        rec = self.store.sessions().get(key) or {}
+        if rec.get("last_event_at") != stop_at or rec.get("attention_since"):
+            return False
+        self.invalidate()
+        row = self._row(key)
+        if not row or row.get("status") != "idle":
+            return False
+        # Claude Code holds `idle_prompt` back while background work runs.
+        work = row.get("work") or {}
+        if (registry.still_running(row, "idle_prompt") or row.get("shell_processes")
+                or work.get("agents") or work.get("shells") or work.get("monitors")):
+            return False
+        caption = registry.NOTIFICATION_CAPTIONS["idle_prompt"]
+        self.store.raise_attention(key, caption, BY_NOTIFICATION,
+                                   last_notification="idle_prompt")
+        self._announce(key, caption)
+        self.invalidate()
+        self._event(host, {"kind": "idle_prompt", "session_id": sid or key,
+                           "cwd": rec.get("cwd"), "summary": "raised by the dispatcher"})
+        return True
 
     def _event(self, host, event):
         if host:
@@ -1261,6 +1331,26 @@ class Control:
         got = self._close_row(row)
         self.invalidate()
         return got
+
+    def dismiss_session(self, session_id):
+        """Take a session with no process off the list. There is nothing to
+        end, and Claude Code goes on listing a finished background job or a
+        crashed session's file, so the dispatcher hides it until it starts
+        again. The conversation stays resumable."""
+        row = self._row(session_id) if session_id else None
+        if row is None:
+            return {"ok": False, "error": "no such session"}
+        if row.get("remote"):
+            return {"ok": False, "error": "dismissing a session on %s is not "
+                    "supported yet" % row.get("host")}
+        if row.get("pid"):
+            return {"ok": False, "error": "that session is still running - close it instead"}
+        self.store.dismiss(row["key"])
+        self.store.forget(row["sessionId"])
+        self.store.add_event({"kind": "dismiss", "cwd": row.get("cwd"),
+                              "session_id": row["sessionId"], "name": row.get("name")})
+        self.invalidate()
+        return {"ok": True, "how": "dismissed"}
 
     def _close_row(self, row):
         got = closing.close(row["pid"])
@@ -1782,11 +1872,11 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
         c = self.control
         if path == "/":
-            self._send(200, ui.render_shell(c.window_token), "text/html; charset=utf-8")
+            self._send(200, ui.render_shell(c.window_token, c.boot_id), "text/html; charset=utf-8")
         elif path == "/matrix":
-            self._send(200, ui.render_matrix(), "text/html; charset=utf-8")
+            self._send(200, ui.render_matrix(c.boot_id), "text/html; charset=utf-8")
         elif path == "/settings":
-            self._send(200, ui.render_settings(c.window_token), "text/html; charset=utf-8")
+            self._send(200, ui.render_settings(c.window_token, c.boot_id), "text/html; charset=utf-8")
         elif path == "/api/matrix":
             self._send(200, c.matrix())
         elif path.startswith("/fonts/"):
@@ -1871,7 +1961,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/hosts":
             self._send(200, c.hosts_status())
         elif path == "/api/health":
-            self._send(200, {"ok": True, "pid": os.getpid()})
+            self._send(200, {"ok": True, "pid": os.getpid(), "boot": self.control.boot_id})
         else:
             self._send(404, {"error": "no such path"})
 
@@ -1898,8 +1988,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, c.focus(payload.get("project"),
                                     payload.get("session_id")))
         elif path in ("/api/queue", "/api/unqueue", "/api/worktree",
-                      "/api/resume", "/api/new", "/api/close", "/api/prefs",
-                      "/api/notify", "/api/settings"):
+                      "/api/resume", "/api/new", "/api/close", "/api/dismiss",
+                      "/api/prefs", "/api/notify", "/api/settings"):
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})
                 return
@@ -1963,6 +2053,8 @@ class Handler(BaseHTTPRequestHandler):
                                  close=bool(p.get("close")))
         if path == "/api/close":
             return c.close_session(p.get("session_id"))
+        if path == "/api/dismiss":
+            return c.dismiss_session(p.get("session_id"))
         if path == "/api/prefs":
             allowed = {k: p[k] for k in ("pinned", "archived", "group", "filter")
                        if k in p}

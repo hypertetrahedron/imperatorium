@@ -130,10 +130,10 @@ class Saving(Base):
         self.assertEqual(self.control.background_options["model"], "opus")
         self.assertTrue(self.control.notifier.enabled("speak"))
         self.assertEqual(self.control.notifier.cfg["ntfy"]["delay"], 15)
-        # Kept where the Insights toggle keeps it, which wins at start.
+        # Kept where /api/notify keeps it, which wins at start.
         self.assertTrue(self.control.store.prefs()["notify"]["speak"])
 
-    def test_a_toggle_made_in_insights_shows_as_it_is(self):
+    def test_a_toggle_made_through_api_notify_shows_as_it_is(self):
         self.control.notifier.set_enabled("speak", True)
         view = self.control.settings_view()
         f = next(f for f in view["fields"] if f["key"] == "notify.speak.enabled")
@@ -141,6 +141,11 @@ class Saving(Base):
         # Saving something else does not switch it back off.
         self.control.save_settings({"notify.speak.delay": 9})
         self.assertTrue(self.control.notifier.enabled("speak"))
+
+    def test_the_form_carries_the_last_notification_error(self):
+        self.assertIsNone(self.control.settings_view()["notify_error"])
+        self.control.notifier.last_error = "ntfy: HTTP 403"
+        self.assertEqual(self.control.settings_view()["notify_error"], "ntfy: HTTP 403")
 
     def test_errors_come_back_by_field_and_the_file_is_untouched(self):
         got = self.control.save_settings({"notify.ntfy.delay": -5})

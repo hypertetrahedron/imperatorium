@@ -529,6 +529,22 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
 # What both pages need - the window and the chat matrix: naming a session's
 # state, and rendering what Claude wrote.
 SHARED = r"""
+// Which dispatcher served this page. A restarted dispatcher may serve
+// different code, and an open page keeps the old until reloaded, so each
+// page asks now and then and calls `onNew` once the answer changes.
+const BOOT = typeof document === "undefined" ? ""
+  : (document.querySelector("meta[name=imp-boot]") || {}).content || "";
+let bootChecking = false;
+async function checkBoot(onNew){
+  if (!BOOT || bootChecking) return;
+  bootChecking = true;
+  try {
+    const h = await (await fetch("/api/health", {cache: "no-store"})).json();
+    if (h && h.boot && h.boot !== BOOT) onNew();
+  } catch (e) { /* down or restarting: ask again next time */ }
+  bootChecking = false;
+}
+
 const esc = s => String(s == null ? "" : s)
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
@@ -1019,6 +1035,7 @@ function prBadge(pr){
 
 // Marks a session hosted by the Claude desktop app: it lives in that app's
 // window, so someone scanning terminals for it would never find it.
+const IDE_ICON = `<svg class="app" viewBox="0 0 13 11" aria-label="VS Code"><title>in VS Code</title><path d="M4 2.5 1 5.5l3 3M9 2.5l3 3-3 3M7.5 1.5l-2 8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const APP_ICON = `<svg class="app" viewBox="0 0 13 11" aria-label="Claude desktop app"><title>in the Claude desktop app</title><rect x=".5" y=".5" width="12" height="10" rx="1.5" fill="none" stroke="currentColor"/><path d="M.5 3.5h12" stroke="currentColor"/></svg>`;
 // Marks a session working in a worktree rather than the main checkout.
 const WT_ICON = `<svg class="app" viewBox="0 0 11 13" aria-label="worktree"><title>in a worktree</title><circle cx="3" cy="2.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="3" cy="10.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="8.5" cy="4.5" r="1.6" fill="none" stroke="currentColor"/><path d="M3 4.1v4.8M8.5 6.1c0 2.2-5.5 1.4-5.5 2.8" fill="none" stroke="currentColor"/></svg>`;
@@ -1106,7 +1123,8 @@ function tile(s, short){
       s.doing_since ? " · " + age(s.doing_since) : ""}</div>` : "";
   const lines = title + doing || `<div class="w" title="${esc(s.cwd || "")}">${esc(s.cwd || "")}</div>`;
   const acts = `<span data-pin="${esc(pkey(s))}" title="${pinned?"unpin":"pin to top"}">${
-      pinned ? "★" : "☆"}</span>${archived ? `<span data-arch="${esc(pkey(s))}" title="unarchive">↩</span>`
+      pinned ? "★" : "☆"}</span>${archived ? `<span data-arch="${esc(pkey(s))}" title="unarchive">↩</span>${
+        !s.pid && !s.remote ? `<span data-dismiss="${esc(key(s))}" title="nothing is running: take it off the list (the conversation stays resumable)">✕</span>` : ""}`
       : s.pid && !s.remote ? `<span data-close="${esc(key(s))}" title="close this session and its window (the conversation stays resumable)">✕</span>` : ""}`;
   const spend = open && statusFor === key(s) && statusData ? statusData.spend : null;
   const details = `<div class="m"><span class="det">${tileDetails(s, now, spend).map(p =>
@@ -1114,7 +1132,7 @@ function tile(s, short){
     s.host ? " · " + esc(s.host) : ""}${prBadge(s.pr)}</span><span class="acts">${acts}</span></div>`;
   return `<div class="s${open ? " on" : ""}${mark}${isUnread(s) ? " unread" : ""}" data-k="${esc(key(s))}">
     <div class="t1"><span class="dot ${dot}" title="${esc(label)}"></span><span class="n" title="${esc(nameOf(s))}">${
-      s.desktop_app ? APP_ICON : ""}${s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${
+      s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""}${s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${
       pinned ? `<span class="pin">★</span>` : ""}</span>${
       plain ? "" : `<span class="why" title="${esc(label)}">${esc(label)}</span>`}<span class="sig">${
       tileSignals(s, now, open)}</span></div><div class="stl st-${dot}" title="${esc(label)}">${
@@ -1250,6 +1268,8 @@ function drawSessions(){
     e.stopPropagation(); savePrefs({archived: toggleIn("archived", el.dataset.arch)}); });
   document.querySelectorAll("[data-close]").forEach(el => el.onclick = e => {
     e.stopPropagation(); closeSession(el.dataset.close); });
+  document.querySelectorAll("[data-dismiss]").forEach(el => el.onclick = e => {
+    e.stopPropagation(); dismissSession(el.dataset.dismiss); });
   document.querySelectorAll(".badge.pr").forEach(el => el.onclick = e => {
     e.stopPropagation(); if (el.dataset.url) window.open(el.dataset.url, "_blank"); });
   const fold = $("#archfold");
@@ -1795,6 +1815,8 @@ function updateSeen(seen, list, looking, now){
 // -- attention: title, favicon, desktop notifications -------------------------
 let attnBefore = null, deskNotify = false;
 try { deskNotify = localStorage.getItem("ccontrol.desknotify") === "1"; } catch (e) {}
+// The switch lives in the Settings window, another page on this origin.
+try { addEventListener("storage", e => { if (e.key === "ccontrol.desknotify") deskNotify = e.newValue === "1"; }); } catch (e) {}
 
 // Pure: sessions that started waiting for you since the last list (none on
 // the first, so opening the window does not announce what already waits).
@@ -1884,6 +1906,7 @@ function openStream(){
     streamUp = true;
     gotSessions(d.sessions || []);
   });
+  es.onopen = () => checkBoot(reloadForNewDispatcher);
   es.onerror = () => { streamUp = false; };
 }
 
@@ -2172,6 +2195,7 @@ async function tick(){
     if (ticks % 3 === 0) drawMeter();
     if (ticks % 2 === 0) drawPending();
     if (ticks % 20 === 0) loadPrefs();
+    if (ticks % 7 === 0) checkBoot(reloadForNewDispatcher);
     loadStatus(false);
     await refreshTab(false);
   } catch (e) { /* dispatcher restarting; the page keeps what it has */ }
@@ -2245,7 +2269,7 @@ function setView(v){
   if (v === "history"){ $("#title").textContent = "past sessions"; $("#sub").textContent =
       "search every session on this machine - titles, first prompts, and full text"; $("#hq").focus(); search(); }
   if (v === "insights"){ $("#title").textContent = "insights"; $("#sub").textContent =
-      "notifications, estimated cost, and tool failures across recent sessions"; loadInsights(); }
+      "estimated cost and tool failures across recent sessions"; loadInsights(); }
   if (v === "session"){ drawHead(); refreshTab(true); }
   document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === v));
 }
@@ -2484,6 +2508,22 @@ async function closeSession(k){
     : "closed " + nameOf(s);
 }
 
+// An archived tile's ✕ when nothing is running: no process to end, so the
+// dispatcher only takes it off the list until it starts again.
+async function dismissSession(k){
+  const s = sessions.find(x => key(x) === k);
+  if (!s || !confirm("Remove " + nameOf(s) + " from the list? Nothing is running, so there is " +
+      "nothing to close. The conversation stays resumable.")) return;
+  const r = await post("/api/dismiss", {session_id: k});
+  $("#say").textContent = r.ok ? "removed " + nameOf(s)
+    : "could not remove " + nameOf(s) + ": " + (r.error || "refused");
+  if (!r.ok) return;
+  // The dispatcher also dropped it from the archive, so the prefs follow.
+  sessions = sessions.filter(x => key(x) !== k);
+  await loadPrefs();
+  drawSessions();
+}
+
 // -- resume, fork --------------------------------------------------------
 async function act(what){
   const s = current();
@@ -2615,33 +2655,9 @@ async function search(){
     try { await navigator.clipboard.writeText(b.dataset.cp); b.textContent = "copied"; } catch (e) { b.textContent = b.dataset.cp; } });
 }
 
-// -- insights: failures and notifications ------------------------------
+// -- insights: cost and failures --------------------------------------
 async function loadInsights(){
   $("#errs").innerHTML = `<div class="note">reading recent sessions…</div>`;
-  let n;
-  try { n = await get("/api/notify"); } catch (e) { n = null; }
-  if (n) $("#notif").innerHTML = `
-    <label class="sw"><input type="checkbox" data-ch="speak" ${n.speak.enabled ? "checked" : ""}> Say it out loud when a session needs you (after ${n.speak.delay}s)</label>
-    <label class="sw"><input type="checkbox" data-ch="ntfy" ${n.ntfy.enabled ? "checked" : ""} ${n.ntfy.configured ? "" : "disabled"}> Push to phone via ntfy (after ${n.ntfy.delay}s)${
-      n.ntfy.configured ? "" : " - set notify.ntfy.topic in config.json first"}</label>
-    ${n.last_error ? `<div class="note" style="text-align:left;padding:4px 0">last error: ${esc(n.last_error)}</div>` : ""}`;
-  document.querySelectorAll("[data-ch]").forEach(c => c.onchange = () =>
-    post("/api/notify", {channel: c.dataset.ch, enabled: c.checked}));
-  // This one belongs to the browser, not the dispatcher: each window asks
-  // for its own permission to show notifications.
-  if ("Notification" in window){
-    $("#notif").insertAdjacentHTML("beforeend", `<label class="sw"><input type="checkbox" id="desk" ${
-      deskNotify && Notification.permission === "granted" ? "checked" : ""}> Desktop notification from this window when a session starts waiting for you (only while the window is not in front)</label>`);
-    $("#desk").onchange = async e => {
-      const box = e.target;
-      if (box.checked && Notification.permission !== "granted"){
-        const p = await Notification.requestPermission();
-        if (p !== "granted"){ box.checked = false; $("#say").textContent = "the browser did not allow notifications (" + p + ")"; }
-      }
-      deskNotify = box.checked;
-      try { localStorage.setItem("ccontrol.desknotify", deskNotify ? "1" : ""); } catch (x) {}
-    };
-  }
   loadCosts();
   let d;
   try { d = await get("/api/errors?days=" + ($("#days").value || 7)); } catch (e) { return; }
@@ -2955,6 +2971,13 @@ document.querySelectorAll("[data-view]").forEach(b => b.onclick = () =>
 let hqTimer;
 $("#hq").addEventListener("input", () => { clearTimeout(hqTimer); hqTimer = setTimeout(search, 350); });
 $("#days").onchange = loadInsights;
+// A new dispatcher came up: load its page, on the same session. The prompt
+// box's draft is already in localStorage.
+function reloadForNewDispatcher(){
+  noteDraft();
+  location.replace(location.pathname + (selected ? "?session=" + encodeURIComponent(selected) : ""));
+}
+
 // Named, so the matrix can find this window again; opened by the matrix to
 // show one session, it selects that session once it is listed.
 window.name = "imperatorium-main";
@@ -3117,14 +3140,15 @@ SHORTCUTS = [
 ]
 
 
-def _with_meta(token, page):
-    """`page` carrying the window token (see Control.send_typed)."""
+def _with_meta(token, page, boot=""):
+    """`page` carrying the window token (see Control.send_typed) and which
+    dispatcher served it (see checkBoot)."""
     head = "<meta charset=utf-8>"
-    return page.replace(head, head + '<meta name=imp-window content="%s">'
-                        % html.escape(token or "", quote=True), 1)
+    return page.replace(head, head + '<meta name=imp-window content="%s"><meta name=imp-boot content="%s">'
+                        % (html.escape(token or "", quote=True), html.escape(boot or "", quote=True)), 1)
 
 
-def render_shell(token=""):
+def render_shell(token="", boot=""):
     return _with_meta(token, (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">'
@@ -3142,7 +3166,7 @@ def render_shell(token=""):
         '</svg></button></span>'
         '<span><button id=new class=tiny>+ new</button> '
         '<button class=tiny data-view=history title="search and resume past sessions">history</button> '
-        '<button class=tiny data-view=insights title="tool failures and notifications">insights</button>'
+        '<button class=tiny data-view=insights title="estimated cost and tool failures">insights</button>'
         '</span></h1>'
         '<div id=meter class=meters tabindex=0 role=button aria-expanded=false '
         'title="Click for spend and the model mix"></div>'
@@ -3195,7 +3219,6 @@ def render_shell(token=""):
         '<input id=hq placeholder="search past sessions - words in any order" autocomplete=off>'
         '<div id=hits class=hits></div></div>'
         '<div id=insightpane class=panel hidden>'
-        '<div class=card><h3>Notifications</h3><div id=notif></div></div>'
         '<div class=card><h3>Estimated cost <select id=cdays class=tiny>'
         '<option value=7>last 7 days</option><option value=30 selected>last 30 days</option>'
         '<option value=90>last 90 days</option></select></h3><div id=costs></div></div>'
@@ -3219,7 +3242,7 @@ def render_shell(token=""):
         '<div id=jlist></div><div class=keys>&#8593;&#8595; choose · Enter open · Esc close · '
         'elsewhere: j/k next/previous · n next waiting for you · alt+1-9</div></div></div>'
         "<script>%s</script></body></html>" % (CSS, SCRIPT)
-    ))
+    ), boot)
 
 
 # -- the chat matrix ---------------------------------------------------------
@@ -3490,6 +3513,7 @@ if (channel){
   const beat = () => channel.postMessage("open");
   beat();
   setInterval(beat, 1000);
+  setInterval(() => checkBoot(() => location.reload()), 5000);
   addEventListener("pagehide", () => channel.postMessage("closed"));
 }
 
@@ -3630,9 +3654,11 @@ function draw(d){
         control(f) + (f.help ? `<span class="help">${esc(f.help)}</span>` : "") +
         `<span class="when ${f.applies === "live" ? "live" : ""}">${esc(WHEN[f.applies] || "")}</span>` +
         `<span class="err" hidden></span></div></div>`;
-    }).join("") + (sec.id === "remote" ? hostsHtml(d.hosts) : "") + `</section>`).join("") +
+    }).join("") + (sec.id === "remote" ? hostsHtml(d.hosts) : "") +
+      (sec.id === "notify" ? notifyExtrasHtml(d) : "") + `</section>`).join("") +
     shortcutsHtml(d);
   $("#set").oninput = $("#set").onchange = mark;
+  wireDesk();
   // A key field takes the combination pressed in it rather than typed text.
   for (const el of document.querySelectorAll("#set [data-record]")) el.onkeydown = e => {
     if (e.key === "Tab" || (!e.ctrlKey && !e.altKey && !e.metaKey && e.key !== "Backspace")) return;
@@ -3665,6 +3691,35 @@ function shortcutsHtml(d){
       `<td>${esc(s.what)}</td></tr>`;
   }
   return `<section id="keys"><h2>Keyboard shortcuts</h2><table class="keys">${rows}</table></section>`;
+}
+// Desktop notifications belong to the browser, not config.json: each
+// browser asks for its own permission, so the switch takes effect at once
+// and is kept beside the main window's other per-browser state.
+function notifyExtrasHtml(d){
+  const err = d.notify_error ? `<div class="f"><label>Last error</label><div class="ctl">` +
+    `<span class="err">${esc(d.notify_error)}</span></div></div>` : "";
+  if (!("Notification" in window)) return err;
+  let on = false;
+  try { on = localStorage.getItem("ccontrol.desknotify") === "1" && Notification.permission === "granted"; } catch (e) {}
+  return `<div class="f" id="deskrow"><label for="desk">Desktop notification</label><div class="ctl">` +
+    `<input type=checkbox id="desk"${on ? " checked" : ""}>` +
+    `<span class="help">From the main window when a session starts waiting for you, only while that window ` +
+    `is not in front. This browser only; it asks the browser's permission.` +
+    (Notification.permission === "denied" ? " The browser has blocked notifications for this page - allow them in its site settings." : "") +
+    `</span><span class="when live">applies at once</span></div></div>` + err;
+}
+function wireDesk(){
+  const box = document.getElementById("desk");
+  if (!box) return;
+  box.onchange = async e => {
+    e.stopPropagation();
+    if (box.checked && Notification.permission !== "granted"){
+      const p = await Notification.requestPermission();
+      if (p !== "granted"){ box.checked = false; say("the browser did not allow notifications (" + p + ")", true); return; }
+    }
+    try { localStorage.setItem("ccontrol.desknotify", box.checked ? "1" : ""); } catch (x) {}
+    say(box.checked ? "Desktop notifications on." : "Desktop notifications off.");
+  };
 }
 function hostsHtml(hosts){
   if (!hosts || !hosts.length) return `<div class="help">No remote hosts.</div>`;
@@ -3722,6 +3777,12 @@ async function save(){
   draw(d);
   say("Saved." + ((d.restart || []).length ? " Some changes need a restart (see the top)." : " Applied."));
 }
+// A new dispatcher holds a new window token, so saving from the old page
+// would be refused. Reload when nothing is unsaved; otherwise say so.
+setInterval(() => checkBoot(() => {
+  if (form && Object.keys(changes()).length) say("The dispatcher restarted - copy your changes, then reload this page.", true);
+  else location.reload();
+}), 5000);
 $("#save").onclick = save;
 $("#revert").onclick = () => { draw(form); say("changes discarded"); };
 addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); } });
@@ -3730,7 +3791,7 @@ load();
 """
 
 
-def render_settings(token=""):
+def render_settings(token="", boot=""):
     return _with_meta(token, (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
@@ -3739,15 +3800,15 @@ def render_settings(token=""):
         '<div id=bar><span id=msg class=msg role=status></span>'
         '<button id=revert disabled>Revert</button><button id=save class=go disabled>Save</button></div>'
         "<script>%s</script></body></html>" % (CSS, SETTINGS_CSS, SETTINGS_SCRIPT)
-    ))
+    ), boot)
 
 
-def render_matrix():
-    return (
+def render_matrix(boot=""):
+    return _with_meta("", (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
         "<title>Chat Matrix</title><style>%s%s</style></head><body>"
         "<div id=mx><div id=grid></div></div>"
         "<div id=gone hidden>dispatcher not answering - retrying</div>"
         "<script>%s</script></body></html>" % (CSS, MATRIX_CSS, MATRIX_SCRIPT)
-    )
+    ), boot)

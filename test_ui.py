@@ -287,6 +287,31 @@ class SessionTree(unittest.TestCase):
             self.assertIn(needle, ui.SCRIPT)
         self.assertNotIn('archived ? "↩" : "✕"', ui.SCRIPT)
 
+    def test_an_archived_tile_with_nothing_running_can_be_dismissed(self):
+        for needle in ('data-dismiss="${esc(key(s))}"', "!s.pid && !s.remote",
+                       'post("/api/dismiss"', "dismissSession(el.dataset.dismiss)"):
+            self.assertIn(needle, ui.SCRIPT)
+
+    def test_notification_switches_are_in_settings_not_insights(self):
+        self.assertNotIn("id=notif", ui.render_shell(""))
+        self.assertNotIn('post("/api/notify"', ui.SCRIPT)
+        for needle in ('sec.id === "notify" ? notifyExtrasHtml(d)', 'id="desk"',
+                       "Notification.requestPermission()", '"ccontrol.desknotify"'):
+            self.assertIn(needle, ui.SETTINGS_SCRIPT)
+        # the main window picks up the switch flipped in the Settings window
+        self.assertIn('e.key === "ccontrol.desknotify"', ui.SCRIPT)
+
+    def test_vs_code_tiles_carry_their_own_icon(self):
+        self.assertIn('s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""', ui.SCRIPT)
+
+    def test_every_page_reloads_for_a_new_dispatcher(self):
+        self.assertIn("async function checkBoot(onNew)", ui.SHARED)
+        for script in (ui.SCRIPT, ui.MATRIX_SCRIPT, ui.SETTINGS_SCRIPT):
+            self.assertIn("checkBoot(", script.replace(ui.SHARED, ""))
+        # the window keeps its session; Settings never drops unsaved edits
+        self.assertIn('"?session=" + encodeURIComponent(selected)', ui.SCRIPT)
+        self.assertIn("Object.keys(changes()).length) say(", ui.SETTINGS_SCRIPT)
+
     def test_worktree_tiles_carry_the_icon(self):
         self.assertIn("s.worktree ? WT_ICON", ui.SCRIPT)
 

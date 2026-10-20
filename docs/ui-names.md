@@ -58,8 +58,8 @@ the Chat Matrix; everything else is filled in by the script).
     Tag (`.nowait`), Dot Row (`.dots`)
   - Family Children `.kids`
   - **Session Tile** `.s`
-    - Tile Actions `.acts`: Pin, Close, Unarchive
-    - Name Line `.n`: App Icon, Worktree Icon, Pin Star, New Badge
+    - Tile Actions `.acts`: Pin, Close, Unarchive, Dismiss (archived, nothing running)
+    - Name Line `.n`: App Icon (or VS Code Icon), Worktree Icon, Pin Star, New Badge
     - Window Title Line `.w`
     - Doing Line `.d`
     - Meta Line `.m`: State Dot, State Label, Age, Host, PR Badge,
@@ -112,7 +112,6 @@ the Chat Matrix; everything else is filled in by the script).
   - History Search `#hq`
   - History Results `#hits`, made of History Hits (`.hit`)
 - **Insights Pane** `#insightpane`
-  - Notifications Card `#notif`
   - Cost Card `#costs`: Cost Chart (`svg.chart`) and Cost Tables
   - Tool Failures Card `#errs`
 - In the Header Controls (above), from what was the Chat Strip:
@@ -173,7 +172,9 @@ opens from the Prompt Box
   **Setting** `.f[data-key]` with its label, control, help, and **When Line**
   `.when` (`.live`: applies at once; otherwise which restart it waits on).
   Changed settings are marked `.dirty`, refused ones `.bad` with the reason
-  in `.err`.
+  in `.err`. The Notifications section also has the **Desktop Notification
+  Switch** `#desk` (`#deskrow`; per browser, not in `config.json`, applies
+  at once) and ntfy's last error when there is one.
 - **Shortcut List** `#keys`: every keyboard shortcut (`ui.SHORTCUTS`), as a
   table under the form; keys that are settings show their saved value.
 - **Restart Note** `#wait`: saved settings waiting for a restart, with the

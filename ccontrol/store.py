@@ -23,7 +23,7 @@ class Store:
         self.path = path
         self._lock = threading.Lock()
         self._data = {"tokens": {}, "events": [], "sessions": {}, "queue": {},
-                      "prefs": {}}
+                      "prefs": {}, "dismissed": {}}
         self.load()
 
     def load(self):
@@ -33,7 +33,7 @@ class Store:
         except (OSError, ValueError):
             return
         if isinstance(data, dict):
-            for key in ("tokens", "events", "sessions", "queue", "prefs"):
+            for key in ("tokens", "events", "sessions", "queue", "prefs", "dismissed"):
                 if isinstance(data.get(key), (dict, list)):
                     self._data[key] = data[key]
 
@@ -207,6 +207,27 @@ class Store:
                 self._data["queue"].pop(session_id, None)
             self._flush_locked()
             return True
+
+    # -- dismissed sessions ----------------------------------------------
+    # A tile with no process behind it - a finished background job, or a
+    # session file a crash left behind - has nothing to close, and Claude Code
+    # keeps listing it. Dismissing it hides it here until it starts again.
+    def dismiss(self, key):
+        with self._lock:
+            self._data["dismissed"][key] = time.time()
+            archived = self._data["prefs"].get("archived")
+            if isinstance(archived, list) and key in archived:
+                self._data["prefs"]["archived"] = [k for k in archived if k != key]
+            self._flush_locked()
+
+    def undismiss(self, key):
+        with self._lock:
+            if self._data["dismissed"].pop(key, None) is not None:
+                self._flush_locked()
+
+    def dismissed(self):
+        with self._lock:
+            return dict(self._data["dismissed"])
 
     # -- window preferences -------------------------------------------------
     # Pins, archived sessions and grouping. Kept here rather than in the

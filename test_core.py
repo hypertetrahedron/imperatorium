@@ -381,6 +381,14 @@ class StaleAttention(unittest.TestCase):
         flags = {r["sessionId"]: bool(r.get("desktop_app")) for r in rows}
         self.assertEqual(flags, {"app": True, "cli": False, "bare": False})
 
+    def test_a_vs_code_session_is_flagged(self):
+        rows = registry.merge(
+            [{"sessionId": "ide"}, {"sessionId": "cli"}],
+            {"ide": {"sessionId": "ide", "entrypoint": "claude-vscode"},
+             "cli": {"sessionId": "cli", "entrypoint": "cli"}},
+        )
+        self.assertEqual({r["sessionId"]: r.get("ide") for r in rows}, {"ide": "vscode", "cli": None})
+
 
 class FailureCaptions(unittest.TestCase):
     """What a tile says when a turn dies on an API error.

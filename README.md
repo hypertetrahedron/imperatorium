@@ -263,7 +263,8 @@ the prompt box to edit first.
 **history** searches every past session; **insights** tallies tool
 failures across projects, estimates what the last 7/30/90 days of tokens
 would cost at API list prices (by day, project and model, from the
-transcripts), and switches the phone, spoken and desktop alerts on.
+transcripts). The phone, spoken and desktop alerts are switched on in the
+Settings window (gear), under Notifications.
 
 ## What it does
 
@@ -275,7 +276,12 @@ transcripts), and switches the phone, spoken and desktop alerts on.
   process; background subagents run in-process and are not seen.
 - **Attention** - Claude Code hooks push `permission_prompt`, `idle_prompt`
   and `agent_needs_input` here the moment they happen, so the board shows what
-  is waiting and for how long.
+  is waiting and for how long. Claude Code 2.1.303+ no longer sends
+  `idle_prompt`, so the dispatcher raises it itself a minute after `Stop`
+  when the session is idle with nothing running in the background.
+- **Reload on restart** - each dispatcher has a random boot id (in the pages
+  and in `/api/health`); an open window, Matrix or Settings page that sees it
+  change reloads, so it never keeps running the last dispatcher's code.
 - **Dispatch** - "project: laser ledger, implement the new feature as
   recommended" is matched to a project and delivered to that project's running
   session. With no session running, it opens one with the prompt pre-filled.
@@ -353,7 +359,7 @@ python -m ccontrol.deeplink Y:/projects-software/gem-trip "fix it"
 | GET | `/api/events` | recent attention events |
 | GET | `/api/decisions` | recent auto-approval verdicts |
 | GET | `/api/hosts` | configured hosts and their reachability |
-| GET | `/api/health` | liveness |
+| GET | `/api/health` | liveness: `{ok, pid, boot}` - `boot` changes on every dispatcher start |
 | POST | `/hook` | Claude Code hook events |
 | POST | `/api/transcribe` | raw audio in, text out |
 | POST | `/api/voice/warm` | `{}` - start the dictation process now (the mic was pressed) |
@@ -371,6 +377,7 @@ python -m ccontrol.deeplink Y:/projects-software/gem-trip "fix it"
 | POST | `/api/resume` | `{session_id, where: window\|background, fork, prompt}` |
 | POST | `/api/new` | `{session_id, cwd, close}` - a fresh session in that project, in a new tab; answers its `session_id`. With `close`, the old session is then ended (typed `/exit`, killed if it stays) |
 | POST | `/api/close` | `{session_id}` - end a running local session and its terminal tab |
+| POST | `/api/dismiss` | `{session_id}` - take a local session with no process off the list until it starts again |
 | GET/POST | `/api/queue`, `/api/unqueue` | prompts held until a session's turn ends |
 | GET | `/matrix` | the Chat Matrix window |
 | GET | `/settings` | the Settings window |

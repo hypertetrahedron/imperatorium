@@ -49,6 +49,9 @@ class Base(unittest.TestCase):
         # machine's own, and the login's plan is not read either.
         self.control.cost_history = costs.History(root=os.path.join(self.dir, "projects"))
         self.control.subscribed = lambda: True
+        # Delayed checks are collected here, never run on a timer.
+        self.scheduled = []
+        self.control.schedule = lambda delay, fn: self.scheduled.append((delay, fn))
         self.agent_rows = []
         self.files = {}
         self.sent = []
