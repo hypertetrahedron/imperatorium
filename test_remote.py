@@ -22,15 +22,31 @@ class Done:
         self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
 
 
+class FakeStats:
+    """No SSH channel: what each host's transcripts would say."""
+    said = {}
+
+    def __init__(self, host):
+        self.host = host
+
+    def read(self, ids):
+        got = self.said.get(self.host["name"])
+        if isinstance(got, Exception):
+            raise got
+        return {k: v for k, v in (got or {}).items() if k in ids}
+
+
 class Stubbed(unittest.TestCase):
     def setUp(self):
         self.calls = []
-        self._orig = remote._run
+        self._orig = remote._run, remote.Stats
         remote._run = self.fake
+        remote.Stats = FakeStats
+        FakeStats.said = {}
         self.reply = Done("[]")
 
     def tearDown(self):
-        remote._run = self._orig
+        remote._run, remote.Stats = self._orig
 
     def fake(self, argv, timeout):
         self.calls.append(argv)
@@ -479,6 +495,137 @@ class ReaderChannel(unittest.TestCase):
     def test_the_interpreter_path_is_left_to_the_hosts_shell(self):
         argv = remote.Reader({"name": "h"}).argv()
         self.assertTrue(argv[-1].startswith("$HOME/.claude/ccontrol/venv/bin/python -u -c "))
+
+
+def wait_for(test, seconds=3.0):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if test():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+class PerHost(Stubbed):
+    GOOD = {"name": "good", "claude": "c", "label": "good"}
+    SLOW = {"name": "slow", "claude": "c", "label": "slow"}
+
+    def test_a_slow_host_does_not_hold_up_another(self):
+        def selective(argv, timeout):
+            if "slow" in argv:
+                time.sleep(2)
+            return Done('[{"sessionId":"s-%s","cwd":"/w"}]' % argv[len(remote.SSH_BASE)])
+
+        remote._run = selective
+        fleet = remote.Fleet([self.SLOW, self.GOOD], every=3600).start()
+        self.assertTrue(wait_for(lambda: fleet.rows(), 1.0))
+        self.assertEqual([r["host"] for r in fleet.rows()], ["good"])
+        self.assertTrue(wait_for(lambda: len(fleet.rows()) == 2, 4.0))
+        self.assertEqual([r["host"] for r in fleet.rows()], ["slow", "good"])  # config order
+
+    def test_each_poll_that_lands_says_so(self):
+        self.reply = Done(SESSIONS)
+        told = []
+        remote.Fleet([self.GOOD], every=3600).start(on_change=lambda: told.append(1))
+        self.assertTrue(wait_for(lambda: told))
+
+    def test_a_host_that_starts_failing_leaves_the_board(self):
+        fleet = remote.Fleet([HOST])
+        self.reply = Done(SESSIONS)
+        fleet.poll_host(HOST)
+        self.assertEqual(len(fleet.rows()), 1)
+        self.reply = Done("", "unreachable", 255)
+        fleet.poll_host(HOST)
+        self.assertEqual(fleet.rows(), [])
+        self.assertTrue(fleet.status()["devbox"]["polled_at"])  # when it last answered
+
+    def test_refresh_asks_a_parked_host_now(self):
+        self.reply = Done("", "unreachable", 255)
+        fleet = remote.Fleet([HOST], every=3600).start()
+        self.assertTrue(wait_for(lambda: fleet.status().get("devbox", {}).get("fails")))
+        self.reply = Done(SESSIONS)   # back, but parked for a minute
+        time.sleep(0.2)
+        self.assertEqual(fleet.rows(), [])
+        self.assertEqual(fleet.refresh(), 1)
+        self.assertTrue(wait_for(lambda: fleet.rows()))
+        self.assertEqual(fleet.status()["devbox"]["fails"], 0)
+
+
+class StatsOnRows(Stubbed):
+    def test_each_row_carries_its_hosts_numbers(self):
+        self.reply = Done(SESSIONS)
+        FakeStats.said = {"devbox": {"a": {"cache": {"expires_at": 5.0}, "context_tokens": 9}}}
+        rows = remote.Fleet([HOST]).poll()
+        self.assertEqual(rows[0]["stat"]["context_tokens"], 9)
+
+    def test_rows_stand_without_them(self):
+        self.reply = Done(SESSIONS)
+        FakeStats.said = {"devbox": remote.RemoteError("python3: not found")}
+        rows = remote.Fleet([HOST]).poll()
+        self.assertEqual([r["sessionId"] for r in rows], ["a"])
+        self.assertNotIn("stat", rows[0])
+
+    def test_stats_can_be_left_off(self):
+        self.reply = Done(SESSIONS)
+        FakeStats.said = {"devbox": {"a": {"context_tokens": 9}}}
+        self.assertNotIn("stat", remote.Fleet([HOST], stats=False).poll()[0])
+
+
+class StatsChannel(unittest.TestCase):
+    """The shipped host-side loop with sessionstat.py, run locally against a
+    transcript in a stand-in ~/.claude. Only SSH is replaced."""
+
+    SID = "0b4bd5a2-27c4-4b3e-a6a5-0d8c4f1b2a11"
+
+    def setUp(self):
+        import os
+        import sys
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.dir, "projects", "-home-les-x"))
+        stamp = "2026-10-14T10:00:00.000Z"   # 1791972000
+        entry = {"type": "assistant", "timestamp": stamp,
+                 "message": {"id": "m1", "model": "claude-opus-5-5", "content": [],
+                             "usage": {"input_tokens": 10, "cache_read_input_tokens": 70000,
+                                       "cache_creation_input_tokens": 20,
+                                       "cache_creation": {"ephemeral_1h_input_tokens": 20}}}}
+        with open(os.path.join(self.dir, "projects", "-home-les-x", self.SID + ".jsonl"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+        self._env = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = self.dir
+        self.stats = remote.Stats({"name": "local"})
+        self.stats.argv = lambda: [sys.executable, "-u", "-c", remote.READER_BOOT]
+
+    def tearDown(self):
+        import os
+        import shutil
+        self.stats.close()
+        if self._env is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = self._env
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_the_cache_and_context_come_back_read_on_the_host(self):
+        got = self.stats.read([self.SID, "not-a-session"])
+        self.assertEqual(list(got), [self.SID])
+        one = got[self.SID]
+        self.assertEqual(one["context_tokens"], 70030)
+        self.assertEqual(one["model_id"], "claude-opus-5-5")
+        self.assertEqual(one["cache"]["ttl"], 3600.0)
+        self.assertEqual(one["cache"]["expires_at"], 1791972000.0 + 3600)
+
+    def test_one_channel_serves_every_poll(self):
+        self.stats.read([self.SID])
+        proc = self.stats._proc
+        self.stats.read([self.SID])
+        self.assertIs(self.stats._proc, proc)
+
+    def test_it_runs_on_the_hosts_plain_python(self):
+        st = remote.Stats({"name": "devbox"})
+        self.assertIn("python3 -u -c", st.argv()[-1])
+        self.assertIn("/opt/py -u -c", remote.Stats({"name": "d", "python": "/opt/py"}).argv()[-1])
 
 
 if __name__ == "__main__":

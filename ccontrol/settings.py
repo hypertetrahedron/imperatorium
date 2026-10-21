@@ -75,6 +75,11 @@ FIELDS = [
               "approve what a sent message cannot, such as spending. Only from this "
               "window, only into an idle session on this machine. Can only be turned "
               "on here."),
+    dict(key="chat.cold_cache_tokens", section="chat", label="Cache-expired warning from (tokens)",
+         type="int", min=0, max=10000000, default=0, applies=LIVE,
+         help="Once a session's prompt cache has expired, the chat says so - with what the "
+              "next prompt costs - when its context is at least this many tokens. 0 always "
+              "says so."),
     dict(key="quick.key", section="quick", label="Shortcut", type="key", default="ctrl+space",
          applies=LIVE,
          help="Pressed in the prompt box, opens the phrase list. Ctrl, Alt or Win plus a "

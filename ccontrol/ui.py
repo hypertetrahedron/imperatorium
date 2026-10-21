@@ -1969,16 +1969,18 @@ function openJump(show){
 }
 
 // -- heavy sessions ------------------------------------------------------------
-// A full context, or a large one behind an expired prompt cache, makes the
-// next prompt expensive: said on the tile and above the prompt box.
-const HEAVY_TOKENS = 100000, CTX_WARN = 85;
+// A full context, or one behind an expired prompt cache, makes the next
+// prompt expensive: said on the tile and above the prompt box. How large a
+// context the cold cache is said for is a setting (chat.cold_cache_tokens),
+// carried on the row as work.cold_tokens; 0 says it for any.
+const CTX_WARN = 85;
 function heavyWarnings(s, now){
   const out = [], w = s.work || {}, ctx = (s.usage || {}).context_pct;
   if (ctx != null && ctx >= CTX_WARN)
     out.push({kind: "context", short: "ctx " + Math.round(ctx) + "%",
       text: `context ${Math.round(ctx)}% full - consider /compact or a fresh session before more work`});
   const tok = w.context_tokens;
-  if (tok >= HEAVY_TOKENS && w.cache_expires_at && w.cache_expires_at <= now)
+  if (tok != null && tok >= (w.cold_tokens || 0) && w.cache_expires_at && w.cache_expires_at <= now)
     out.push({kind: "cold", short: "cold " + kfmt(tok),
       text: `prompt cache expired: the next prompt re-sends ${kfmt(tok)} tokens of context at the full cache-write price`});
   return out;
@@ -3579,6 +3581,10 @@ body{overflow:auto}
 #set .f.bad input,#set .f.bad textarea,#set .f.bad select{border-color:var(--fail)}
 #set .err{color:var(--fail);font-size:12px}
 #set .hosts{margin:0;padding-left:18px;font-size:13px}
+#set .hosts .hst{color:var(--muted);font-size:12px}
+#set .hosts .hst.bad{color:var(--fail)}
+#set button.small{font:12px var(--ui);padding:3px 10px;border-radius:5px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink);cursor:pointer;margin-top:6px}
 #set table.keys{border-collapse:collapse;font-size:13px;width:100%}
 #set table.keys th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:10px 0 3px}
 #set table.keys td{padding:3px 14px 3px 0;vertical-align:top}
@@ -3659,6 +3665,7 @@ function draw(d){
     shortcutsHtml(d);
   $("#set").oninput = $("#set").onchange = mark;
   wireDesk();
+  wireHosts();
   // A key field takes the combination pressed in it rather than typed text.
   for (const el of document.querySelectorAll("#set [data-record]")) el.onkeydown = e => {
     if (e.key === "Tab" || (!e.ctrlKey && !e.altKey && !e.metaKey && e.key !== "Backspace")) return;
@@ -3721,11 +3728,49 @@ function wireDesk(){
     say(box.checked ? "Desktop notifications on." : "Desktop notifications off.");
   };
 }
+// Each host with how its last poll went (`/api/hosts`), and a button that
+// polls them all now - a parked one too - rather than at their next turn.
 function hostsHtml(hosts){
   if (!hosts || !hosts.length) return `<div class="help">No remote hosts.</div>`;
-  return `<div class="f"><label>Hosts</label><ul class="hosts">` + hosts.map(h =>
+  return `<div class="f"><label>Hosts</label><div class="ctl"><ul class="hosts">` + hosts.map(h =>
     `<li>${esc(h.label || h.name)}${h.label && h.label !== h.name ? ` (${esc(h.name)})` : ""}${
-      h.tunnel ? " · tunnel" : ""}</li>`).join("") + `</ul></div>`;
+      h.tunnel ? " · tunnel" : ""} <span class="hst" data-host="${esc(h.name)}"></span></li>`).join("") +
+    `</ul><button type=button class="small" id="rrefresh">Refresh now</button>` +
+    `<span class="help">Polls every host at once instead of on its next turn (every 20 s, ` +
+    `longer for a host that is failing).</span></div></div>`;
+}
+function hostState(st, now){
+  if (!st) return {text: "not polled yet", bad: false};
+  if (st.error) return {text: `failing, next try in ${Math.max(0, Math.round(st.next_attempt - now))}s: ${st.error}`, bad: true};
+  const ago = Math.max(0, Math.round(now - (st.polled_at || now)));
+  return {text: `answered ${ago < 60 ? ago + "s" : Math.round(ago / 60) + " min"} ago`, bad: false};
+}
+async function drawHosts(){
+  let d;
+  try { d = await (await fetch("/api/hosts", {cache: "no-store"})).json(); } catch (e) { return; }
+  const now = Date.now() / 1000;
+  for (const el of document.querySelectorAll("#set .hst")) {
+    const s = hostState((d.status || {})[el.dataset.host], now);
+    el.textContent = "- " + s.text; el.classList.toggle("bad", s.bad);
+  }
+}
+function wireHosts(){
+  const btn = document.getElementById("rrefresh");
+  if (!btn) return;
+  drawHosts();
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const d = await (await fetch("/api/remote/refresh", {method: "POST", cache: "no-store",
+        headers: {"Content-Type": "application/json", "X-Imperatorium-Window":
+          (document.querySelector("meta[name=imp-window]") || {}).content || ""},
+        body: "{}"})).json();
+      say(d.ok ? `Polling ${d.hosts} host${d.hosts === 1 ? "" : "s"} now.` : (d.error || "not refreshed"), !d.ok);
+    } catch (e) { say("dispatcher not answering", true); }
+    // An answering host is back within seconds; one that times out, in ~30.
+    for (const ms of [3000, 10000, 35000]) setTimeout(drawHosts, ms);
+    setTimeout(() => { btn.disabled = false; }, 3000);
+  };
 }
 function changes(){
   const out = {};

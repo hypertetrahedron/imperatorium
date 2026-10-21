@@ -448,6 +448,7 @@ class SessionStatus(Base):
         finally:
             procs.waiting_shells = real
         self.assertEqual(row["work"], {"cache_expires_at": 1234.0, "context_tokens": None,
+                                       "cold_tokens": 0,
                                        "resume_cost_usd": None,
                                        "alive": True,
                                        "agents": 1, "shells": 1, "monitors": 0,
@@ -457,6 +458,7 @@ class SessionStatus(Base):
         self.live(status="idle")
         row = self.control.sessions()["sessions"][0]
         self.assertEqual(row["work"], {"cache_expires_at": None, "context_tokens": None,
+                                      "cold_tokens": 0,
                                       "resume_cost_usd": None,
                                       "alive": False})
 
@@ -1025,6 +1027,29 @@ class RemoteHooks(RemoteBase):
     def test_remote_events_say_which_host(self):
         self.remote_hook()
         self.assertEqual(self.control.store.events(1)[0]["host"], "pi")
+
+
+class RemoteWork(RemoteBase):
+    def test_a_remote_row_carries_the_numbers_its_host_read(self):
+        self.remote_live()
+        self.remote_rows[0]["stat"] = {"cache": {"expires_at": 50.0, "ttl": 3600.0},
+                                       "context_tokens": 66507, "model_id": "claude-opus-5-5",
+                                       "agents": [{"id": "a"}], "shells": [], "monitors": []}
+        row = self.row()
+        self.assertNotIn("stat", row)
+        self.assertEqual((row["work"]["cache_expires_at"], row["work"]["context_tokens"]),
+                         (50.0, 66507))
+        self.assertIsNotNone(row["work"]["resume_cost_usd"])
+        self.assertEqual((row["work"]["agents"], row["work"]["processes"]), (1, 0))
+
+    def test_without_them_the_work_is_empty_rather_than_local(self):
+        self.remote_live()
+        self.control.stats.read = lambda sid, now: self.fail("read a remote session locally")
+        self.assertIsNone(self.row()["work"]["cache_expires_at"])
+
+    def test_refresh_reaches_the_fleet(self):
+        self.control.fleet.refresh = lambda: 3
+        self.assertEqual(self.control.refresh_remote(), {"ok": True, "hosts": 3})
 
 
 class RemoteRouting(RemoteBase):

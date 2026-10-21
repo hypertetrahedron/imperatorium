@@ -976,9 +976,12 @@ class HeavyWarnings(unittest.TestCase):
             "[heavyWarnings({usage: {context_pct: 91}}, 100).map(h => h.kind),"
             " heavyWarnings({work: {context_tokens: 230000, cache_expires_at: 50}}, 100).map(h => h.short),"
             " heavyWarnings({work: {context_tokens: 230000, cache_expires_at: 500}}, 100).length,"
-            " heavyWarnings({work: {context_tokens: 20000, cache_expires_at: 50}}, 100).length,"
+            " heavyWarnings({work: {context_tokens: 20000, cache_expires_at: 50, cold_tokens: 100000}}, 100).length,"
+            " heavyWarnings({work: {context_tokens: 20000, cache_expires_at: 50}}, 100).map(h => h.short),"
+            " heavyWarnings({work: {context_tokens: 20000, cache_expires_at: 50, cold_tokens: 0}}, 100).length,"
+            " heavyWarnings({work: {cache_expires_at: 50}}, 100).length,"
             " heavyWarnings({usage: {context_pct: 40}}, 100).length]")
-        self.assertEqual(got, [["context"], ["cold 230k"], 0, 0, 0])
+        self.assertEqual(got, [["context"], ["cold 230k"], 0, 0, ["cold 20k"], 1, 0, 0])
 
     def test_cold_cache_is_a_button_in_the_chat(self):
         got = glance_js(

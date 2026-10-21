@@ -248,9 +248,11 @@ filters, and ctrl+K opens a palette to jump to any session by name. A
 session that finished a turn while you were looking elsewhere carries a
 **new** badge until you open it. The window's title counts the sessions
 waiting for you, "(2) Imperatorium", and its tab icon takes the most urgent
-state's colour and shape. A tile also warns `cold 178k` when a large context
-sits behind an expired prompt cache, and the prompt box says so in words (and
-when the context is nearly full). The session list arrives over server-sent
+state's colour and shape. A tile also warns `cold 178k` when a context sits
+behind an expired prompt cache, and the chat says so in words, with what the
+next prompt costs (and when the context is nearly full). By default that is
+said for any size of context; Settings > Chat > *Cache-expired warning from
+(tokens)* sets a floor. The session list arrives over server-sent
 events (`/api/stream`), so a session asking for you shows at once; the page
 falls back to polling if the stream drops.
 
@@ -359,6 +361,7 @@ python -m ccontrol.deeplink Y:/projects-software/gem-trip "fix it"
 | GET | `/api/events` | recent attention events |
 | GET | `/api/decisions` | recent auto-approval verdicts |
 | GET | `/api/hosts` | configured hosts and their reachability |
+| POST | `/api/remote/refresh` | poll every remote host now, parked or not |
 | GET | `/api/health` | liveness: `{ok, pid, boot}` - `boot` changes on every dispatcher start |
 | POST | `/hook` | Claude Code hook events |
 | POST | `/api/transcribe` | raw audio in, text out |
@@ -704,13 +707,24 @@ one-off first read (~1s on a Pi) every time; on a kept channel a read is
 ~10-20ms. The channel dies with the dispatcher, and a host that fails is not
 re-dialled for 30 seconds.
 
+**Cache and cost** for a remote tile are read on the host the same way: a
+second kept channel runs this project's `sessionstat.py` on the host's plain
+`python3` (standard library only, no venv; `python` in `config.json`). Each
+poll asks it for the live sessions' numbers - when the prompt cache expires,
+the context size and the model - so a remote session gets the cache countdown,
+the `cold` badge and the cache-expired button with its cost, as a local one
+does. Without python3 on the host the rows still show, without those numbers.
+
 Remote projects are host-qualified - `developmenthost1/bookoferrantpages` -
 because that name also exists locally, and firing at the wrong machine is the
 same class of mistake as firing at the wrong repository.
 
-Polling runs on its own thread every 20 seconds and never on the request path.
-A host that fails is parked with a growing backoff and its real reason, so a
-machine that is asleep costs nothing and never hides a working one. `claude` is
+Each host is polled on a thread of its own every 20 seconds, never on the
+request path, so a host on a slow link or timing out delays only its own
+sessions. A host that fails is parked with a growing backoff and its real
+reason, so a machine that is asleep costs nothing and never hides a working
+one. Settings > Remote machines shows how each host's last poll went and has
+**Refresh now**, which polls every host at once, a parked one too. `claude` is
 called by absolute path: it is not on PATH for a non-interactive SSH session on
 Ubuntu, because `.bashrc` returns early.
 

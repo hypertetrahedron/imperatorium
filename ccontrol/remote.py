@@ -19,11 +19,15 @@ A host can be made as reachable as a local session, still over SSH only:
   * **Conversations.** A `Reader` keeps one SSH channel per host running
     this project's own `conversation.py` against the Agent SDK there, so a
     remote session's pane is built by the same code as a local one.
+  * **Cache and cost.** A `Stats` channel does the same with
+    `sessionstat.py` on the host's plain python3, so a remote tile knows when
+    its prompt cache expires and what the next prompt costs.
 
 Focus still does not cross the wire: there is no window here to raise.
 
-A dead host must never stall a poll, so every call is bounded and a host that
-fails is parked with a growing backoff - the pattern `ai-metric-tracking`
+A dead host must never stall a poll, so every call is bounded, each host is
+polled on its own thread - a slow one delays only itself - and a host that
+fails is parked with a growing backoff, the pattern `ai-metric-tracking`
 already uses on this machine for the same reason.
 """
 import json
@@ -43,7 +47,7 @@ DEFAULT_REMOTE_HOOK_PORT = 8792
 FIRST_TUNNEL_PORT = 8793
 CONNECT_TIMEOUT = 8
 CALL_TIMEOUT = 25.0
-MAX_PARALLEL = 4
+POLL_EVERY = 20.0
 
 # A host that is off, asleep or unreachable is ordinary. Back off rather than
 # paying the connect timeout on every poll.
@@ -271,11 +275,20 @@ def start_background(host, cwd, prompt, options=None, timeout=120.0):
 
 
 class Fleet:
-    """Polls a set of hosts, parking the ones that are failing."""
+    """Polls a set of hosts, parking the ones that are failing.
 
-    def __init__(self, hosts=None):
+    `start` gives each host a thread of its own: one host on a slow link, or
+    timing out, holds up only its own rows. `poll` is a single round over
+    every host that is due, for the command line.
+    """
+
+    def __init__(self, hosts=None, every=POLL_EVERY, stats=True):
         self.hosts = list(hosts or ())
-        self._state = {}  # name -> {fails, next_attempt, error}
+        self.every = every
+        self._state = {}  # name -> {fails, next_attempt, error, polled_at}
+        self._rows = {}   # name -> that host's rows from its last poll
+        self._wake = {}   # name -> Event that cuts its wait short
+        self._stats = {} if stats else None  # name -> Stats, opened on first poll
         self._lock = threading.Lock()
 
     def status(self):
@@ -289,7 +302,8 @@ class Fleet:
 
     def _ok(self, name):
         with self._lock:
-            self._state[name] = {"fails": 0, "next_attempt": 0, "error": None}
+            self._state[name] = {"fails": 0, "next_attempt": 0, "error": None,
+                                 "polled_at": time.time()}
 
     def _failed(self, name, error):
         with self._lock:
@@ -301,39 +315,91 @@ class Fleet:
                 "next_attempt": time.time() + delay,
                 "error": str(error)[:200],
                 "parked_for": delay,
+                "polled_at": rec.get("polled_at"),
             }
 
+    def poll_host(self, host):
+        """`host`'s rows now, kept as its latest. Never raises: a failure
+        parks the host and its sessions leave the board until it answers."""
+        name = host["name"]
+        try:
+            rows = agents(host)
+        except Exception as exc:  # RemoteError, or anything unforeseen
+            self._failed(name, exc)
+            rows = []
+        else:
+            self._ok(name)
+            self._attach_stats(host, rows)
+        with self._lock:
+            self._rows[name] = rows
+        return rows
+
+    def _attach_stats(self, host, rows):
+        """Each row's transcript numbers (see `Stats`), as `row["stat"]`.
+        Extra rather than needed: rows stand without them."""
+        ids = [r["sessionId"] for r in rows if r.get("sessionId")]
+        if self._stats is None or not ids:
+            return
+        with self._lock:
+            channel = self._stats.get(host["name"])
+            if channel is None:
+                channel = self._stats[host["name"]] = Stats(host)
+        try:
+            got = channel.read(ids)
+        except RemoteError:
+            return
+        for row in rows:
+            if row.get("sessionId") in got:
+                row["stat"] = got[row["sessionId"]]
+
     def poll(self):
-        """Rows from every host that is due. Never raises."""
+        """Rows from every host that is due, polled side by side. Never raises."""
         due = [h for h in self.hosts if self._due(h["name"])]
-        if not due:
-            return []
-        results = []
-        threads = []
-        lock = threading.Lock()
-
-        def work(host):
-            try:
-                rows = agents(host)
-            except RemoteError as exc:
-                self._failed(host["name"], exc)
-                return
-            self._ok(host["name"])
-            with lock:
-                results.extend(rows)
-
-        for host in due[:MAX_PARALLEL * 8]:
-            thread = threading.Thread(target=work, args=(host,), daemon=True)
-            thread.start()
-            threads.append(thread)
-            # Bound concurrency so a fleet of sleeping hosts does not open a
-            # connection per host at once.
-            if len(threads) % MAX_PARALLEL == 0:
-                for t in threads[-MAX_PARALLEL:]:
-                    t.join(timeout=CALL_TIMEOUT + 5)
+        threads = [threading.Thread(target=self.poll_host, args=(h,), daemon=True)
+                   for h in due]
         for thread in threads:
-            thread.join(timeout=CALL_TIMEOUT + 5)
-        return results
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=CALL_TIMEOUT + STATS_TIMEOUT + 5)
+        with self._lock:
+            return [r for h in due for r in self._rows.get(h["name"], [])]
+
+    def rows(self):
+        """Every host's latest rows, in config order."""
+        with self._lock:
+            return [r for h in self.hosts for r in self._rows.get(h["name"], [])]
+
+    def start(self, on_change=None):
+        """A polling thread per host. `on_change()` runs after each poll."""
+        for host in self.hosts:
+            self._wake[host["name"]] = threading.Event()
+            threading.Thread(target=self._loop, args=(host, on_change),
+                             name="remote-%s" % host["name"], daemon=True).start()
+        return self
+
+    def _loop(self, host, on_change):
+        name, wake = host["name"], self._wake[host["name"]]
+        while True:
+            if self._due(name):
+                self.poll_host(host)
+                if on_change:
+                    try:
+                        on_change()
+                    except Exception:
+                        pass
+            with self._lock:
+                parked = (self._state.get(name) or {}).get("next_attempt", 0)
+            wake.wait(max(1.0, parked - time.time()) if parked else self.every)
+            wake.clear()
+
+    def refresh(self):
+        """Ask every host again now, parked or not. The number of hosts."""
+        with self._lock:
+            for rec in self._state.values():
+                rec["next_attempt"] = 0
+        for wake in self._wake.values():
+            wake.set()
+        return len(self.hosts)
 
 
 class Tunnel:
@@ -473,18 +539,25 @@ class Reader:
         self._failed_at = 0.0
         self._error = None
 
+    MODULE = "conversation.py"
+
+    def loop(self):
+        return READER_LOOP
+
+    def python(self):
+        return self.host.get("reader_python") or DEFAULT_READER_PYTHON
+
     def argv(self):
-        python = self.host.get("reader_python") or DEFAULT_READER_PYTHON
         # Unquoted interpreter so $HOME expands; the boot line is quoted.
         return SSH_BASE + [self.host["name"],
-                           "%s -u -c %s" % (python, shlex.quote(READER_BOOT))]
+                           "%s -u -c %s" % (self.python(), shlex.quote(READER_BOOT))]
 
     def _start(self):
         import queue
 
         here = os.path.dirname(os.path.abspath(__file__))
-        with open(os.path.join(here, "conversation.py"), encoding="utf-8") as fh:
-            source = fh.read() + "\n" + READER_LOOP
+        with open(os.path.join(here, self.MODULE), encoding="utf-8") as fh:
+            source = fh.read() + "\n" + self.loop()
         proc = subprocess.Popen(
             self.argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -552,6 +625,15 @@ class Reader:
 
     def read(self, session_id, limit=60, cwd=None, timeout=READ_TIMEOUT):
         """{items, title} for a session on this host. Raises RemoteError."""
+        req = {"session": session_id, "limit": limit}
+        if cwd:
+            req["cwd"] = cwd
+        reply = self._call(req, timeout)
+        return {"items": reply.get("items") or [],
+                "title": reply.get("title") or ""}
+
+    def _call(self, req, timeout):
+        """One request and its reply. Raises RemoteError."""
         import queue
 
         with self._lock:
@@ -565,10 +647,7 @@ class Reader:
                     self._stop("ssh could not run: %s" % exc)
                     raise RemoteError(self._error) from exc
             self._seq += 1
-            req = {"id": self._seq, "session": session_id, "limit": limit}
-            if cwd:
-                req["cwd"] = cwd
-            self._send(json.dumps(req))
+            self._send(json.dumps(dict(req, id=self._seq)))
             deadline = time.time() + timeout
             stderr = []
             while True:
@@ -595,8 +674,58 @@ class Reader:
                 self._error = None
                 if not reply.get("ok"):
                     raise RemoteError(reply.get("error") or "read failed")
-                return {"items": reply.get("items") or [],
-                        "title": reply.get("title") or ""}
+                return reply
+
+
+# The host's side of a Stats channel: `sessionstat.py` in front of this, so
+# the host folds its own transcripts - incrementally, as here - and only the
+# numbers cross the wire.
+STATS_LOOP = r'''
+import json as _json, sys as _sys, time as _time
+_reader = Reader()
+_KEEP = ("cache", "context_tokens", "model_id", "last_reply_at", "tokens",
+         "agents", "shells", "monitors")
+for _line in _sys.stdin:
+    _req = {}
+    try:
+        _req = _json.loads(_line)
+        _now, _got = _time.time(), {}
+        for _sid in _req.get("sessions") or ():
+            _one = _reader.read(_sid, _now)
+            if _one:
+                _got[_sid] = {_k: _one[_k] for _k in _KEEP if _k in _one}
+        _out = {"id": _req.get("id"), "ok": True, "stats": _got}
+    except Exception as _exc:
+        _out = {"id": _req.get("id") if isinstance(_req, dict) else None,
+                "ok": False, "error": "%s: %s" % (type(_exc).__name__, _exc)}
+    _sys.stdout.write(_json.dumps(_out) + "\n")
+    _sys.stdout.flush()
+'''
+STATS_TIMEOUT = 20.0
+
+
+class Stats(Reader):
+    """The same kind of channel, reading what `sessionstat` reads locally:
+    when the prompt cache expires, the context size and the model, so the
+    window can warn about a cold cache on a remote session as on a local one.
+
+    sessionstat needs only the standard library, so this runs on the host's
+    plain python3, not the Reader's SDK venv. Times are Unix seconds from the
+    transcript's own UTC stamps, so they mean the same here.
+    """
+
+    MODULE = "sessionstat.py"
+
+    def loop(self):
+        return STATS_LOOP
+
+    def python(self):
+        return self.host.get("python") or DEFAULT_PYTHON
+
+    def read(self, session_ids, timeout=STATS_TIMEOUT):
+        """{session id: numbers} for those this host has a transcript of."""
+        got = self._call({"sessions": list(session_ids)}, timeout).get("stats")
+        return got if isinstance(got, dict) else {}
 
 
 _job = None

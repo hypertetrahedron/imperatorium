@@ -145,6 +145,7 @@ class Control:
         self.send_as_typed = bool((config.get("chat") or {}).get("send_as_typed"))
         self.quick = {"key": settingsmod.value(config, settingsmod.BY_KEY["quick.key"]),
                       "phrases": settingsmod.value(config, settingsmod.BY_KEY["quick.phrases"])}
+        self.cold_cache_tokens = settingsmod.value(config, settingsmod.BY_KEY["chat.cold_cache_tokens"])
 
         budget = config.get("budget") or {}
         self.notifier = notify.Notifier(config, still_waiting=self._still_waiting)
@@ -186,27 +187,21 @@ class Control:
                 self._voice = voice.Worker(settings)
                 if settings.get("preload"):
                     self._voice.warm()
-        self.fleet = remote.Fleet(hosts or ())
+        # Each host is polled on its own thread (remote.Fleet.start), so a
+        # slow or dead one holds up only its own sessions; each poll that
+        # lands wakes the window's streams.
+        self.fleet = remote.Fleet(hosts or (), every=self.REMOTE_EVERY)
         self.tunnels = {}  # host name -> remote.Tunnel, started by serve()
         self.readers = {}  # host name -> remote.Reader, opened on first read
-        self._remote = {"at": 0.0, "rows": []}
         if hosts:
-            threading.Thread(target=self._refresh_remote, name="remote",
-                             daemon=True).start()
-
-    def _refresh_remote(self):
-        while True:
-            try:
-                rows = self.fleet.poll()
-            except Exception:
-                rows = []
-            with self._lock:
-                self._remote = {"at": time.time(), "rows": rows}
-            time.sleep(self.REMOTE_EVERY)
+            self.fleet.start(on_change=self.invalidate)
 
     def remote_rows(self):
-        with self._lock:
-            return list(self._remote["rows"])
+        return self.fleet.rows()
+
+    def refresh_remote(self):
+        """`POST /api/remote/refresh`: poll every host now, parked or not."""
+        return {"ok": True, "hosts": self.fleet.refresh()}
 
     def sessions(self, max_age=2.0):
         """Live sessions, cached briefly so a board refresh is not a fork bomb."""
@@ -281,25 +276,31 @@ class Control:
                 and not row.get("status")):
             row["resumable"] = True
         row["resume_command"] = " ".join(history.resume_command(row["sessionId"]))
-        if not row.get("remote"):
-            row["work"] = self._work(row)
+        # A remote row's numbers were read on its host, by the poll that
+        # found it (remote.Stats).
+        row["work"] = self._work(row, row.pop("stat", None) or {}) \
+            if row.get("remote") else self._work(row)
 
-    def _work(self, row):
+    def _work(self, row, stat=None):
         """What the tile and the status panel's header line show at a glance:
         when the prompt cache expires, and how many subagents, background
         shells, monitors and shell processes the session has going. Counts
-        only while its process lives - nothing it started outlives it."""
-        try:
-            stat = self.stats.read(row["sessionId"], time.time()) or {}
-        except Exception:
-            stat = {}
+        only while its process lives - nothing it started outlives it.
+        `stat` is the transcript's numbers when they were read elsewhere."""
+        if stat is None:
+            try:
+                stat = self.stats.read(row["sessionId"], time.time()) or {}
+            except Exception:
+                stat = {}
         alive = isinstance(row.get("pid"), int) and bool(row.get("status"))
         # Context size rides along so the window can warn before a prompt
-        # re-sends a large context to a cold cache, with what that costs.
+        # re-sends a large context to a cold cache, with what that costs;
+        # how large is the Settings window's chat.cold_cache_tokens.
         from . import costs
         cache = stat.get("cache") or {}
         out = {"cache_expires_at": cache.get("expires_at"),
                "context_tokens": stat.get("context_tokens"),
+               "cold_tokens": self.cold_cache_tokens,
                "resume_cost_usd": costs.rewrite_cost(stat.get("model_id"), stat.get("context_tokens"),
                                                      cache.get("ttl")),
                "alive": alive}
@@ -736,6 +737,9 @@ class Control:
         """What the running dispatcher can take without a restart."""
         if "chat.send_as_typed" in changes:
             self.send_as_typed = bool(changes["chat.send_as_typed"])
+        if "chat.cold_cache_tokens" in changes:
+            self.cold_cache_tokens = settingsmod.value(
+                config, settingsmod.BY_KEY["chat.cold_cache_tokens"])
         for name in ("key", "phrases"):
             if "quick." + name in changes:
                 self.quick[name] = settingsmod.value(
@@ -1989,7 +1993,8 @@ class Handler(BaseHTTPRequestHandler):
                                     payload.get("session_id")))
         elif path in ("/api/queue", "/api/unqueue", "/api/worktree",
                       "/api/resume", "/api/new", "/api/close", "/api/dismiss",
-                      "/api/prefs", "/api/notify", "/api/settings"):
+                      "/api/prefs", "/api/notify", "/api/settings",
+                      "/api/remote/refresh"):
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})
                 return
@@ -2068,6 +2073,8 @@ class Handler(BaseHTTPRequestHandler):
             saved[p.get("channel")] = bool(p.get("enabled"))
             c.store.set_prefs(notify=saved)
             return dict(c.notifier.status(), ok=True)
+        if path == "/api/remote/refresh":
+            return c.refresh_remote()
         if path == "/api/settings":
             ch = p.get("changes")
             # Turning Send As Typed on lets a message speak as you, so only

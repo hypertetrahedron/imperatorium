@@ -124,8 +124,10 @@ class Saving(Base):
         got = self.control.save_settings({"budget.thresholds": [50, 90],
                                           "background.model": "opus",
                                           "notify.speak.enabled": True,
-                                          "notify.ntfy.delay": 15})
+                                          "notify.ntfy.delay": 15,
+                                          "chat.cold_cache_tokens": 50000})
         self.assertEqual(got["restart"], [])
+        self.assertEqual(self.control.cold_cache_tokens, 50000)
         self.assertEqual(self.control.usage.thresholds, (50.0, 90.0))
         self.assertEqual(self.control.background_options["model"], "opus")
         self.assertTrue(self.control.notifier.enabled("speak"))
