@@ -12,9 +12,9 @@ import tempfile
 import time
 import unittest
 
-from ccontrol import (background, closing, conversation, costs, deeplink, dispatcher,
+from imperatorium import (background, closing, conversation, costs, deeplink, dispatcher,
                       inbox, procs, projects, registry, remote, slash, winfocus)
-from ccontrol.store import Store
+from imperatorium.store import Store
 
 SID = "11111111-1111-1111-1111-111111111111"
 CWD = os.path.join("Y:", os.sep, "projects-software", "laser-ledger")
@@ -356,7 +356,7 @@ class Dictation(Base):
         self.assertFalse(self.control.transcribe(b"x")["ok"])
 
     def test_a_voice_block_makes_a_worker_that_starts_nothing_without_preload(self):
-        from ccontrol import voice
+        from imperatorium import voice
         orig = voice.available
         voice.available = lambda: True
         try:
@@ -437,7 +437,7 @@ class SessionStatus(Base):
         self.assertEqual(got["stat"]["tokens"], {"input": 1})
 
     def test_every_local_row_carries_its_work_at_a_glance(self):
-        from ccontrol import procs
+        from imperatorium import procs
         self.STAT = dict(self.STAT, cache={"expires_at": 1234.0})
         self.live(status="busy")
         self.agent_rows[0]["pid"] = 999999
@@ -1139,7 +1139,7 @@ class HookOnlyListener(RemoteBase):
         import threading
         dispatcher.HookOnlyHandler.control = self.control
         self.srv = dispatcher.Server(("127.0.0.1", 0), dispatcher.HookOnlyHandler)
-        self.srv.ccontrol_host = "pi"
+        self.srv.imperatorium_host = "pi"
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.port = self.srv.server_address[1]
 

@@ -2,7 +2,7 @@ r"""impctl - one command line for everything Imperatorium does.
 
 The pieces live in half a dozen places: the service in service\tasks.ps1 (or
 systemd/launchd units), setup in setup_machine.py, hooks in hooks\install.py,
-remote probing in ccontrol.remote, and everything about sessions behind the
+remote probing in imperatorium.remote, and everything about sessions behind the
 dispatcher's HTTP API. This is the one front door, so nobody has to read
 those files to find out what they can do.
 
@@ -24,14 +24,14 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINDOWS = sys.platform == "win32"
 MACOS = sys.platform == "darwin"
-BASE = os.environ.get("CCONTROL_URL", "http://127.0.0.1:8792").rstrip("/")
+BASE = os.environ.get("IMPERATORIUM_URL", "http://127.0.0.1:8792").rstrip("/")
 
 # Component -> (Windows task, command-line pattern of its process). The
 # pattern is what tasks.ps1's Stop-Existing matches, split per component.
 COMPONENTS = {
-    "dispatcher": ("CentralControlDispatcher", "ccontrol.dispatcher"),
-    "streamdeck": ("CentralControlStreamDeck", "streamdeck_surface"),
-    "hotkey": ("CentralControlHotkey", "hotkey.py"),
+    "dispatcher": ("ImperatoriumDispatcher", "imperatorium.dispatcher"),
+    "streamdeck": ("ImperatoriumStreamDeck", "streamdeck_surface"),
+    "hotkey": ("ImperatoriumHotkey", "hotkey.py"),
 }
 ORDER = ["dispatcher", "streamdeck", "hotkey"]  # start order; stop is reversed
 
@@ -259,7 +259,7 @@ def cmd_restart(args):
 
 
 def cmd_run(args):
-    cmd = [sys.executable, "-m", "ccontrol.dispatcher", "--host", args.host,
+    cmd = [sys.executable, "-m", "imperatorium.dispatcher", "--host", args.host,
            "--port", str(args.port)]
     for r in args.root or ():
         cmd += ["--root", r]
@@ -614,7 +614,7 @@ def build():
              "Other machines: remote add|remove|check [HOST] [--label ..] [--purge] ..."),
             ("hooks", os.path.join("hooks", "install.py"), [],
              "Claude Code hooks: [--uninstall] [--dry-run] [--remote HOST] ..."),
-            ("probe", os.path.join("ccontrol", "remote.py"), [],
+            ("probe", os.path.join("imperatorium", "remote.py"), [],
              "Poll remote hosts once and print their sessions: [HOST ...]")):
         p = add(name, passthrough(script, *head, confirm=confirm.get(name)), text,
                 json_flag=False, add_help=False)
@@ -648,7 +648,7 @@ def show_help(cmds, topic=None):
             print("  %s" % " ".join(line.split()).replace(" rest ...", " ..."))
             print("      %s" % p.description)
     print("\nSessions can be named by id, id prefix, or name. `python impctl.py help COMMAND` "
-          "shows one in full.\nSet CCONTROL_URL to reach a dispatcher other than %s." % BASE)
+          "shows one in full.\nSet IMPERATORIUM_URL to reach a dispatcher other than %s." % BASE)
     return 0
 
 

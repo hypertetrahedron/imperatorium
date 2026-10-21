@@ -66,7 +66,8 @@ SELF_PROTECT = (
     _EDGE + r"\.claude[\\/]settings.*\.json" + _END,
     _EDGE + r"policy\.json" + _END,
     _EDGE + r"hooks[\\/]cc_.*\.py" + _END,
-    _EDGE + r"ccontrol[\\/]policy\.py" + _END,
+    _EDGE + r"imperatorium[\\/]policy\.py" + _END,
+    _EDGE + r"ccontrol[\\/]policy\.py" + _END,   # the package before 2026-10-20
     r"--dangerously-skip-permissions",
     r"\bcrossSessionInbound\b",
 )

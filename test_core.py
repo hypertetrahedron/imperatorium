@@ -8,8 +8,8 @@ import shutil
 import tempfile
 import unittest
 
-from ccontrol import background, deeplink, inbox, procs, projects, registry, winfocus
-from ccontrol.store import Store
+from imperatorium import background, deeplink, inbox, procs, projects, registry, winfocus
+from imperatorium.store import Store
 
 CATALOGUE = [
     {"name": n, "path": "Y:/projects-software/" + n, "source": "root"}

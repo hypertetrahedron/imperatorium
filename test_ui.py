@@ -10,7 +10,7 @@ import subprocess
 import time
 import unittest
 
-from ccontrol import ui
+from imperatorium import ui
 
 NODE = shutil.which("node")
 
@@ -180,7 +180,7 @@ class SessionTree(unittest.TestCase):
     def run_js(self, group, sessions, folded=(), waiting=(), then=None):
         s = ui.SCRIPT
         part = lambda a, b: s[s.index(a):s.index(b, s.index(a))]
-        js = ("const store = {'ccontrol.folded': %s, 'ccontrol.waithidden': %s};\n"
+        js = ("const store = {'imperatorium.folded': %s, 'imperatorium.waithidden': %s};\n"
               "const localStorage = {getItem: k => store[k] || null, setItem: (k, v) => { store[k] = v; }};\n"
               "const drawSessions = () => {};\n"
               % (json.dumps(json.dumps(list(folded))), json.dumps(json.dumps(list(waiting))))
@@ -254,7 +254,7 @@ class SessionTree(unittest.TestCase):
     def test_unfolding_shows_the_waiting_ones_too(self):
         got = json.loads(self.run_js("state", [], folded=["a"], waiting=["a", "b"], then=(
             "famClicked('a'); setTimeout(() => process.stdout.write(JSON.stringify("
-            "[[...folded], [...waitHidden], JSON.parse(store['ccontrol.waithidden'])])), DOUBLE_MS + 50);")))
+            "[[...folded], [...waitHidden], JSON.parse(store['imperatorium.waithidden'])])), DOUBLE_MS + 50);")))
         self.assertEqual(got, [[], ["b"], ["b"]])
 
     def test_folding_leaves_the_waiting_flag_for_the_unfold_to_clear(self):
@@ -296,10 +296,10 @@ class SessionTree(unittest.TestCase):
         self.assertNotIn("id=notif", ui.render_shell(""))
         self.assertNotIn('post("/api/notify"', ui.SCRIPT)
         for needle in ('sec.id === "notify" ? notifyExtrasHtml(d)', 'id="desk"',
-                       "Notification.requestPermission()", '"ccontrol.desknotify"'):
+                       "Notification.requestPermission()", '"imperatorium.desknotify"'):
             self.assertIn(needle, ui.SETTINGS_SCRIPT)
         # the main window picks up the switch flipped in the Settings window
-        self.assertIn('e.key === "ccontrol.desknotify"', ui.SCRIPT)
+        self.assertIn('e.key === "imperatorium.desknotify"', ui.SCRIPT)
 
     def test_vs_code_tiles_carry_their_own_icon(self):
         self.assertIn('s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""', ui.SCRIPT)
@@ -1243,7 +1243,7 @@ class SpendShown(unittest.TestCase):
     def test_a_click_folds_the_meter_and_it_is_remembered(self):
         shell = ui.render_shell()
         self.assertIn("id=meter class=meters tabindex=0 role=button aria-expanded=false", shell)
-        self.assertIn('localStorage.getItem("ccontrol.meterOpen")', ui.SCRIPT)
+        self.assertIn('localStorage.getItem("imperatorium.meterOpen")', ui.SCRIPT)
         self.assertIn('$("#meter").addEventListener("click"', ui.SCRIPT)
         # The caret's escape survives the Python string (a lost backslash
         # once made it a control character and the literal "5BE").

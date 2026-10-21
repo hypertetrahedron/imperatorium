@@ -529,6 +529,16 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
 # What both pages need - the window and the chat matrix: naming a session's
 # state, and rendering what Claude wrote.
 SHARED = r"""
+// This browser's own state was kept under "ccontrol.*" before the rename;
+// carried over once, so folds, drafts and what was seen survive it.
+try {
+  for (const k of Object.keys(localStorage))
+    if (k.startsWith("ccontrol.")) {
+      const to = "imperatorium." + k.slice(9);
+      if (localStorage.getItem(to) === null) localStorage.setItem(to, localStorage.getItem(k));
+      localStorage.removeItem(k);
+    }
+} catch (e) {}
 // Which dispatcher served this page. A restarted dispatcher may serve
 // different code, and an open page keeps the old until reloaded, so each
 // page asks now and then and calls `onNew` once the answer changes.
@@ -1178,7 +1188,7 @@ const savedSet = name => new Set((() => {
   try { return JSON.parse(localStorage.getItem(name) || "[]"); }
   catch (e) { return []; }
 })());
-const folded = savedSet("ccontrol.folded"), waitHidden = savedSet("ccontrol.waithidden");
+const folded = savedSet("imperatorium.folded"), waitHidden = savedSet("imperatorium.waithidden");
 function flip(set, name, f){
   if (set.has(f)) set.delete(f); else set.add(f);
   try { localStorage.setItem(name, JSON.stringify([...set])); } catch (e) {}
@@ -1189,11 +1199,11 @@ function flip(set, name, f){
 function toggleFold(f){
   if (folded.has(f) && waitHidden.has(f)){
     waitHidden.delete(f);
-    try { localStorage.setItem("ccontrol.waithidden", JSON.stringify([...waitHidden])); } catch (e) {}
+    try { localStorage.setItem("imperatorium.waithidden", JSON.stringify([...waitHidden])); } catch (e) {}
   }
-  flip(folded, "ccontrol.folded", f);
+  flip(folded, "imperatorium.folded", f);
 }
-const toggleWaiting = f => flip(waitHidden, "ccontrol.waithidden", f);
+const toggleWaiting = f => flip(waitHidden, "imperatorium.waithidden", f);
 
 // A double click starts with a click, so a click waits briefly to see whether
 // a second follows. Kept by node name, not element: the list is redrawn
@@ -1336,7 +1346,7 @@ const SHAPES = [["prompt", "Prompts"], ["reply", "Replies"], ["thinking", "Think
 const MODES = ["full", "compact", "hidden"];
 const SUMMARY_NOTE = "earlier conversation, summarised";
 let shape = {};
-try { shape = JSON.parse(localStorage.getItem("ccontrol.shape") || "{}") || {}; } catch (e) { shape = {}; }
+try { shape = JSON.parse(localStorage.getItem("imperatorium.shape") || "{}") || {}; } catch (e) { shape = {}; }
 function modeOf(cat){ return MODES.includes(shape[cat]) ? shape[cat] : "full"; }
 
 function categoryOf(it, b){
@@ -1527,7 +1537,7 @@ function drawCurrent(){
 // Under the send buttons: what the tile says, plus what only the transcript
 // and process tree know - background work, the prompt cache, tokens, cost.
 let statusData = null, statusFor = null, statusAt = 0, statusSkew = 0, statusFolded = false;
-try { statusFolded = localStorage.getItem("ccontrol.statusFolded") === "1"; } catch (e) {}
+try { statusFolded = localStorage.getItem("imperatorium.statusFolded") === "1"; } catch (e) {}
 
 function kfmt(n){
   if (n == null) return "";
@@ -1727,7 +1737,7 @@ $("#proctabs").addEventListener("click", e => {
   if (!b) return;
   procPick = b.dataset.proc; procShown = ""; drawProcs();
 });
-try { const h = +localStorage.getItem("ccontrol.procsHeight");
+try { const h = +localStorage.getItem("imperatorium.procsHeight");
       if (h > 0) $("#procs").style.setProperty("--ph", h + "px"); } catch (e) {}
 $("#procgrip").addEventListener("pointerdown", e => {
   const box = $("#procs"), y0 = e.clientY, h0 = box.offsetHeight;
@@ -1740,7 +1750,7 @@ $("#procgrip").addEventListener("pointerdown", e => {
     box.classList.remove("drag");
     e.target.removeEventListener("pointermove", move);
     e.target.removeEventListener("pointerup", up);
-    try { localStorage.setItem("ccontrol.procsHeight", String(box.offsetHeight)); } catch (x) {}
+    try { localStorage.setItem("imperatorium.procsHeight", String(box.offsetHeight)); } catch (x) {}
   };
   e.target.addEventListener("pointermove", move);
   e.target.addEventListener("pointerup", up);
@@ -1767,9 +1777,9 @@ function jump(dir){
 // The box belongs to whichever session it was typed for; switching sessions
 // parks it and brings back that session's own. Kept in this browser only.
 let drafts = {}, draftFor = null;
-try { drafts = JSON.parse(localStorage.getItem("ccontrol.drafts") || "{}") || {}; } catch (e) { drafts = {}; }
+try { drafts = JSON.parse(localStorage.getItem("imperatorium.drafts") || "{}") || {}; } catch (e) { drafts = {}; }
 function saveDrafts(){
-  try { localStorage.setItem("ccontrol.drafts", JSON.stringify(drafts)); } catch (e) {}
+  try { localStorage.setItem("imperatorium.drafts", JSON.stringify(drafts)); } catch (e) {}
 }
 function noteDraft(){
   if (draftFor === null) return;
@@ -1795,7 +1805,7 @@ function clearPrompt(k){
 // A session that finished a turn while you were looking elsewhere is marked
 // "new" until you select it. When it went idle is its status change time.
 let seenAt = {};
-try { seenAt = JSON.parse(localStorage.getItem("ccontrol.seen") || "{}") || {}; } catch (e) { seenAt = {}; }
+try { seenAt = JSON.parse(localStorage.getItem("imperatorium.seen") || "{}") || {}; } catch (e) { seenAt = {}; }
 const doneAt = s => s.status === "idle" && s.status_changed_at ? s.status_changed_at : 0;
 function isUnread(s){ return key(s) !== selected && doneAt(s) > (seenAt[key(s)] || 0) + 1; }
 
@@ -1814,9 +1824,9 @@ function updateSeen(seen, list, looking, now){
 
 // -- attention: title, favicon, desktop notifications -------------------------
 let attnBefore = null, deskNotify = false;
-try { deskNotify = localStorage.getItem("ccontrol.desknotify") === "1"; } catch (e) {}
+try { deskNotify = localStorage.getItem("imperatorium.desknotify") === "1"; } catch (e) {}
 // The switch lives in the Settings window, another page on this origin.
-try { addEventListener("storage", e => { if (e.key === "ccontrol.desknotify") deskNotify = e.newValue === "1"; }); } catch (e) {}
+try { addEventListener("storage", e => { if (e.key === "imperatorium.desknotify") deskNotify = e.newValue === "1"; }); } catch (e) {}
 
 // Pure: sessions that started waiting for you since the last list (none on
 // the first, so opening the window does not announce what already waits).
@@ -1883,7 +1893,7 @@ function gotSessions(list){
   keysBefore = new Set(list.map(key));
   const looking = view === "session" && document.visibilityState === "visible" ? selected : null;
   seenAt = updateSeen(seenAt, list, looking, Date.now() / 1000);
-  try { localStorage.setItem("ccontrol.seen", JSON.stringify(seenAt)); } catch (e) {}
+  try { localStorage.setItem("imperatorium.seen", JSON.stringify(seenAt)); } catch (e) {}
   notifyWaiting(list);
   document.title = titleFor(list.filter(s => s.attention).length);
   drawFavicon(list);
@@ -2242,12 +2252,12 @@ async function drawMeter(){
 
 // A click opens the Meter Details and another folds them; remembered here.
 let meterOpen = false;
-try { meterOpen = localStorage.getItem("ccontrol.meterOpen") === "1"; } catch (e) {}
+try { meterOpen = localStorage.getItem("imperatorium.meterOpen") === "1"; } catch (e) {}
 function foldMeter(open){
   meterOpen = open;
   $("#meter").classList.toggle("open", open);
   $("#meter").setAttribute("aria-expanded", String(open));
-  try { localStorage.setItem("ccontrol.meterOpen", open ? "1" : "0"); } catch (e) {}
+  try { localStorage.setItem("imperatorium.meterOpen", open ? "1" : "0"); } catch (e) {}
 }
 $("#meter").addEventListener("click", () => foldMeter(!meterOpen));
 $("#meter").addEventListener("keydown", e => {
@@ -2332,8 +2342,8 @@ async function loadChanges(){
 // the session as one prompt. Kept per session in this browser until sent.
 let changesView = null, editing = null;
 let reviews = {};
-try { reviews = JSON.parse(localStorage.getItem("ccontrol.review") || "{}") || {}; } catch (e) { reviews = {}; }
-const saveReviews = () => { try { localStorage.setItem("ccontrol.review", JSON.stringify(reviews)); } catch (e) {} };
+try { reviews = JSON.parse(localStorage.getItem("imperatorium.review") || "{}") || {}; } catch (e) { reviews = {}; }
+const saveReviews = () => { try { localStorage.setItem("imperatorium.review", JSON.stringify(reviews)); } catch (e) {} };
 // Not the text being typed: a poll must not redraw under the comment box.
 const reviewSig = () => JSON.stringify([reviews[selected] || [], editing && [editing.file, editing.line, editing.side]]);
 const sameSpot = (a, b) => a.file === b.file && a.line === b.line && a.side === b.side;
@@ -2922,7 +2932,7 @@ $("#jprev").onclick = () => jump(-1);
 $("#status").addEventListener("click", e => {
   if (!e.target.closest(".hd")) return;
   statusFolded = !statusFolded;
-  try { localStorage.setItem("ccontrol.statusFolded", statusFolded ? "1" : ""); } catch (e) {}
+  try { localStorage.setItem("imperatorium.statusFolded", statusFolded ? "1" : ""); } catch (e) {}
   drawStatus();
 });
 $("#jnext").onclick = () => jump(1);
@@ -2931,7 +2941,7 @@ $("#shape").addEventListener("change", e => {
   const cat = e.target.dataset.shape;
   if (!cat) return;
   if (e.target.value === "full") delete shape[cat]; else shape[cat] = e.target.value;
-  try { localStorage.setItem("ccontrol.shape", JSON.stringify(shape)); } catch (e) {}
+  try { localStorage.setItem("imperatorium.shape", JSON.stringify(shape)); } catch (e) {}
   drawShape();
   drawLog();
 });
@@ -3707,7 +3717,7 @@ function notifyExtrasHtml(d){
     `<span class="err">${esc(d.notify_error)}</span></div></div>` : "";
   if (!("Notification" in window)) return err;
   let on = false;
-  try { on = localStorage.getItem("ccontrol.desknotify") === "1" && Notification.permission === "granted"; } catch (e) {}
+  try { on = localStorage.getItem("imperatorium.desknotify") === "1" && Notification.permission === "granted"; } catch (e) {}
   return `<div class="f" id="deskrow"><label for="desk">Desktop notification</label><div class="ctl">` +
     `<input type=checkbox id="desk"${on ? " checked" : ""}>` +
     `<span class="help">From the main window when a session starts waiting for you, only while that window ` +
@@ -3724,7 +3734,7 @@ function wireDesk(){
       const p = await Notification.requestPermission();
       if (p !== "granted"){ box.checked = false; say("the browser did not allow notifications (" + p + ")", true); return; }
     }
-    try { localStorage.setItem("ccontrol.desknotify", box.checked ? "1" : ""); } catch (x) {}
+    try { localStorage.setItem("imperatorium.desknotify", box.checked ? "1" : ""); } catch (x) {}
     say(box.checked ? "Desktop notifications on." : "Desktop notifications off.");
   };
 }

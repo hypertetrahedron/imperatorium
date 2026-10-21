@@ -17,8 +17,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ccontrol import window as window_mod  # noqa: E402
-from ccontrol import winfocus  # noqa: E402
+from imperatorium import window as window_mod  # noqa: E402
+from imperatorium import winfocus  # noqa: E402
 
 CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -148,7 +148,7 @@ def main():
             break
     if not bound:
         print("no hotkey could be registered; open the window with "
-              "python -m ccontrol.window")
+              "python -m imperatorium.window")
         return 1
     print("hotkey %s raises the Imperatorium window" % bound)
 

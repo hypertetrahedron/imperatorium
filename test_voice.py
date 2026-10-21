@@ -15,7 +15,7 @@ import shutil
 import tempfile
 import unittest
 
-from ccontrol import voice
+from imperatorium import voice
 
 try:
     import numpy  # noqa: F401 - part of the optional voice extras
@@ -288,7 +288,7 @@ class WorkerProcess(unittest.TestCase):
 
     def test_the_child_runs_this_module_without_a_console(self):
         cmd = voice.worker_command({"model": "small"}, exe=voice.sys.executable)
-        self.assertEqual(cmd[1:4], ["-m", "ccontrol.voice", "--worker"])
+        self.assertEqual(cmd[1:4], ["-m", "imperatorium.voice", "--worker"])
         self.assertEqual(json.loads(cmd[4])["model"], "small")
 
 
@@ -298,7 +298,7 @@ class Environment(unittest.TestCase):
         import subprocess
         import sys
 
-        code = ("import sys; from ccontrol import voice; voice.available(); "
+        code = ("import sys; from imperatorium import voice; voice.available(); "
                 "print('faster_whisper' in sys.modules)")
         out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                              text=True, cwd=os.path.dirname(os.path.abspath(__file__)))

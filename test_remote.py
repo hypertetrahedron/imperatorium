@@ -8,11 +8,13 @@ handling that keeps one dead host from stalling a poll.
 Run: python test_remote.py
 """
 import json
+import shlex
+import shutil
 import subprocess
 import time
 import unittest
 
-from ccontrol import remote
+from imperatorium import remote
 
 HOST = {"name": "devbox", "claude": "$HOME/.local/bin/claude", "label": "devbox"}
 
@@ -494,7 +496,32 @@ class ReaderChannel(unittest.TestCase):
 
     def test_the_interpreter_path_is_left_to_the_hosts_shell(self):
         argv = remote.Reader({"name": "h"}).argv()
-        self.assertTrue(argv[-1].startswith("$HOME/.claude/ccontrol/venv/bin/python -u -c "))
+        self.assertIn("$HOME/.claude/imperatorium/venv/bin/python", argv[-1])
+        self.assertTrue(argv[-1].endswith(" -u -c " + shlex.quote(remote.READER_BOOT)))
+        own = remote.Reader({"name": "h", "reader_python": "/opt/v/bin/python"}).argv()
+        self.assertTrue(own[-1].startswith("/opt/v/bin/python -u -c "))
+
+    @unittest.skipUnless(shutil.which("sh"), "no sh")
+    def test_a_host_set_up_before_the_rename_keeps_its_reader(self):
+        import os
+        import tempfile
+        python = remote.Reader({"name": "h"}).python()
+        with tempfile.TemporaryDirectory() as home:
+            def which():
+                return subprocess.run(["sh", "-c", "echo " + python], capture_output=True,
+                                      text=True, env=dict(os.environ, HOME=home)).stdout.strip()
+            def make(folder):
+                d = os.path.join(home, ".claude", folder, "venv", "bin")
+                os.makedirs(d)
+                exe = os.path.join(d, "python")
+                with open(exe, "w") as fh:
+                    fh.write("#!/bin/sh\n")
+                os.chmod(exe, 0o755)
+            self.assertTrue(which().endswith("/.claude/imperatorium/venv/bin/python"))  # neither
+            make("ccontrol")
+            self.assertTrue(which().endswith("/.claude/ccontrol/venv/bin/python"))
+            make("imperatorium")
+            self.assertTrue(which().endswith("/.claude/imperatorium/venv/bin/python"))
 
 
 def wait_for(test, seconds=3.0):

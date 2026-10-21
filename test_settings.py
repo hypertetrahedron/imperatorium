@@ -10,7 +10,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from ccontrol import dispatcher, settings, ui
+from imperatorium import dispatcher, settings, ui
 from test_dispatcher import Base
 from test_ui import NODE
 

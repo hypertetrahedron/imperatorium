@@ -2,7 +2,7 @@
 import unittest
 from unittest import mock
 
-from ccontrol import closing
+from imperatorium import closing
 
 CLAUDE, SHELL, WT = 100, 50, 10
 

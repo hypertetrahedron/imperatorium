@@ -12,7 +12,7 @@ too, once `claude` has gone.
 
 Typing means attaching to the session's console, and a process can only be
 attached to one: the dispatcher may have a console of its own (`impctl run`),
-so the typing is done by a short-lived child (`python -m ccontrol.closing`).
+so the typing is done by a short-lived child (`python -m imperatorium.closing`).
 """
 import os
 import signal
@@ -54,7 +54,7 @@ def _wait_gone(pid, wait, alive):
 def _type(pid, *chunks):
     """Type `chunks` into `pid`'s console, pausing between them. True on success."""
     try:
-        r = subprocess.run([sys.executable, "-m", "ccontrol.closing", str(pid)]
+        r = subprocess.run([sys.executable, "-m", "imperatorium.closing", str(pid)]
                            + [KEYS.get(c, c) for c in chunks],
                            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            capture_output=True, timeout=15,

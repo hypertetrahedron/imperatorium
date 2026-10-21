@@ -273,7 +273,7 @@ def worker_command(settings, exe=None):
         console = os.path.join(os.path.dirname(exe), "python.exe")
         if os.path.exists(console):
             exe = console
-    return [exe, "-m", "ccontrol.voice", "--worker", json.dumps(settings)]
+    return [exe, "-m", "imperatorium.voice", "--worker", json.dumps(settings)]
 
 
 def _spawn(settings):

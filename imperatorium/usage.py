@@ -35,7 +35,7 @@ MIN_SPAN = 5 * 60.0
 DEFAULT_THRESHOLDS = (80.0, 95.0)
 
 # Who serves a session that has no rate-limit windows. The statusline script
-# reads the provider from the session's environment (`ccontrol_provider`);
+# reads the provider from the session's environment (`imperatorium_provider`);
 # the model id is the fallback for a script too old to send it - Bedrock
 # names models by ARN or "us.anthropic.claude-...", Vertex as "claude-...@date".
 PROVIDERS = {"bedrock": "AWS Bedrock", "vertex": "Google Vertex AI",
@@ -58,7 +58,7 @@ def _num(value):
 
 def provider_of(payload):
     """'bedrock', 'vertex', ... or None for the claude.ai login. Pure."""
-    named = payload.get("ccontrol_provider")
+    named = payload.get("imperatorium_provider") or payload.get("ccontrol_provider")
     if named in PROVIDERS:
         return named
     mid = str((payload.get("model") or {}).get("id") or "")

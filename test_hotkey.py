@@ -106,7 +106,7 @@ class WindowLookup(unittest.TestCase):
     def test_the_title_it_looks_for_matches_the_page(self):
         # If these drift apart the hotkey silently opens a second window
         # every time instead of raising the one already there.
-        from ccontrol import ui
+        from imperatorium import ui
 
         self.assertIn(hotkey.WINDOW_TITLE, ui.render_shell())
 

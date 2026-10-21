@@ -7,8 +7,8 @@ import time
 import unittest
 from datetime import datetime
 
-from ccontrol import dispatcher, matrix
-from ccontrol.store import Store
+from imperatorium import dispatcher, matrix
+from imperatorium.store import Store
 from test_dispatcher import Base, SID, write_transcript
 
 

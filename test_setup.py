@@ -133,9 +133,9 @@ class Ntfy(unittest.TestCase):
 
 class Service(unittest.TestCase):
     def test_systemd_unit_restarts_and_quotes_paths_with_spaces(self):
-        unit = sm.systemd_unit("/opt/my py/python", ["-m", "ccontrol.dispatcher"],
+        unit = sm.systemd_unit("/opt/my py/python", ["-m", "imperatorium.dispatcher"],
                                "the dispatcher", workdir="/srv/imp", path="/usr/bin:/bin")
-        self.assertIn('ExecStart="/opt/my py/python" "-m" "ccontrol.dispatcher"', unit)
+        self.assertIn('ExecStart="/opt/my py/python" "-m" "imperatorium.dispatcher"', unit)
         self.assertIn("WorkingDirectory=/srv/imp", unit)
         self.assertIn("Restart=always", unit)
         self.assertIn('Environment="PATH=/usr/bin:/bin"', unit)
@@ -143,11 +143,11 @@ class Service(unittest.TestCase):
 
     def test_launchd_plist_is_valid_xml_and_keeps_alive(self):
         import plistlib
-        body = sm.launchd_plist("local.ccontrol.dispatcher", "/usr/bin/python3",
-                                ["-m", "ccontrol.dispatcher"], workdir="/Users/a & b/imp",
+        body = sm.launchd_plist("local.imperatorium.dispatcher", "/usr/bin/python3",
+                                ["-m", "imperatorium.dispatcher"], workdir="/Users/a & b/imp",
                                 path="/usr/bin", log="/tmp/x.log")
         plist = plistlib.loads(body.encode("utf-8"))
-        self.assertEqual(plist["ProgramArguments"], ["/usr/bin/python3", "-m", "ccontrol.dispatcher"])
+        self.assertEqual(plist["ProgramArguments"], ["/usr/bin/python3", "-m", "imperatorium.dispatcher"])
         self.assertEqual(plist["WorkingDirectory"], "/Users/a & b/imp")
         self.assertTrue(plist["KeepAlive"])
         self.assertTrue(plist["RunAtLoad"])
@@ -234,7 +234,7 @@ class Remote(unittest.TestCase):
         self.assertTrue(sm.remove_host(cfg, "a")[1])
 
     def test_config_written_by_onboarding_is_read_by_the_dispatcher(self):
-        from ccontrol import remote
+        from imperatorium import remote
         cfg, _ = sm.upsert_host(example("config.example.json"),
                                 sm.host_entry("pi.local", "$HOME/.local/bin/claude", "pi"))
         hosts = remote.load_hosts(cfg)

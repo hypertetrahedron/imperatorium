@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 AUDIT_MAX_BYTES = 2 * 1024 * 1024
 PARK_ENDPOINT = os.environ.get(
-    "CCONTROL_PARK_ENDPOINT", "http://127.0.0.1:8792/permission/park"
+    "IMPERATORIUM_PARK_ENDPOINT", "http://127.0.0.1:8792/permission/park"
 )
 
 
@@ -49,11 +49,14 @@ def state_dir():
         or os.environ.get("XDG_STATE_HOME")
         or os.path.join(os.path.expanduser("~"), ".local", "state")
     )
-    return os.path.join(base, "ccontrol")
+    # The dispatcher moves the pre-2026-10-20 `ccontrol` folder on start;
+    # until it has, the audit log goes on where the rest of the state is.
+    new, old = os.path.join(base, "imperatorium"), os.path.join(base, "ccontrol")
+    return old if not os.path.exists(new) and os.path.isdir(old) else new
 
 
 def policy_path():
-    return os.environ.get("CCONTROL_POLICY") or os.path.join(
+    return os.environ.get("IMPERATORIUM_POLICY") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policy.json"
     )
 
@@ -131,7 +134,7 @@ def main():
         return 0
 
     try:
-        from ccontrol import policy as policy_mod
+        from imperatorium import policy as policy_mod
 
         verdict, reason, tier = policy_mod.decide(request, load_policy())
     except Exception as exc:  # an import or policy failure must cost a prompt

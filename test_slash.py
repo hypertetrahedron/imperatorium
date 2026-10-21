@@ -2,7 +2,7 @@
 import unittest
 from unittest import mock
 
-from ccontrol import closing, slash
+from imperatorium import closing, slash
 
 SID = "11111111-1111-1111-1111-111111111111"
 

@@ -8,14 +8,14 @@ Windows 11, so there is normally nothing to install.
 Falls back to the default browser, which works fine - it just looks like a
 tab, because it is one.
 
-    python -m ccontrol.window
+    python -m imperatorium.window
 """
 import os
 import shutil
 import subprocess
 import sys
 
-URL = os.environ.get("CCONTROL_URL", "http://127.0.0.1:8792/")
+URL = os.environ.get("IMPERATORIUM_URL", "http://127.0.0.1:8792/")
 
 # Order matters: the first one present wins.
 CANDIDATES = (

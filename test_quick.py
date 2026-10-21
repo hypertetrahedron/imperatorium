@@ -7,8 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
-from ccontrol import dispatcher, settings, ui
-from ccontrol.store import Store
+from imperatorium import dispatcher, settings, ui
+from imperatorium.store import Store
 
 NODE = shutil.which("node")
 KEY, PHRASES = settings.BY_KEY["quick.key"], settings.BY_KEY["quick.phrases"]

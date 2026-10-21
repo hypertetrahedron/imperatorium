@@ -21,8 +21,8 @@ import time
 import urllib.error
 import urllib.request
 
-ENDPOINT = os.environ.get("CCONTROL_ENDPOINT", "http://127.0.0.1:8792/hook")
-TIMEOUT = float(os.environ.get("CCONTROL_TIMEOUT", "3"))
+ENDPOINT = os.environ.get("IMPERATORIUM_ENDPOINT", "http://127.0.0.1:8792/hook")
+TIMEOUT = float(os.environ.get("IMPERATORIUM_TIMEOUT", "3"))
 
 
 def main():
@@ -54,7 +54,7 @@ def main():
     except (urllib.error.URLError, OSError, ValueError) as exc:
         # The dispatcher being down is an ordinary state, not an error worth
         # showing a person mid-session. But a hook that fails invisibly is
-        # unfalsifiable, so set CCONTROL_DEBUG_LOG to a path to find out why.
+        # unfalsifiable, so set IMPERATORIUM_DEBUG_LOG to a path to find out why.
         _note("%s %s: %s" % (payload.get("hook_event_name"), type(exc).__name__, exc))
     return 0
 
@@ -86,7 +86,7 @@ def trim_tool_payload(payload):
 
 
 def _note(line):
-    path = os.environ.get("CCONTROL_DEBUG_LOG")
+    path = os.environ.get("IMPERATORIUM_DEBUG_LOG")
     if not path:
         return
     try:

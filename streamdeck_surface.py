@@ -46,7 +46,7 @@ from PIL import ImageDraw, ImageFont  # noqa: E402
 from StreamDeck.DeviceManager import DeviceManager  # noqa: E402
 from StreamDeck.ImageHelpers import PILHelper  # noqa: E402
 
-ENDPOINT = os.environ.get("CCONTROL_ENDPOINT_BASE", "http://127.0.0.1:8792")
+ENDPOINT = os.environ.get("IMPERATORIUM_ENDPOINT_BASE", "http://127.0.0.1:8792")
 POLL_SECONDS = 1.0
 CONFIG = os.path.join(HERE, "config.json")
 

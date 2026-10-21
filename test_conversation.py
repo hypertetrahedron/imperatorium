@@ -7,7 +7,7 @@ Run: python test_conversation.py
 """
 import unittest
 
-from ccontrol import conversation as conv
+from imperatorium import conversation as conv
 
 
 class Msg:

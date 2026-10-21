@@ -78,7 +78,7 @@ window, under **insights**.
 the hooks. Then open the window:
 
 ```
-.venv/Scripts/python -m ccontrol.window      # Windows (bin/ elsewhere)
+.venv/Scripts/python -m imperatorium.window      # Windows (bin/ elsewhere)
 http://127.0.0.1:8792/                       # or any browser
 ```
 
@@ -114,7 +114,7 @@ It walks through:
    then `/login`.
 3. **python3** on the host. If it is missing it tells you the command
    (`sudo apt install python3 python3-venv`) rather than running sudo.
-4. **The conversation reader**: the Agent SDK in `~/.claude/ccontrol/venv`
+4. **The conversation reader**: the Agent SDK in `~/.claude/imperatorium/venv`
    (~300MB), so the window can show what that host's sessions said.
    `--no-reader` skips it.
 5. **The reporting hooks** in the host's `~/.claude/settings.json`, backed up
@@ -127,7 +127,7 @@ It walks through:
 python setup_machine.py remote check             # every host, piece by piece
 python setup_machine.py remote check devbox
 python setup_machine.py remote remove devbox     # hooks off, entry gone
-python setup_machine.py remote remove devbox --purge   # and ~/.claude/ccontrol there
+python setup_machine.py remote remove devbox --purge   # and ~/.claude/imperatorium there
 ```
 
 Sessions already running on the host report in on their next turn;
@@ -163,9 +163,9 @@ delete the checkout to remove the rest.
 
 | Symptom | Look at |
 |---|---|
-| A session is missing from the sidebar | `python -m ccontrol.registry`; restart the session so it loads the hooks |
+| A session is missing from the sidebar | `python -m imperatorium.registry`; restart the session so it loads the hooks |
 | "stale_credential", or a prompt opens a new window instead | the session was resumed; its next turn repairs it |
 | A host shows as parked | `python setup_machine.py remote check HOST` |
 | The window says it cannot read conversations | `.venv` is missing the Agent SDK: run `python setup_machine.py` again |
 | Nothing answers on 8792 | `python setup_machine.py service status` |
-| A hook seems silent | set `CCONTROL_DEBUG_LOG` to a file path and watch it |
+| A hook seems silent | set `IMPERATORIUM_DEBUG_LOG` to a file path and watch it |

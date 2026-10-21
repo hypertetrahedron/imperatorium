@@ -1,4 +1,4 @@
-"""Tests for ccontrol.costs: the estimated cost history from transcripts."""
+"""Tests for imperatorium.costs: the estimated cost history from transcripts."""
 import json
 import os
 import shutil
@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from ccontrol import costs
+from imperatorium import costs
 
 NOW = datetime(2026, 10, 15, 12, 0, 0).timestamp()   # local noon
 M = 1_000_000

@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 
-from ccontrol import taskout
+from imperatorium import taskout
 
 SID = "11111111-2222-3333-4444-555555555555"
 

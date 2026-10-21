@@ -6,7 +6,7 @@ import threading
 import time
 import unittest
 
-from ccontrol import convcache, conversation
+from imperatorium import convcache, conversation
 
 
 def item(speaker, text):

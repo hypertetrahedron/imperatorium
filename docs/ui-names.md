@@ -3,7 +3,7 @@
 One name for every part of the window, so a change, a bug or a screenshot
 can be talked about without describing where on screen it is. Each name is
 followed by the DOM id or class it maps to, so a name can be grepped straight
-to `ccontrol/ui.py` (`render_shell` for the main window, `render_matrix` for
+to `imperatorium/ui.py` (`render_shell` for the main window, `render_matrix` for
 the Chat Matrix; everything else is filled in by the script).
 
 ## Convention

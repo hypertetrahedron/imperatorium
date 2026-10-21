@@ -17,9 +17,9 @@ import sys
 import urllib.error
 import urllib.request
 
-ENDPOINT = os.environ.get("CCONTROL_ENDPOINT", "http://127.0.0.1:8792/hook")
-TIMEOUT = float(os.environ.get("CCONTROL_STATUSLINE_TIMEOUT", "0.5"))
-EVENT = "ccontrol_statusline"
+ENDPOINT = os.environ.get("IMPERATORIUM_ENDPOINT", "http://127.0.0.1:8792/hook")
+TIMEOUT = float(os.environ.get("IMPERATORIUM_STATUSLINE_TIMEOUT", "0.5"))
+EVENT = "imperatorium_statusline"
 # The payload never says where the session's requests go, and `rate_limits`
 # only exists on a claude.ai Pro or Max plan (or behind a gateway with a
 # spend limit). The provider is chosen by environment, which this script
@@ -60,8 +60,8 @@ def line(payload):
         used = (limits.get(key) or {}).get("used_percentage")
         if isinstance(used, (int, float)):
             parts.append("%s %d%%" % (label, round(used)))
-    if not limits and payload.get("ccontrol_provider") in PROVIDER_LABELS:
-        parts.append(PROVIDER_LABELS[payload["ccontrol_provider"]])
+    if not limits and payload.get("imperatorium_provider") in PROVIDER_LABELS:
+        parts.append(PROVIDER_LABELS[payload["imperatorium_provider"]])
     return " · ".join(parts)
 
 
@@ -78,7 +78,7 @@ def main():
     except Exception:
         found = None
     if found:
-        payload["ccontrol_provider"] = found
+        payload["imperatorium_provider"] = found
     if payload.get("session_id"):
         body = json.dumps(dict(payload, hook_event_name=EVENT)).encode("utf-8")
         req = urllib.request.Request(

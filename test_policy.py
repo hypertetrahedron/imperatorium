@@ -9,7 +9,7 @@ Run: python test_policy.py
 import os
 import unittest
 
-from ccontrol import policy
+from imperatorium import policy
 
 CWD = os.path.join("Y:", os.sep, "projects-software", "laser-ledger")
 OUTSIDE = os.path.join("C:", os.sep, "Windows", "System32")
@@ -203,7 +203,7 @@ class SelfProtection(unittest.TestCase):
         for name in (os.path.join(".claude", "settings.json"),
                      "policy.json",
                      os.path.join("hooks", "cc_permission.py"),
-                     os.path.join("ccontrol", "policy.py")):
+                     os.path.join("imperatorium", "policy.py")):
             self.denied(req("Write", file_path=os.path.join(CWD, name)), name)
 
     def test_disabling_permission_checks_is_refused(self):

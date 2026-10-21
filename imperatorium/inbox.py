@@ -138,6 +138,6 @@ def send_to_self(content, attachments=None):
 
 
 if __name__ == "__main__":
-    text = " ".join(sys.argv[1:]) or "ping from ccontrol.inbox"
+    text = " ".join(sys.argv[1:]) or "ping from imperatorium.inbox"
     send_to_self(text)
     print("delivered to inbox")

@@ -33,8 +33,9 @@ login if it is missing, checks (and optionally installs) Claude Code and
 python3 there, installs the conversation reader and the reporting hooks, adds
 the host to config.json with a tunnel, and restarts the dispatcher.
 
-Imperatorium is the public name; the code calls itself `ccontrol` (Central
-Control), and so do the task, unit and file names it installs.
+The task, unit and file names it installs are all `Imperatorium*` /
+`imperatorium*`. An install from before 2026-10-20 used `CentralControl*` /
+`ccontrol*`; installing again removes those and moves the state folder.
 
 Standard library only, because it runs before anything else is installed.
 """
@@ -59,8 +60,8 @@ WINDOWS = sys.platform == "win32"
 VENV = os.path.join(HERE, ".venv")
 VENV_PY = os.path.join(VENV, "Scripts" if WINDOWS else "bin",
                        "python.exe" if WINDOWS else "python")
-STATE_DIR_HINT = ("%LOCALAPPDATA%\\ccontrol" if WINDOWS
-                  else "$XDG_STATE_HOME/ccontrol or ~/.local/state/ccontrol")
+STATE_DIR_HINT = ("%LOCALAPPDATA%\\imperatorium" if WINDOWS
+                  else "$XDG_STATE_HOME/imperatorium or ~/.local/state/imperatorium")
 HEALTH = "http://127.0.0.1:8792/api/health"
 WINDOW_URL = "http://127.0.0.1:8792/"
 
@@ -362,7 +363,7 @@ def tasks(action, streamdeck=True):
 # back after a crash - done the way each platform expects. The hotkey is
 # Windows-only, so these carry the dispatcher and, optionally, the Stream Deck.
 MACOS = sys.platform == "darwin"
-UNITS = (("dispatcher", ["-m", "ccontrol.dispatcher"], "the dispatcher and window"),
+UNITS = (("dispatcher", ["-m", "imperatorium.dispatcher"], "the dispatcher and window"),
          ("streamdeck", ["streamdeck_surface.py"], "the Stream Deck surface"))
 
 
@@ -418,17 +419,31 @@ def launchd_dir():
     return os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents")
 
 
-def unit_names():
-    """[(key, unit file path, service name)] for this platform."""
+def unit_names(prefix="imperatorium"):
+    """[(key, unit file path, service name)] for this platform. `prefix`
+    "ccontrol" gives the names used before 2026-10-20."""
     out = []
     for key, _args, _what in UNITS:
         if MACOS:
-            label = "local.ccontrol.%s" % key
+            label = "local.%s.%s" % (prefix, key)
             out.append((key, os.path.join(launchd_dir(), label + ".plist"), label))
         else:
-            name = "ccontrol-%s.service" % key
+            name = "%s-%s.service" % (prefix, key)
             out.append((key, os.path.join(systemd_dir(), name), name))
     return out
+
+
+def remove_units(names):
+    """Stop, disable and delete the unit files in `names` that exist."""
+    for _key, unit_path, name in names:
+        if not os.path.exists(unit_path):
+            continue
+        if MACOS:
+            run(["launchctl", "bootout", "gui/%d" % os.getuid(), unit_path], check=False)
+        else:
+            run(["systemctl", "--user", "disable", "--now", name], check=False)
+        os.remove(unit_path)
+        say("   removed %s" % unit_path)
 
 
 def service_install(streamdeck=False):
@@ -436,6 +451,7 @@ def service_install(streamdeck=False):
         tasks("install", streamdeck=streamdeck)
         return
     python = service_python()
+    remove_units(unit_names("ccontrol"))  # a set from before the rename
     # A user service starts with a bare PATH, and the dispatcher calls
     # `claude`, `git` and `gh` - so it gets the PATH setup was run with.
     path = os.environ.get("PATH", "")
@@ -446,7 +462,7 @@ def service_install(streamdeck=False):
         args, what = specs[key]
         os.makedirs(os.path.dirname(unit_path), exist_ok=True)
         if MACOS:
-            log = os.path.join(os.path.expanduser("~"), "Library", "Logs", "ccontrol-%s.log" % key)
+            log = os.path.join(os.path.expanduser("~"), "Library", "Logs", "imperatorium-%s.log" % key)
             body = launchd_plist(name, python, args, path=path, log=log)
         else:
             body = systemd_unit(python, args, what, path=path)
@@ -470,15 +486,7 @@ def service_uninstall():
     if WINDOWS:
         tasks("uninstall")
         return
-    for _key, unit_path, name in unit_names():
-        if not os.path.exists(unit_path):
-            continue
-        if MACOS:
-            run(["launchctl", "bootout", "gui/%d" % os.getuid(), unit_path], check=False)
-        else:
-            run(["systemctl", "--user", "disable", "--now", name], check=False)
-        os.remove(unit_path)
-        say("   removed %s" % unit_path)
+    remove_units(unit_names() + unit_names("ccontrol"))
     if not MACOS:
         run(["systemctl", "--user", "daemon-reload"], check=False)
 
@@ -486,7 +494,7 @@ def service_uninstall():
 def service_installed():
     """Whether anything that keeps the dispatcher up is registered here."""
     if WINDOWS:
-        return output(["schtasks", "/Query", "/TN", "CentralControlDispatcher"]) is not None
+        return output(["schtasks", "/Query", "/TN", "ImperatoriumDispatcher"]) is not None
     return any(os.path.exists(p) for key, p, _n in unit_names() if key == "dispatcher")
 
 
@@ -534,7 +542,7 @@ def wait_for_dispatcher(seconds=60):
 # A host is onboarded entirely over SSH: nothing listens there and no port is
 # opened on either machine. See README "Other machines" for why each piece exists.
 MIN_REMOTE_CLAUDE = (2, 1, 224)
-READER_DIR = ".claude/ccontrol/venv"
+READER_DIR = ".claude/imperatorium/venv"
 READER_REQUIREMENT = "claude-agent-sdk>=0.2.155"
 CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash"
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
@@ -548,18 +556,20 @@ for c in "$(command -v claude 2>/dev/null)" "$HOME/.local/bin/claude" "$HOME/.cl
   if [ -n "$c" ] && [ -x "$c" ]; then printf 'claude=%s\n' "$c"; printf 'version=%s\n' "$("$c" --version 2>/dev/null | head -n 1)"; break; fi
 done
 if command -v python3 >/dev/null 2>&1; then python3 -c 'import sys; print("python=%d.%d.%d" % sys.version_info[:3])'; fi
-if [ -x "$HOME/.claude/ccontrol/venv/bin/python" ]; then "$HOME/.claude/ccontrol/venv/bin/python" -c 'import claude_agent_sdk; print("sdk=ok")' 2>/dev/null; fi
-if [ -f "$HOME/.claude/ccontrol/cc_hook.py" ]; then echo hookscript=ok; fi
-if [ -f "$HOME/.claude/settings.json" ] && grep -q ccontrol/cc_hook.py "$HOME/.claude/settings.json"; then echo hooks=ok; fi
+if [ -x "$HOME/.claude/imperatorium/venv/bin/python" ]; then "$HOME/.claude/imperatorium/venv/bin/python" -c 'import claude_agent_sdk; print("sdk=ok")' 2>/dev/null; fi
+if [ -d "$HOME/.claude/ccontrol" ] && [ ! -e "$HOME/.claude/imperatorium" ]; then echo legacy=ok; fi
+if [ -f "$HOME/.claude/imperatorium/cc_hook.py" ]; then echo hookscript=ok; fi
+if [ -f "$HOME/.claude/settings.json" ] && grep -q imperatorium/cc_hook.py "$HOME/.claude/settings.json"; then echo hooks=ok; fi
 true'''
 
 
 def parse_probe(text):
-    """{home, claude, version, python, sdk, hooks, hookscript} from PROBE's output."""
+    """{home, claude, version, python, sdk, hooks, hookscript, legacy} from PROBE's output."""
     out = {}
     for line in (text or "").splitlines():
         key, sep, value = line.partition("=")
-        if sep and key in ("home", "claude", "version", "python", "sdk", "hooks", "hookscript"):
+        if sep and key in ("home", "claude", "version", "python", "sdk", "hooks", "hookscript",
+                              "legacy"):
             out.setdefault(key, value.strip())
     out["version"] = parse_version(out.get("version")) if out.get("version") else None
     out["python"] = parse_version(out.get("python")) if out.get("python") else None
@@ -700,6 +710,16 @@ def remote_add(host, args):
             say("   still cannot reach %s: %s" % (host, err))
             return 1
     say("   ok  %s, home %s" % (host, facts.get("home")))
+    if facts.get("legacy"):
+        # Set up before the rename: the reader venv and hook script move
+        # across, and step 5 points the hooks at the new place.
+        rc, _out, err = ssh(host, "mv ~/.claude/ccontrol ~/.claude/imperatorium")
+        say("   moved ~/.claude/ccontrol to ~/.claude/imperatorium" if rc == 0
+            else "   could not move ~/.claude/ccontrol: %s" % err)
+        facts, err = probe(host)
+        if facts is None:
+            say("   cannot reach %s: %s" % (host, err))
+            return 1
 
     step("2/6 Claude Code on %s" % host)
     ver = facts.get("version")
@@ -778,10 +798,10 @@ def remote_remove(host, args):
     y = args.yes
     step("Hooks on %s" % host)
     install_remote_hooks(host, uninstall=True)
-    if args.purge or ask("Also delete ~/.claude/ccontrol (hook script and reader venv) on %s?" % host,
+    if args.purge or ask("Also delete ~/.claude/imperatorium (hook script and reader venv) on %s?" % host,
                          False, y):
-        rc, _out, err = ssh(host, "rm -rf ~/.claude/ccontrol")
-        say("   removed ~/.claude/ccontrol" if rc == 0 else "   could not remove it: %s" % err)
+        rc, _out, err = ssh(host, "rm -rf ~/.claude/imperatorium ~/.claude/ccontrol")
+        say("   removed ~/.claude/imperatorium" if rc == 0 else "   could not remove it: %s" % err)
     step("config.json")
     cfg = load_config()
     if cfg is not None:
@@ -974,14 +994,14 @@ def cmd_install(args):
     if service:
         service_install(streamdeck=deck)
     else:
-        say("   skipped - start it with:  %s -m ccontrol.dispatcher" % VENV_PY)
+        say("   skipped - start it with:  %s -m imperatorium.dispatcher" % VENV_PY)
         say("   (or later:  python setup_machine.py service install)")
 
     step("7/7 Check")
     health = wait_for_dispatcher(60 if service else 3)
     if health:
         say("   dispatcher is up (pid %s)" % health.get("pid"))
-        say("\nDone. Open the window:  %s -m ccontrol.window   (or %s)" % (VENV_PY, WINDOW_URL))
+        say("\nDone. Open the window:  %s -m imperatorium.window   (or %s)" % (VENV_PY, WINDOW_URL))
     else:
         say("   dispatcher is not answering yet on %s" % HEALTH)
         say("\nInstalled. Start the dispatcher, then open %s" % WINDOW_URL)
@@ -1038,7 +1058,7 @@ def main(argv=None):
     remote.add_argument("--install-claude", action="store_true",
                         help="install or update Claude Code there without asking")
     remote.add_argument("--purge", action="store_true",
-                        help="remove: also delete ~/.claude/ccontrol on the host")
+                        help="remove: also delete ~/.claude/imperatorium on the host")
     args = ap.parse_args(argv)
     return {"install": cmd_install, "check": cmd_check, "uninstall": cmd_uninstall,
             "remote": cmd_remote, "service": cmd_service}[args.command](args)

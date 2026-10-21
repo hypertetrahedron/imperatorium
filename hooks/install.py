@@ -37,7 +37,8 @@ STATUSLINE_SCRIPT = os.path.join(HERE, "cc_statusline.py")
 
 # Stamped onto every entry so uninstall can find exactly what it added and
 # leave anyone else's hooks alone.
-MARK = "ccontrol"
+MARK = "imperatorium"
+LEGACY_MARKS = ("ccontrol",)  # stamped before 2026-10-20; replaced on install
 
 # event -> (matcher, script, async)
 #
@@ -142,7 +143,7 @@ def permission_timeout():
 
 def is_ours(block):
     for hook in block.get("hooks") or []:
-        if hook.get("statusMessage") == MARK:
+        if hook.get("statusMessage") in (MARK,) + LEGACY_MARKS:
             return True
         for arg in hook.get("args") or []:
             if str(arg).lower() in (HOOK_SCRIPT.lower(), PERMISSION_SCRIPT.lower()):
@@ -212,14 +213,14 @@ def _ssh(host, command, data=None):
 def install_remote(host, uninstall=False, dry_run=False, python="python3"):
     """The same hooks, on another machine, reporting through its tunnel.
 
-    cc_hook.py is copied to ~/.claude/ccontrol/ there and posts to
+    cc_hook.py is copied to ~/.claude/imperatorium/ there and posts to
     127.0.0.1:8792, which the dispatcher's reverse tunnel carries back here.
     Paths are absolute because a hook runs with no shell to expand `~`.
     """
     home = _ssh(host, 'printf %s "$HOME"').strip()
     if not home.startswith("/"):
         raise SystemExit("%s: could not read $HOME (got %r)" % (host, home))
-    script = home + "/.claude/ccontrol/cc_hook.py"
+    script = home + "/.claude/imperatorium/cc_hook.py"
     path = home + "/.claude/settings.json"
     raw = _ssh(host, "cat %s 2>/dev/null || true" % path)
     try:
@@ -242,14 +243,14 @@ def install_remote(host, uninstall=False, dry_run=False, python="python3"):
 
     if not uninstall:
         with open(HOOK_SCRIPT, "rb") as fh:
-            _ssh(host, "mkdir -p %s/.claude/ccontrol && cat > %s"
+            _ssh(host, "mkdir -p %s/.claude/imperatorium && cat > %s"
                  % (home, script), fh.read())
     stamp = time.strftime("%Y%m%d-%H%M%S")
     body = (json.dumps(updated, indent=2) + "\n").encode("utf-8")
-    _ssh(host, '[ -f {p} ] && cp {p} {p}.ccontrol-{t}.bak; '
-               'cat > {p}.ccontrol.tmp && mv {p}.ccontrol.tmp {p}'
+    _ssh(host, '[ -f {p} ] && cp {p} {p}.imperatorium-{t}.bak; '
+               'cat > {p}.imperatorium.tmp && mv {p}.imperatorium.tmp {p}'
          .format(p=path, t=stamp), body)
-    print("backup   : %s.ccontrol-%s.bak (if there was a file)" % (path, stamp))
+    print("backup   : %s.imperatorium-%s.bak (if there was a file)" % (path, stamp))
     print("written. Restart a session there for the hooks to take effect.")
     return 0
 
@@ -303,11 +304,11 @@ def main():
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
-        backup = "%s.ccontrol-%s.bak" % (path, time.strftime("%Y%m%d-%H%M%S"))
+        backup = "%s.imperatorium-%s.bak" % (path, time.strftime("%Y%m%d-%H%M%S"))
         shutil.copy2(path, backup)
         print("backup   : %s" % backup)
 
-    tmp = path + ".ccontrol.tmp"
+    tmp = path + ".imperatorium.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(updated, fh, indent=2)
         fh.write("\n")

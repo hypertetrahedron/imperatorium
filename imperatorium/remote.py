@@ -87,7 +87,7 @@ def load_hosts(config):
             "claude": entry.get("claude") or DEFAULT_CLAUDE,
             "label": entry.get("label") or name,
             "python": entry.get("python") or DEFAULT_PYTHON,
-            "reader_python": entry.get("reader_python") or DEFAULT_READER_PYTHON,
+            "reader_python": entry.get("reader_python"),
             "tunnel": entry.get("tunnel"),
         })
     used = {h["tunnel"].get("local_port") for h in hosts
@@ -122,7 +122,7 @@ def _run(argv, timeout):
 
 
 # Separates `claude agents` output from the session files in one SSH call.
-FILES_MARK = "--- ccontrol session files ---"
+FILES_MARK = "--- imperatorium session files ---"
 
 
 def agents(host, timeout=CALL_TIMEOUT):
@@ -512,7 +512,10 @@ for _line in _sys.stdin:
     _sys.stdout.write(_json.dumps(_out) + "\n")
     _sys.stdout.flush()
 '''
-DEFAULT_READER_PYTHON = "$HOME/.claude/ccontrol/venv/bin/python"
+DEFAULT_READER_PYTHON = "$HOME/.claude/imperatorium/venv/bin/python"
+# A host onboarded before 2026-10-20 has it under ~/.claude/ccontrol until
+# `setup_machine.py remote add` runs there again and moves it.
+LEGACY_READER_PYTHON = "$HOME/.claude/ccontrol/venv/bin/python"
 READ_TIMEOUT = 15.0
 # The first read on a host pays a one-off ~1s inside the SDK; after that a
 # read is ~2ms. A fresh SSH connection per 1.5s poll would pay the connect
@@ -545,7 +548,11 @@ class Reader:
         return READER_LOOP
 
     def python(self):
-        return self.host.get("reader_python") or DEFAULT_READER_PYTHON
+        got = self.host.get("reader_python") or DEFAULT_READER_PYTHON
+        if got != DEFAULT_READER_PYTHON:
+            return got
+        return '"$(if [ ! -x {new} ] && [ -x {old} ]; then echo {old}; else echo {new}; fi)"'.format(
+            new='"%s"' % DEFAULT_READER_PYTHON, old='"%s"' % LEGACY_READER_PYTHON)
 
     def argv(self):
         # Unquoted interpreter so $HOME expands; the boot line is quoted.

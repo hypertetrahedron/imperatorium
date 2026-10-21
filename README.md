@@ -4,9 +4,6 @@ One place to see every Claude Code session on this machine and the machines
 you reach over SSH, and one way to send work to any of them without hunting
 for its window.
 
-(Inside the code it is still `ccontrol` - "Central Control" - and so are the
-scheduled tasks, service units and state folders it installs.)
-
 Built for a desk running ~20 concurrent sessions across separate repositories,
 spread over several Windows virtual desktops. The premise is that *finding the
 window* is a symptom, not the problem: if you can dispatch without visiting a
@@ -71,7 +68,7 @@ Hook paths point into this checkout, so if you move it, run the setup again.
 ## The window
 
 ```
-python -m ccontrol.window      # chromeless, via Edge --app=
+python -m imperatorium.window      # chromeless, via Edge --app=
 http://127.0.0.1:8792/         # or just open it
 ```
 
@@ -117,9 +114,9 @@ commands and Monitors still running, the shell processes under it, whether
 its prompt cache is still warm and for how long, context, cost and token
 totals, model, permission mode, prompts and turns, age, compactions and
 branch. Background work and the cache come from the session's transcript
-(`ccontrol/sessionstat.py`, read incrementally), context from the
+(`imperatorium/sessionstat.py`, read incrementally), context from the
 statusline, and cost and tokens from the transcripts: the whole session,
-subagents included, estimated at API list prices (`ccontrol/costs.py`).
+subagents included, estimated at API list prices (`imperatorium/costs.py`).
 
 Spend comes in two parts, both read from the transcripts, so a restart loses
 neither. **Global** is everything sent from this machine in the account's
@@ -239,7 +236,7 @@ one status tile: the usage meters and model mix, what the open sessions
 have cost and how many tokens they have used over their whole lives, this
 machine's spend in each of the account's windows, and each session's
 share. The
-condensing is done by the dispatcher (`ccontrol/matrix.py`, `GET
+condensing is done by the dispatcher (`imperatorium/matrix.py`, `GET
 /api/matrix`), so the page polls one small answer.
 
 **Keys:** j/k move through the session list, n (or alt+N from anywhere)
@@ -319,7 +316,7 @@ python impctl.py test                      # every suite, through the venv if th
 The pieces underneath, run directly:
 
 ```
-python -m ccontrol.dispatcher              # http://127.0.0.1:8792
+python -m imperatorium.dispatcher              # http://127.0.0.1:8792
 python hooks/install.py --dry-run          # show what would change
 python hooks/install.py                    # install the hooks (backs up first)
 python hooks/install.py --statusline       # + usage meter data (context, 5h/7d limits)
@@ -337,16 +334,17 @@ python test_costs.py                               # cost history
 python test_settings.py && python test_quick.py    # Settings window, quick phrases
 python test_closing.py && python test_slash.py     # closing a session, typed commands
 python test_matrix.py && python test_taskout.py    # Chat Matrix, task output
-# 936 tests in total
+python test_rename.py                              # installs from before the rename
+# 979 tests in total
 ```
 
 Individual pieces are runnable on their own, which is usually the fastest way
 to see what is wrong:
 
 ```
-python -m ccontrol.registry                            # what is running
-python -m ccontrol.projects "project: gem trip, fix it" # what would it match
-python -m ccontrol.deeplink Y:/projects-software/gem-trip "fix it"
+python -m imperatorium.registry                            # what is running
+python -m imperatorium.projects "project: gem trip, fix it" # what would it match
+python -m imperatorium.deeplink Y:/projects-software/gem-trip "fix it"
 ```
 
 ## HTTP surface
@@ -574,34 +572,34 @@ The parts of the window itself are named in
 the UI.
 
 ```
-ccontrol/registry.py    who is running, from `claude agents --json`
-ccontrol/procs.py       is an idle session still waiting on a shell it started
-ccontrol/projects.py    the catalogue, and turning speech into a project
-ccontrol/inbox.py       the named-pipe client
-ccontrol/deeplink.py    claude-cli://open URLs
-ccontrol/background.py  handing work to `claude --bg`
-ccontrol/voice.py       dictation, on the local GPU, in a child process
-ccontrol/remote.py      sessions on other machines: polling, injection, tunnels, reading
-ccontrol/store.py       tokens and events that outlive a restart
-ccontrol/dispatcher.py  the HTTP server and the routing decisions
-ccontrol/ui.py          the window: sidebar, conversation, prompt
-ccontrol/fonts/         Atkinson Hyperlegible Next and Mono, served to the window
-ccontrol/matrix.py      the Chat Matrix: replies and the step in flight, and spend
-ccontrol/closing.py     ending a session cleanly, so its terminal tab closes
-ccontrol/conversation.py  session messages, ready to render
-ccontrol/convcache.py   parsed conversations, reread only when a transcript changes
-ccontrol/sessionstat.py background work, prompt cache and tokens, from the transcript
-ccontrol/taskout.py     what awaited shells, Monitors and subagents have written
-ccontrol/window.py      opening it chromeless
-ccontrol/policy.py      what may be auto-approved, and what may not
-ccontrol/winfocus.py    raising a session's window, by process id
-ccontrol/changes.py     git status/diff, and background-session worktrees
-ccontrol/activity.py    tool-call timelines, "doing" lines, failure tallies
-ccontrol/history.py     searching past sessions; resume and fork
-ccontrol/usage.py       statusline readings, rate-limit pace, thresholds
-ccontrol/costs.py       estimated cost history from transcripts, at list prices
-ccontrol/prs.py         the PR for a session's branch, off the request path
-ccontrol/notify.py      ntfy pushes and spoken alerts (both off by default)
+imperatorium/registry.py    who is running, from `claude agents --json`
+imperatorium/procs.py       is an idle session still waiting on a shell it started
+imperatorium/projects.py    the catalogue, and turning speech into a project
+imperatorium/inbox.py       the named-pipe client
+imperatorium/deeplink.py    claude-cli://open URLs
+imperatorium/background.py  handing work to `claude --bg`
+imperatorium/voice.py       dictation, on the local GPU, in a child process
+imperatorium/remote.py      sessions on other machines: polling, injection, tunnels, reading
+imperatorium/store.py       tokens and events that outlive a restart
+imperatorium/dispatcher.py  the HTTP server and the routing decisions
+imperatorium/ui.py          the window: sidebar, conversation, prompt
+imperatorium/fonts/         Atkinson Hyperlegible Next and Mono, served to the window
+imperatorium/matrix.py      the Chat Matrix: replies and the step in flight, and spend
+imperatorium/closing.py     ending a session cleanly, so its terminal tab closes
+imperatorium/conversation.py  session messages, ready to render
+imperatorium/convcache.py   parsed conversations, reread only when a transcript changes
+imperatorium/sessionstat.py background work, prompt cache and tokens, from the transcript
+imperatorium/taskout.py     what awaited shells, Monitors and subagents have written
+imperatorium/window.py      opening it chromeless
+imperatorium/policy.py      what may be auto-approved, and what may not
+imperatorium/winfocus.py    raising a session's window, by process id
+imperatorium/changes.py     git status/diff, and background-session worktrees
+imperatorium/activity.py    tool-call timelines, "doing" lines, failure tallies
+imperatorium/history.py     searching past sessions; resume and fork
+imperatorium/usage.py       statusline readings, rate-limit pace, thresholds
+imperatorium/costs.py       estimated cost history from transcripts, at list prices
+imperatorium/prs.py         the PR for a session's branch, off the request path
+imperatorium/notify.py      ntfy pushes and spoken alerts (both off by default)
 setup_machine.py        installing on a new machine; check; uninstall;
                         onboarding other machines; the service
 bootstrap.ps1/.sh       from nothing: prerequisites, clone, setup
@@ -617,8 +615,8 @@ service/tasks.ps1       Windows scheduled tasks that keep all three up
 hooks/                  the hook, and an installer for user settings
 ```
 
-Runtime state lives in `%LOCALAPPDATA%\ccontrol\state.json` on Windows
-(`$XDG_STATE_HOME/ccontrol`, or `~/.local/state/ccontrol`, elsewhere), not
+Runtime state lives in `%LOCALAPPDATA%\imperatorium\state.json` on Windows
+(`$XDG_STATE_HOME/imperatorium`, or `~/.local/state/imperatorium`, elsewhere), not
 beside the source: a checkout on a mapped network drive is common, and
 Windows refuses an atomic rename-over on SMB often enough to matter for a
 file holding tokens.
@@ -631,8 +629,8 @@ daemon and no open port - just a key you already use. Their sessions appear on
 the board tagged with the host.
 
 ```
-python -m ccontrol.remote                  # probe the configured hosts
-python -m ccontrol.remote somehost         # probe one by name
+python -m imperatorium.remote                  # probe the configured hosts
+python -m imperatorium.remote somehost         # probe one by name
 ```
 
 The same SSH call reads the host's `~/.claude/sessions/*.json`, which is where
@@ -657,7 +655,7 @@ repeat:
    old it offers Anthropic's installer (`--install-claude` to skip the
    question). Log in once on the host afterwards.
 3. **python3** there, which the hooks and prompt delivery use.
-4. **The conversation reader** - the Agent SDK in `~/.claude/ccontrol/venv`,
+4. **The conversation reader** - the Agent SDK in `~/.claude/imperatorium/venv`,
    ~300MB, so the window can show that host's conversations. `--no-reader`
    skips it.
 5. **The reporting hooks**, in the host's `~/.claude/settings.json` (backed
@@ -700,7 +698,7 @@ is. The dispatcher keeps one SSH channel per host open and sends it this
 project's own `conversation.py`, so a remote pane is built by exactly the same
 code as a local one. The host needs the Agent SDK in a venv, which
 `remote add` installs (the interpreter is `reader_python` in `config.json`,
-default `$HOME/.claude/ccontrol/venv/bin/python`).
+default `$HOME/.claude/imperatorium/venv/bin/python`).
 
 A new connection per 1.5s poll would pay the SSH connect and the SDK's
 one-off first read (~1s on a Pi) every time; on a kept channel a read is
@@ -751,7 +749,7 @@ reason to let Claude read one.
 Configure in `policy.json`; `"enabled": false` turns it off without touching
 hooks. Per-project keys are `auto_edit`, `allow_reads_outside_cwd`,
 `safe_bash` and `never_auto_approve`, and the most specific matching project
-path wins. Every verdict lands in `%LOCALAPPDATA%\ccontrol\decisions.jsonl`
+path wins. Every verdict lands in `%LOCALAPPDATA%\imperatorium\decisions.jsonl`
 and on the board, so it is never a black box.
 
 The hook does no network I/O at all - it is on the critical path of every
@@ -772,12 +770,35 @@ the Stream Deck's decision keys reach the session (with `park.enabled`).
 install|uninstall|restart|status` does it again on its own.
 
 - **Windows:** three scheduled tasks, per-user, no elevation - the
-  dispatcher, the Stream Deck and the hotkey (`CentralControl*`).
-- **Linux:** systemd user units, `ccontrol-dispatcher.service` (and
-  `ccontrol-streamdeck.service`), `Restart=always`. A user unit stops at
+  dispatcher, the Stream Deck and the hotkey (`Imperatorium*`).
+- **Linux:** systemd user units, `imperatorium-dispatcher.service` (and
+  `imperatorium-streamdeck.service`), `Restart=always`. A user unit stops at
   logout unless you run `loginctl enable-linger $USER`.
-- **macOS:** launchd agents, `local.ccontrol.dispatcher` (and
-  `.streamdeck`), `KeepAlive`, logging to `~/Library/Logs/ccontrol-*.log`.
+- **macOS:** launchd agents, `local.imperatorium.dispatcher` (and
+  `.streamdeck`), `KeepAlive`, logging to `~/Library/Logs/imperatorium-*.log`.
+
+### Installed before 2026-10-20
+
+Until then everything internal was called `ccontrol` ("Central Control"):
+the package, the tasks (`CentralControl*`), the units (`ccontrol-*`,
+`local.ccontrol.*`), the state folder and `~/.claude/ccontrol` on remote
+hosts. What happens to an install from then:
+
+- **Service:** `setup_machine.py service install` (or `tasks.ps1 -Action
+  install`) removes the old tasks or units and registers the new ones. Do
+  this first - an old task starts `-m ccontrol.dispatcher`, which no longer
+  exists.
+- **State folder:** the dispatcher moves `ccontrol` to `imperatorium` the
+  first time it starts with the port bound; until then the permission hook
+  keeps writing beside the old one.
+- **Hooks:** entries stamped `ccontrol` in `~/.claude/settings.json` keep
+  working and are recognised as ours; `python hooks/install.py` restamps them.
+- **Remote hosts:** the reader in `~/.claude/ccontrol` is still used;
+  `setup_machine.py remote add HOST` moves it and re-points the hooks.
+- **Browser state** (folds, drafts, what was seen) carries over on the first
+  load.
+- **Environment variables** are now `IMPERATORIUM_*`; the old `CCONTROL_*`
+  names are not read.
 
 The Windows tasks can also be driven directly:
 
@@ -811,5 +832,5 @@ surveyed and rejected, and why.
 
 ## License
 
-MIT - see [LICENSE](LICENSE). The bundled fonts in `ccontrol/fonts/` are Atkinson Hyperlegible
+MIT - see [LICENSE](LICENSE). The bundled fonts in `imperatorium/fonts/` are Atkinson Hyperlegible
 Next and Mono, under the SIL Open Font License 1.1 (licence files alongside them).

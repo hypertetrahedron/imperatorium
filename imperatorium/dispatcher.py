@@ -38,19 +38,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(HERE)
 
 
+def _state_dirs():
+    base = (
+        os.environ.get("LOCALAPPDATA")
+        or os.environ.get("XDG_STATE_HOME")
+        or os.path.join(os.path.expanduser("~"), ".local", "state")
+    )
+    return os.path.join(base, "imperatorium"), os.path.join(base, "ccontrol")
+
+
 def default_state_path():
     """Runtime state lives on local disk, never beside the source.
 
     The project itself sits on a mapped network drive here, and Windows
     refuses an atomic rename-over on SMB often enough to matter for a file
     that holds session tokens.
+
+    Before 2026-10-20 the folder was `ccontrol`; until `migrate_state_dir`
+    has moved it, that folder is the one in use, as the permission hook
+    also decides.
     """
-    base = (
-        os.environ.get("LOCALAPPDATA")
-        or os.environ.get("XDG_STATE_HOME")
-        or os.path.join(os.path.expanduser("~"), ".local", "state")
-    )
-    return os.path.join(base, "ccontrol", "state.json")
+    new, old = _state_dirs()
+    use = old if not os.path.exists(new) and os.path.isdir(old) else new
+    return os.path.join(use, "state.json")
+
+
+def migrate_state_dir():
+    """Move a `ccontrol` state folder to its new name. Only `serve` calls
+    it, once the port is bound - never an import, a test, or a second
+    dispatcher that would pull the folder out from under the running one.
+    A folder that cannot move (a file in it held open) stays in use."""
+    new, old = _state_dirs()
+    if not os.path.exists(new) and os.path.isdir(old):
+        try:
+            os.rename(old, new)
+        except OSError:
+            pass
 
 
 STATE_PATH = default_state_path()
@@ -69,7 +92,8 @@ INTERESTING = {
 
 # Not a hook: what `hooks/cc_statusline.py` labels the statusline JSON it
 # forwards, so it can share the `/hook` route (and a remote host's tunnel).
-STATUSLINE = "ccontrol_statusline"
+STATUSLINE = "imperatorium_statusline"
+LEGACY_STATUSLINE = "ccontrol_statusline"  # a statusline script from before the rename
 
 # Notification types that mean a human is the blocker.
 ATTENTION_NOTIFICATIONS = {
@@ -790,7 +814,7 @@ class Control:
         """
         event = payload.get("hook_event_name") or "unknown"
         sid = payload.get("session_id")
-        if sid and event == STATUSLINE:
+        if sid and event in (STATUSLINE, LEGACY_STATUSLINE):
             # Several a minute per session: memory only, never the store.
             self.usage.ingest(remote_key(host, sid) if host else sid, payload)
             return {"ok": True}
@@ -1734,7 +1758,7 @@ class Control:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ccontrol"
+    server_version = "imperatorium"
     protocol_version = "HTTP/1.1"
     control = None
 
@@ -2110,7 +2134,7 @@ class HookOnlyHandler(Handler):
             return
         self._send(200, self.control.on_hook(
             payload if isinstance(payload, dict) else {},
-            host=self.server.ccontrol_host))
+            host=self.server.imperatorium_host))
 
 
 class Server(ThreadingHTTPServer):
@@ -2156,7 +2180,7 @@ def start_tunnels(control):
             print("tunnel %s: cannot listen on %d: %s"
                   % (h["name"], cfg["local_port"], exc))
             continue
-        listener.ccontrol_host = h["name"]
+        listener.imperatorium_host = h["name"]
         threading.Thread(target=listener.serve_forever,
                          name="hooks-%s" % h["name"], daemon=True).start()
         control.tunnels[h["name"]] = remote.Tunnel(
@@ -2165,9 +2189,15 @@ def start_tunnels(control):
               % (h["name"], cfg["remote_port"], cfg["local_port"]))
 
 
-def serve(host=HOST, port=PORT, state_path=STATE_PATH, roots=None):
+def serve(host=HOST, port=PORT, state_path=None, roots=None):
     config = load_config()
     roots = roots or [r for r in (config.get("roots") or []) if isinstance(r, str)] or None
+    # The port first: a dispatcher that cannot have it must not touch the
+    # state folder the one holding it is using.
+    srv = Server((host, port), Handler)
+    if state_path is None:
+        migrate_state_dir()
+        state_path = default_state_path()
     Handler.control = Control(
         Store(state_path), roots,
         background_options=config.get("background"),
@@ -2175,8 +2205,7 @@ def serve(host=HOST, port=PORT, state_path=STATE_PATH, roots=None):
         config=config,
     )
     Handler.control.config_path = os.path.join(PROJECT_DIR, "config.json")
-    srv = Server((host, port), Handler)
-    print("ccontrol listening on http://%s:%d" % (host, port))
+    print("imperatorium listening on http://%s:%d" % (host, port))
     start_tunnels(Handler.control)
     # Started only once the port is ours, so a second dispatcher that fails
     # to bind never runs a second set of gh calls or queue deliveries.
@@ -2199,7 +2228,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Imperatorium dispatcher")
     ap.add_argument("--host", default=HOST)
     ap.add_argument("--port", type=int, default=PORT)
-    ap.add_argument("--state", default=STATE_PATH)
+    ap.add_argument("--state", default=None, help="default: %s" % STATE_PATH)
     ap.add_argument("--root", action="append", dest="roots")
     args = ap.parse_args()
     serve(args.host, args.port, args.state, args.roots)

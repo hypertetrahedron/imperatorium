@@ -24,10 +24,10 @@ import unittest
 import urllib.error
 import urllib.request
 
-from ccontrol import activity, background, changes, conversation, dispatcher
-from ccontrol import history, inbox, notify, prs, usage
-from ccontrol import store as store_mod
-from ccontrol.store import Store
+from imperatorium import activity, background, changes, conversation, dispatcher
+from imperatorium import history, inbox, notify, prs, usage
+from imperatorium import store as store_mod
+from imperatorium.store import Store
 from hooks import cc_statusline
 from test_dispatcher import Base, CWD, SID
 
@@ -1069,27 +1069,27 @@ class StatuslineProvider(unittest.TestCase):
 
     def test_the_line_names_the_provider_only_without_windows(self):
         got = cc_statusline.line({"model": {"display_name": "Opus"},
-                                  "ccontrol_provider": "bedrock"})
+                                  "imperatorium_provider": "bedrock"})
         self.assertEqual(got, "Opus · Bedrock")
-        got = cc_statusline.line({"ccontrol_provider": "api",
+        got = cc_statusline.line({"imperatorium_provider": "api",
                                   "rate_limits": {"five_hour": {"used_percentage": 5}}})
         self.assertEqual(got, "5h 5%")
 
 
 class PlanWithoutWindows(unittest.TestCase):
     def test_provider_comes_from_the_script_or_the_model_id(self):
-        self.assertEqual(usage.provider_of({"ccontrol_provider": "vertex"}), "vertex")
+        self.assertEqual(usage.provider_of({"imperatorium_provider": "vertex"}), "vertex")
         for mid in ("us.anthropic.claude-opus-5-5-v1:0", "anthropic.claude-sonnet-5-5-v1:0",
                     "arn:aws:bedrock:us-east-1:123:inference-profile/x"):
             self.assertEqual(usage.provider_of({"model": {"id": mid}}), "bedrock", mid)
         self.assertEqual(usage.provider_of({"model": {"id": "claude-opus-5-5@20260801"}}),
                          "vertex")
         self.assertIsNone(usage.provider_of({"model": {"id": "claude-opus-5-5"}}))
-        self.assertIsNone(usage.provider_of({"ccontrol_provider": "nonsense"}))
+        self.assertIsNone(usage.provider_of({"imperatorium_provider": "nonsense"}))
 
     def test_all_bedrock_sessions_name_bedrock_in_place_of_meters(self):
         u = usage.Usage(account=lambda: None)
-        u.ingest("s1", {"ccontrol_provider": "bedrock"}, now=1.0)
+        u.ingest("s1", {"imperatorium_provider": "bedrock"}, now=1.0)
         self.assertEqual(u.summary(now=2.0)["plan"],
                          {"label": "AWS Bedrock", "providers": ["bedrock"],
                           "alongside": False})
@@ -1105,7 +1105,7 @@ class PlanWithoutWindows(unittest.TestCase):
         self.assertEqual(u.summary(now=2.0)["plan"]["label"], "Claude Enterprise")
         # Every session on Bedrock: the login does not apply to them.
         u = usage.Usage(account=lambda: "Claude Enterprise")
-        u.ingest("s1", {"ccontrol_provider": "bedrock"}, now=1.0)
+        u.ingest("s1", {"imperatorium_provider": "bedrock"}, now=1.0)
         self.assertEqual(u.summary(now=2.0)["plan"]["label"], "AWS Bedrock")
 
     def test_beside_real_windows_only_the_uncovered_providers_are_named(self):
@@ -1113,14 +1113,14 @@ class PlanWithoutWindows(unittest.TestCase):
         u.ingest("s1", {"rate_limits": {"five_hour": {"used_percentage": 10,
                                                        "resets_at": 5000}}}, now=1.0)
         self.assertIsNone(u.summary(now=2.0)["plan"])
-        u.ingest("s2", {"ccontrol_provider": "bedrock"}, now=1.5)
+        u.ingest("s2", {"imperatorium_provider": "bedrock"}, now=1.5)
         self.assertEqual(u.summary(now=2.0)["plan"],
                          {"label": "AWS Bedrock", "providers": ["bedrock"],
                           "alongside": True})
 
     def test_a_session_gone_quiet_stops_counting(self):
         u = usage.Usage(account=lambda: None)
-        u.ingest("s1", {"ccontrol_provider": "bedrock"}, now=1.0)
+        u.ingest("s1", {"imperatorium_provider": "bedrock"}, now=1.0)
         self.assertIsNone(u.summary(now=1.0 + usage.PLAN_SPAN + 1)["plan"])
 
     def test_account_plan_reads_only_the_organization_type(self):
@@ -1216,7 +1216,7 @@ class StatuslineIngest(Base):
     def test_a_statusline_event_updates_usage_not_the_event_log(self):
         before = len(self.control.store.events(999))
         out = self.control.on_hook({
-            "hook_event_name": "ccontrol_statusline", "session_id": SID,
+            "hook_event_name": "imperatorium_statusline", "session_id": SID,
             "context_window": {"used_percentage": 55},
             "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": 1}},
         })

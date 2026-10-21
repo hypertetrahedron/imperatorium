@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import unittest
 
-from ccontrol import sessionstat
+from imperatorium import sessionstat
 
 T0 = "2026-10-14T10:00:00.000Z"
 AT0 = 1791972000.0  # T0 as Unix seconds
@@ -195,7 +195,7 @@ class ReaderTests(unittest.TestCase):
 
 class StatuslineExtras(unittest.TestCase):
     def test_durations_and_lines_are_kept_when_sent(self):
-        from ccontrol import usage
+        from imperatorium import usage
         got = usage.reading({"cost": {"total_cost_usd": 1.5, "total_duration_ms": 9000,
                                       "total_api_duration_ms": 4000,
                                       "total_lines_added": 12, "total_lines_removed": 3}})

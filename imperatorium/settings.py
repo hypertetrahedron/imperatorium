@@ -138,7 +138,7 @@ FIELDS = [
          applies=DISPATCHER, help="A language code such as en or de."),
     dict(key="voice.input_device", section="voice", label="Microphone", type="optint", min=0,
          max=999, default=None, applies=DISPATCHER,
-         help="An index from `python -m ccontrol.voice`. Blank for the system default."),
+         help="An index from `python -m imperatorium.voice`. Blank for the system default."),
     dict(key="voice.preload", section="voice", label="Load at start", type="bool",
          default=_voice_on, applies=DISPATCHER,
          help="Faster first dictation, at the cost of about 2 GB of VRAM held."),

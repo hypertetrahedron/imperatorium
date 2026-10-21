@@ -37,9 +37,12 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $ProjectDir = Split-Path -Parent $PSScriptRoot
-$DispatcherTask = 'CentralControlDispatcher'
-$StreamDeckTask = 'CentralControlStreamDeck'
-$PaletteTask = 'CentralControlHotkey'
+$DispatcherTask = 'ImperatoriumDispatcher'
+$StreamDeckTask = 'ImperatoriumStreamDeck'
+$PaletteTask = 'ImperatoriumHotkey'
+# The names before 2026-10-20. Install and uninstall remove them, so a
+# machine set up before the rename does not keep a second, stale set.
+$LegacyTasks = @('CentralControlDispatcher', 'CentralControlStreamDeck', 'CentralControlHotkey')
 
 $SystemPythonW = if ($PythonW) { $PythonW } else {
     Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\pythonw.exe'
@@ -119,7 +122,7 @@ function Stop-Existing {
     # python.exe too, not just pythonw: a palette started by hand from a
     # terminal holds the global hotkey against the one the task starts.
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' or Name='python.exe'" |
-        Where-Object { $_.CommandLine -match 'ccontrol\.dispatcher|streamdeck_surface|hotkey\.py|palette\.py' } |
+        Where-Object { $_.CommandLine -match '(imperatorium|ccontrol)\.dispatcher|streamdeck_surface|hotkey\.py|palette\.py' } |
         ForEach-Object {
             Write-Host ("stopping stray pid {0}" -f $_.ProcessId)
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
@@ -151,10 +154,11 @@ switch ($Action) {
         # window in which the still-registered task's one-minute heartbeat
         # restarts the very process that was just killed, and the reinstall
         # ends with two of them.
-        foreach ($name in @($DispatcherTask, $StreamDeckTask, $PaletteTask)) {
+        foreach ($name in @($DispatcherTask, $StreamDeckTask, $PaletteTask) + $LegacyTasks) {
             if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
                 Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
                 Unregister-ScheduledTask -TaskName $name -Confirm:$false
+                if ($LegacyTasks -contains $name) { Write-Host ("removed old {0}" -f $name) }
             }
         }
         Stop-Existing
@@ -164,7 +168,7 @@ switch ($Action) {
         $dispatcherExe = if (Test-Path $VenvPythonW) { $VenvPythonW }
                          else { Resolve-Interpreter $SystemPythonW 'dispatcher' }
         New-CcTask -Name $DispatcherTask -Exe $dispatcherExe `
-            -Arguments '-m ccontrol.dispatcher'
+            -Arguments '-m imperatorium.dispatcher'
         if (-not $NoStreamDeck) {
             if (Test-Path $VenvPythonW) {
                 New-CcTask -Name $StreamDeckTask -Exe $VenvPythonW `
@@ -188,7 +192,7 @@ switch ($Action) {
         Show-Status
     }
     'uninstall' {
-        foreach ($name in @($DispatcherTask, $StreamDeckTask, $PaletteTask)) {
+        foreach ($name in @($DispatcherTask, $StreamDeckTask, $PaletteTask) + $LegacyTasks) {
             if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
                 Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
                 Unregister-ScheduledTask -TaskName $name -Confirm:$false
