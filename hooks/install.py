@@ -136,6 +136,8 @@ def permission_timeout():
         park = {}
     if not park.get("enabled"):
         return 8
+    # A question's wait is capped at the longer of these two by the hook
+    # itself, so it never needs a longer timeout than they do.
     longest = max(float(park.get("wait_seconds") or 0),
                   float(park.get("background_wait_seconds") or 0))
     return int(longest) + 20

@@ -382,6 +382,8 @@ select.tiny{background:var(--panel);color:var(--muted);border:1px solid var(--li
 .badge.ctx-hi{color:var(--warn);border-color:var(--warn)}
 .work{font-variant-numeric:tabular-nums}
 .work.cache{color:var(--ok)}
+.work.wake{color:var(--done)}
+.badge.work.wake{border-color:var(--done)}
 .work.busy{color:var(--busy)}
 #status .hd .work+.work{margin-left:6px}
 .badge.work.cache{border-color:var(--ok)}
@@ -466,6 +468,19 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
   font-size:13px}
 #decide .dq{display:flex;gap:8px;align-items:center;margin:3px 0}
 #decide .dq span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#decide .dqq{display:block;margin:4px 0 8px}
+#decide .qq{margin:6px 0}
+#decide .qt{font-weight:600;margin-bottom:4px}
+#decide .qt .chip{font-weight:400;font-size:12px;color:var(--muted);border:1px solid var(--line);
+  border-radius:9px;padding:0 6px;margin-right:6px}
+#decide .qo{display:flex;flex-direction:column;gap:3px;max-width:44em}
+#decide .qo button{background:var(--panel);color:var(--ink);border:1px solid var(--line);
+  text-align:left;padding:4px 9px;font-size:12.5px}
+#decide .qo button.on{border-color:var(--busy);box-shadow:inset 3px 0 0 var(--busy)}
+#decide .qo button small{color:var(--muted);margin-left:6px}
+#decide .qo input{padding:4px 8px;font-size:12.5px;border:1px solid var(--line);border-radius:5px;
+  background:var(--panel);color:var(--ink)}
+#decide .qa{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
 
 /* -- unread, warnings, jump palette, find, review, cost chart ------------ */
 .badge.new{color:var(--busy);border-color:var(--busy);font-weight:600}
@@ -1054,12 +1069,19 @@ const WT_ICON = `<svg class="app" viewBox="0 0 11 13" aria-label="worktree"><tit
 // expires. A closed tile shows it only in the last CACHE_SOON seconds, when
 // it is worth acting on; `all` (the open tile) shows it whenever it is warm.
 // Nothing once it has expired - the cold-cache badge says that instead.
+// A session that scheduled its own next turn (ScheduleWakeup, CronCreate)
+// says when, on every tile: it is idle but not waiting for you.
 const CACHE_SOON = 600;
 function workParts(w, now, all){
   if (!w) return [];
+  const out = [];
+  const wake = w.alive && w.wakes_at ? w.wakes_at - now : 0;
+  if (wake > 0) out.push({text: "wakes " + span(wake), cls: "wake",
+    title: `it scheduled its own next turn, in ${span(wake)} (${w.wakeups || 1} pending)`});
   const left = w.cache_expires_at ? w.cache_expires_at - now : 0;
-  return left > 0 && (all || left <= CACHE_SOON) ? [{text: "-" + Math.ceil(left / 60), cls: "cache",
-    title: `prompt cache expires in ${Math.ceil(left / 60)} min; a prompt after that re-sends the whole context`}] : [];
+  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "-" + Math.ceil(left / 60), cls: "cache",
+    title: `prompt cache expires in ${Math.ceil(left / 60)} min; a prompt after that re-sends the whole context`});
+  return out;
 }
 const workHtml = (w, now, cls, all) => workParts(w, now, all).map(p =>
   `<span class="${cls} ${p.cls}" title="${esc(p.title)}">${esc(p.text)}</span>`).join("");
@@ -1589,12 +1611,15 @@ function statusHtml(s, d, now, folded){
   };
   const since = s.attention_since || s.status_changed_at;
   cell("state", label + (since ? " · " + age(since) : ""), s.attention_reason || s.doing || "");
-  const ag = st.agents || [], sh = st.shells || [], mo = st.monitors || [];
+  const ag = st.agents || [], sh = st.shells || [], mo = st.monitors || [], wk = st.wakeups || [];
   if (have){
     cell("subagents", String(ag.length), ag.map(a => a.label).join("\n"), ag.length ? "hot" : "");
     cell("shells", String(sh.length), "commands it put in the background and has not seen finish\n" +
       sh.map(x => x.label).join("\n"), sh.length ? "hot" : "");
     cell("monitors", String(mo.length), mo.map(m => m.label).join("\n"), mo.length ? "hot" : "");
+    if (wk.length)
+      cell("wakeups", String(wk.length), "turns it scheduled for itself (ScheduleWakeup, CronCreate)\n" +
+        wk.map(x => x.label).join("\n"), "hot");
     if (d.shell_processes != null)
       cell("processes", String(d.shell_processes), "shell processes running under its claude " +
         "process - commands and monitors alike, read from the process tree",
@@ -1603,6 +1628,7 @@ function statusHtml(s, d, now, folded){
   if (ag.length) sum.push(plural(ag.length, "subagent"));
   if (sh.length) sum.push(plural(sh.length, "shell"));
   if (mo.length) sum.push(plural(mo.length, "monitor"));
+  if (wk.length) sum.push(plural(wk.length, "wakeup"));
   const c = st.cache;
   if (c && c.expires_at){
     const left = c.expires_at - now;
@@ -2232,14 +2258,69 @@ async function drawPending(){
   if (sig === pendingSig) return;
   pendingSig = sig;
   $("#decide").hidden = !items.length;
-  $("#decide").innerHTML = items.map(i => `<div class="dq"><span title="${esc(i.input)}"><b>${
+  $("#decide").innerHTML = items.map(i => i.questions ? questionHtml(i) : `<div class="dq"><span title="${esc(i.input)}"><b>${
     esc(folder(i.cwd))}</b> wants ${esc(i.tool)}: ${esc(i.input)}${i.reason ? " - " + esc(i.reason) : ""}</span>
     <button class="sm" data-dv="allow" data-di="${esc(i.id)}">Allow</button>
     <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}">Deny</button></div>`).join("");
   document.querySelectorAll("[data-dv]").forEach(b => b.onclick = async () => {
-    const r = await post("/api/decide", {id: b.dataset.di, verdict: b.dataset.dv, who: "window"});
-    $("#say").textContent = r.ok ? b.dataset.dv + " sent" : "too late - it already expired";
+    const card = b.closest(".dqq");
+    const body = {id: b.dataset.di, verdict: b.dataset.dv, who: "window"};
+    if (card && b.dataset.dv === "allow") body.answers = questionAnswers(card);
+    const r = await post("/api/decide", body);
+    const done = card ? {allow: "answer sent", pass: "left to the terminal", deny: "declined"}[b.dataset.dv]
+      : b.dataset.dv + " sent";
+    $("#say").textContent = r.ok ? done : "too late - it already expired";
     pendingSig = ""; drawPending();
+  });
+  document.querySelectorAll("#decide .dqq").forEach(wireQuestion);
+}
+
+// An AskUserQuestion parked by the permission hook: the same choices the
+// terminal's dialog offers, answered here instead. "Other" is free text, as
+// in the terminal; a multi-select answer is its labels joined with ", ".
+function questionHtml(i){
+  const qs = i.questions.map((q, k) => `<div class="qq" data-k="${k}" data-multi="${q.multiSelect ? 1 : ""}"
+      data-q="${esc(q.question)}">
+    <div class="qt">${q.header ? `<span class="chip">${esc(q.header)}</span>` : ""}${esc(q.question)}${
+      q.multiSelect ? ` <small>(choose any)</small>` : ""}</div>
+    <div class="qo">${q.options.map(o => `<button type="button" data-opt="${esc(o.label)}">${
+      esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ""}</button>`).join("")}
+      <input type="text" class="qother" placeholder="Other - type your own answer" aria-label="Other answer"></div></div>`).join("");
+  return `<div class="dq dqq" data-di="${esc(i.id)}"><div><b>${esc(folder(i.cwd))}</b> is asking you${
+    i.questions.length > 1 ? " " + i.questions.length + " questions" : ""}:</div>${qs}
+    <div class="qa"><button class="sm" data-dv="allow" data-di="${esc(i.id)}" disabled>Submit answer</button>
+    <button class="sm ghost" data-dv="pass" data-di="${esc(i.id)}" title="Show the question at the session's terminal now">Answer in terminal</button>
+    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}" title="Tell Claude you declined to answer">Decline</button></div></div>`;
+}
+
+function questionAnswers(card){
+  const out = {};
+  card.querySelectorAll(".qq").forEach(qq => {
+    const picked = [...qq.querySelectorAll("button.on")].map(b => b.dataset.opt);
+    const other = qq.querySelector(".qother").value.trim();
+    if (other) picked.push(other);
+    if (picked.length) out[qq.dataset.q] = picked.join(", ");
+  });
+  return out;
+}
+
+function wireQuestion(card){
+  const submit = card.querySelector('[data-dv="allow"]');
+  const check = () => {
+    submit.disabled = Object.keys(questionAnswers(card)).length < card.querySelectorAll(".qq").length;
+  };
+  card.querySelectorAll(".qq").forEach(qq => {
+    const multi = !!qq.dataset.multi, other = qq.querySelector(".qother");
+    qq.querySelectorAll("button[data-opt]").forEach(b => b.onclick = () => {
+      if (!multi) { qq.querySelectorAll("button.on").forEach(x => x !== b && x.classList.remove("on")); other.value = ""; }
+      b.classList.toggle("on");
+      check();
+    });
+    other.oninput = () => {
+      if (!multi && other.value.trim()) qq.querySelectorAll("button.on").forEach(x => x.classList.remove("on"));
+      check();
+    };
+    other.onkeydown = e => { if (e.key === "Enter" && !submit.disabled) submit.click(); };
   });
 }
 
@@ -2802,16 +2883,19 @@ function drawProjects(){
       <small>${esc(p.path)}</small></div>`).join("") ||
     `<div class="note">no match</div>`;
   document.querySelectorAll(".p").forEach((el,i) => {
-    el.onclick = () => { psel = i; startProject(el.dataset.n); };
+    el.onclick = () => { psel = i; startProject(hit[i]); };
   });
   return hit;
 }
 
-async function startProject(name){
+// By path, not name: two folders can share a name (bookoferrantpages on Y:
+// and on C:), and a name resolves to whichever the catalogue lists first.
+async function startProject(p){
   const text = $("#prompt").value.trim();
-  $("#say").textContent = "starting " + name + "\u2026";
+  $("#say").textContent = "starting " + p.name + "\u2026";
   const r = await post("/api/dispatch", {
-    project: name, prompt: text || "Ready when you are.", confirm: true,
+    project: p.name, path: p.path, host: p.host || null,
+    prompt: text || "Ready when you are.", confirm: true,
     mode: text ? "auto" : "launch"
   });
   $("#say").textContent = r.ok ? outcome(r) : (r.error || "refused");
@@ -2892,7 +2976,7 @@ $("#find").addEventListener("keydown", e => {
   const hit = drawProjects();
   if (e.key === "ArrowDown"){ e.preventDefault(); psel = Math.min(psel+1, hit.length-1); drawProjects(); }
   else if (e.key === "ArrowUp"){ e.preventDefault(); psel = Math.max(psel-1, 0); drawProjects(); }
-  else if (e.key === "Enter"){ e.preventDefault(); if (hit[psel]) startProject(hit[psel].name); }
+  else if (e.key === "Enter"){ e.preventDefault(); if (hit[psel]) startProject(hit[psel]); }
   else if (e.key === "Escape"){ e.preventDefault(); togglePicker(false); }
 });
 
@@ -3461,9 +3545,11 @@ function draw(){
   const grid = $("#grid");
   const W = innerWidth - 2 * EDGE, H = innerHeight - 2 * EDGE;
   const tiles = data.tiles || [];
+  // With the status tile always shown, it is laid out as one more tile.
+  const always = data.status_always !== false;
   // The ratio picks the grid; then the tiles grow to fill the window, giving
   // up the ratio rather than leaving bands of empty space around it.
-  const L = layout(tiles.length, W, H);
+  const L = layout(tiles.length + (always ? 1 : 0), W, H);
   const cw = Math.max(0, (W - GAP * (L.cols - 1)) / L.cols);
   const rh = Math.max(0, (H - GAP * (L.rows - 1)) / L.rows);
   Object.assign(grid.style, {
@@ -3499,8 +3585,9 @@ function draw(){
   keep.forEach(el => el.remove());
 
   // The empty cells at the end become one status tile; none when the grid is
-  // full. With no sessions at all, the status tile is the whole matrix.
-  const span = tiles.length ? L.spare : 1;
+  // full, unless it is always shown, when it has its own cell as well. With
+  // no sessions at all, the status tile is the whole matrix.
+  const span = !tiles.length ? 1 : L.spare + (always ? 1 : 0);
   let st = grid.querySelector(".tile.stat");
   if (span){
     if (!st){ st = document.createElement("div"); st.className = "tile stat"; }

@@ -260,6 +260,11 @@ class Method(Base):
         self.assertEqual(got["tiles"], [])
         self.assertEqual(got["spend"]["sessions"], 0)
 
+    def test_the_status_tile_is_always_shown_unless_turned_off(self):
+        self.assertTrue(self.control.matrix()["status_always"])
+        self.control.matrix_status = False
+        self.assertFalse(self.control.matrix()["status_always"])
+
 
 if __name__ == "__main__":
     unittest.main()

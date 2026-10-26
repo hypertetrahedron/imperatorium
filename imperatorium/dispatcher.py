@@ -170,6 +170,7 @@ class Control:
         self.quick = {"key": settingsmod.value(config, settingsmod.BY_KEY["quick.key"]),
                       "phrases": settingsmod.value(config, settingsmod.BY_KEY["quick.phrases"])}
         self.cold_cache_tokens = settingsmod.value(config, settingsmod.BY_KEY["chat.cold_cache_tokens"])
+        self.matrix_status = settingsmod.value(config, settingsmod.BY_KEY["chat.matrix_status"])
 
         budget = config.get("budget") or {}
         self.notifier = notify.Notifier(config, still_waiting=self._still_waiting)
@@ -329,8 +330,12 @@ class Control:
                                                      cache.get("ttl")),
                "alive": alive}
         if alive:
-            for name in ("agents", "shells", "monitors"):
+            for name in ("agents", "shells", "monitors", "wakeups"):
                 out[name] = len(stat.get(name) or [])
+            # When the session next takes a turn of its own accord, so the
+            # tile can say so rather than "waiting for you".
+            fires = [w.get("fires_at") for w in stat.get("wakeups") or () if w.get("fires_at")]
+            out["wakes_at"] = min(fires) if fires else None
             out["processes"] = row.get("shell_processes") or 0
         return out
 
@@ -513,7 +518,10 @@ class Control:
         spend["global"] = spent["global"]
         spend["models"] = spent["current"]["models"]
         spend["complete"] = spent.get("complete", True)
-        return {"tiles": tiles, "now": now, "spend": spend}
+        # Whether the status tile always gets a cell (the Settings window's
+        # chat.matrix_status), or only the ones the sessions leave empty.
+        return {"tiles": tiles, "now": now, "spend": spend,
+                "status_always": bool(self.matrix_status)}
 
     def transcribe(self, audio_bytes, hint=None):
         """Browser-recorded audio to text, in the dictation process.
@@ -592,6 +600,20 @@ class Control:
                 "host": row["host"],
             })
         return found
+
+    def _exact_project(self, path, host=None):
+        """The catalogue entry at `path` on `host`, as a certain resolve()."""
+        def same(a, b):
+            # A remote path is the host's, so it is compared as written.
+            if host:
+                return a == b
+            return (os.path.normcase(os.path.abspath(a)) ==
+                    os.path.normcase(os.path.abspath(b)))
+        for proj in self.catalogue():
+            if (proj.get("host") or None) == (host or None) and same(proj["path"], path):
+                return {"match": proj, "score": 1.0, "confidence": "certain",
+                        "candidates": [proj]}
+        return None
 
     def invalidate(self):
         with self._lock:
@@ -764,6 +786,8 @@ class Control:
         if "chat.cold_cache_tokens" in changes:
             self.cold_cache_tokens = settingsmod.value(
                 config, settingsmod.BY_KEY["chat.cold_cache_tokens"])
+        if "chat.matrix_status" in changes:
+            self.matrix_status = bool(changes["chat.matrix_status"])
         for name in ("key", "phrases"):
             if "quick." + name in changes:
                 self.quick[name] = settingsmod.value(
@@ -955,10 +979,13 @@ class Control:
         row = self._row(key)
         if not row or row.get("status") != "idle":
             return False
-        # Claude Code holds `idle_prompt` back while background work runs.
+        # Claude Code holds `idle_prompt` back while background work runs. A
+        # pending ScheduleWakeup or CronCreate is not work, but the session
+        # will take its next turn by itself, so it is not waiting for you.
         work = row.get("work") or {}
         if (registry.still_running(row, "idle_prompt") or row.get("shell_processes")
-                or work.get("agents") or work.get("shells") or work.get("monitors")):
+                or work.get("agents") or work.get("shells") or work.get("monitors")
+                or work.get("wakeups")):
             return False
         caption = registry.NOTIFICATION_CAPTIONS["idle_prompt"]
         self.store.raise_attention(key, caption, BY_NOTIFICATION,
@@ -981,8 +1008,16 @@ class Control:
         interactive session gets the short wait, because you may well be
         at its terminal; a background session has no terminal, so the
         window or the Stream Deck is the only way to answer it at all.
+
+        A question (AskUserQuestion) takes longer to read and answer than an
+        Allow, so an interactive one gets `wait_question` when the hook sends
+        it; the terminal shows nothing until then, unless the window passes
+        it back first.
         """
         wait = float(payload.get("wait") or 0)
+        if (payload.get("tool_name") == pending.QUESTION_TOOL
+                and payload.get("wait_question") is not None):
+            wait = max(wait, float(payload["wait_question"]))
         wait_bg = payload.get("wait_background")
         if wait_bg is None:
             return wait
@@ -1241,7 +1276,7 @@ class Control:
         alive = isinstance(pid, int) and bool(row.get("status"))
         out["alive"] = alive
         if stat and not alive:
-            for name in ("agents", "shells", "monitors"):
+            for name in ("agents", "shells", "monitors", "wakeups"):
                 stat[name] = []
         if alive:
             out["shell_processes"] = procs.waiting_shells([pid]).get(pid, 0)
@@ -1389,12 +1424,15 @@ class Control:
 
     # -- dispatch --------------------------------------------------------
     def dispatch(self, text=None, project=None, prompt=None, mode="auto",
-                 confirm=False, session_id=None):
+                 confirm=False, session_id=None, path=None, host=None):
         """Route an utterance. mode is auto | inject | launch | background | dry-run.
 
         `session_id` short-circuits project matching: the window has already
         picked a session, so guessing from a name would only add a way to be
-        wrong.
+        wrong. `path` (with `host` for a remote one) does the same for a
+        project the picker chose: two folders can share a name - one
+        bookoferrantpages on Y: and another on C: - and the name alone always
+        resolved to the first.
         """
         if session_id and prompt and mode in ("auto", "inject"):
             row = next((r for r in self.sessions()["sessions"]
@@ -1418,12 +1456,16 @@ class Control:
             project = project or spoken
         if not prompt:
             return {"ok": False, "error": "no prompt"}
-        if not project:
+        if path:
+            res = self._exact_project(path, host)
+            if res is None:
+                return {"ok": False, "error": "no project at %s" % (path,)}
+        elif not project:
             return {"ok": False, "error": "no project named"}
-
-        res = projects.resolve(project, self.catalogue())
+        else:
+            res = projects.resolve(project, self.catalogue())
         out = {
-            "heard_project": project,
+            "heard_project": project or res["match"]["name"],
             "prompt": prompt,
             "confidence": res["confidence"],
             "score": res["score"],
@@ -2027,11 +2069,15 @@ class Handler(BaseHTTPRequestHandler):
             # The hook blocks here. Held open until a human answers or the
             # wait expires; an expiry is a silent "ask", which is what the
             # terminal would have done anyway.
-            verdict, who = c.pending.park(payload, wait=c.park_wait(payload))
-            self._send(200, {"verdict": verdict, "decided_by": who})
+            verdict, who, answers = c.pending.park(payload, wait=c.park_wait(payload))
+            reply = {"verdict": verdict, "decided_by": who}
+            if answers:
+                reply["answers"] = answers
+            self._send(200, reply)
         elif path == "/api/decide":
             ok = c.pending.decide(payload.get("id"), payload.get("verdict"),
-                                  payload.get("who") or "window")
+                                  payload.get("who") or "window",
+                                  answers=payload.get("answers"))
             self._send(200 if ok else 409, {"ok": ok})
         elif path == "/api/typed":
             if not isinstance(payload, dict):
@@ -2056,6 +2102,8 @@ class Handler(BaseHTTPRequestHandler):
                     mode=payload.get("mode", "auto"),
                     confirm=bool(payload.get("confirm")),
                     session_id=payload.get("session_id"),
+                    path=payload.get("path"),
+                    host=payload.get("host"),
                 ),
             )
         else:

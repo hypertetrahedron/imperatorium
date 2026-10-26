@@ -136,7 +136,9 @@ meters are back as soon as the dispatcher restarts.
 Every local tile carries the same at a glance: `-58` is the minutes until
 the prompt cache expires (gone once it has), and `0/2/1/0` counts subagents /
 background shells / monitors / shell processes while the session's process
-lives - anything but zeros means other work is in progress. Hover either for
+lives - anything but zeros means other work is in progress. A session that
+scheduled its own next turn (`/loop`'s `ScheduleWakeup`, or `CronCreate`)
+shows `wakes 20m`: it is idle, but not waiting for you. Hover any of them for
 the long form. The panel's line (the one left when it is folded) says the
 cache the same way, `cache -58m`, and ends with the tile's totals.
 
@@ -235,7 +237,9 @@ why. When the grid has spare cells, they always come at the end and become
 one status tile: the usage meters and model mix, what the open sessions
 have cost and how many tokens they have used over their whole lives, this
 machine's spend in each of the account's windows, and each session's
-share. The
+share. By default the status tile keeps a cell of its own even when the
+sessions fill the grid; Settings > Chat > **Always show cost in the matrix**
+(`chat.matrix_status`) off shows it only in spare cells. The
 condensing is done by the dispatcher (`imperatorium/matrix.py`, `GET
 /api/matrix`), so the page polls one small answer.
 
@@ -277,7 +281,8 @@ Settings window (gear), under Notifications.
   and `agent_needs_input` here the moment they happen, so the board shows what
   is waiting and for how long. Claude Code 2.1.303+ no longer sends
   `idle_prompt`, so the dispatcher raises it itself a minute after `Stop`
-  when the session is idle with nothing running in the background.
+  when the session is idle with nothing running in the background and no
+  self-scheduled wakeup pending.
 - **Reload on restart** - each dispatcher has a random boot id (in the pages
   and in `/api/health`); an open window, Matrix or Settings page that sees it
   change reloads, so it never keeps running the last dispatcher's code.
@@ -763,6 +768,17 @@ is ignored. The documented shape is implemented but switched off, so that
 turning auto-approval on is a choice rather than a side effect of a bug fix.
 The same switch is what lets an answer from the window's Allow/Deny banner or
 the Stream Deck's decision keys reach the session (with `park.enabled`).
+
+**Questions (`AskUserQuestion`)** go through the same hook: Claude Code asks
+it before showing the question dialog, and an `allow` whose `updatedInput`
+carries `answers` is taken as the answers. A parked question shows in the
+window's banner as a card - its options with descriptions, multi-select,
+free-text Other - with **Submit answer**, **Answer in terminal** (hands it
+back at once) and **Decline**. A bare Allow is refused for a question, so the
+Stream Deck and `impctl allow` cannot answer one and the deck does not show
+them. An interactive session's question waits `park.question_wait_seconds`
+(default 120, never longer than the other two waits). Needs the object
+`decision_format`; with the legacy one the terminal asks.
 
 ## Keep it running
 

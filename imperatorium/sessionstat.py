@@ -11,6 +11,10 @@ Claude Code writes, as records rather than prose:
 - each of those ends with a `<task-notification>` whose `<status>` is
   completed, failed, killed or stopped, or with a `TaskStop` result. A
   Monitor also ends when its timeout runs out, which may say nothing;
+- a `ScheduleWakeup` carries `scheduledFor` (ms) and ends when it fires, or
+  with `stopped` from a later call; a `CronCreate` carries `id`, `recurring`
+  and `nextFireAt` (ms) and ends when a one-shot fires or on `CronDelete`.
+  Neither leaves anything running, but the session will carry on by itself;
 - every assistant message carries the API's `usage`, repeated on each
   content block of the same message, so it is counted once per message id.
   `cache_creation` says whether what was written lives 5 minutes or an hour.
@@ -34,6 +38,8 @@ STATUS = re.compile(r"<status>(.*?)</status>")
 SHELL_TOOLS = {"Bash", "PowerShell"}
 AGENT_TOOLS = {"Agent", "Task"}
 LABEL_CHARS = 80
+# Task ids for scheduled turns, which the transcript names differently.
+WAKEUP, CRON = "wakeup", "cron:"
 
 
 def _when(stamp):
@@ -171,7 +177,7 @@ class Fold:
 
     def summary(self, now):
         out = dict(self.out)
-        running = {"agents": [], "shells": [], "monitors": []}
+        running = {"agents": [], "shells": [], "monitors": [], "wakeups": []}
         for tid, task in self.tasks.items():
             if tid in self.ended or (task.get("expires") and task["expires"] <= now):
                 continue
@@ -213,10 +219,13 @@ class Fold:
 
 def _started(tasks, ended, entry, call_id, calls, at):
     """Record what one tool result says it put in the background."""
+    name, tool_input = calls.get(call_id, (None, None))
+    # Its result is only text, so the job it ended is read off the call.
+    if name == "CronDelete" and isinstance(tool_input, dict) and tool_input.get("id"):
+        ended.add(CRON + str(tool_input["id"]))
     result = entry.get("toolUseResult")
     if not isinstance(result, dict):
         return
-    name, tool_input = calls.get(call_id, (None, None))
     label = _label(tool_input)
     if result.get("backgroundTaskId"):
         tasks[result["backgroundTaskId"]] = {"kind": "shells", "label": label, "started": at}
@@ -229,6 +238,26 @@ def _started(tasks, ended, entry, call_id, calls, at):
     elif result.get("status") == "async_launched" and result.get("agentId"):
         tasks[result["agentId"]] = {"kind": "agents", "label": result.get("description") or label,
                                     "started": at, "model": result.get("resolvedModel")}
+    elif name == "ScheduleWakeup":
+        # One dynamic loop per session, so a new wakeup replaces the last and
+        # `stop` cancels whatever is pending.
+        when = _num(result.get("scheduledFor")) / 1000.0
+        if result.get("stopped") or not when:
+            ended.add(WAKEUP)
+        else:
+            ended.discard(WAKEUP)
+            reason = tool_input.get("reason") if isinstance(tool_input, dict) else None
+            tasks[WAKEUP] = {"kind": "wakeups", "label": " ".join(str(reason or label).split())[:LABEL_CHARS],
+                             "started": at, "fires_at": when, "expires": when}
+    elif name == "CronCreate" and result.get("id") and (
+            result.get("recurring") or _num(result.get("nextFireAt"))):
+        when = _num(result.get("nextFireAt")) / 1000.0 or None
+        # A recurring one has no last firing to wait for: it lasts until
+        # `CronDelete` or the session's end.
+        tasks[CRON + str(result["id"])] = {
+            "kind": "wakeups", "label": label, "started": at, "fires_at": when,
+            "recurring": bool(result.get("recurring")),
+            "expires": None if result.get("recurring") else when}
     if name == "TaskStop" and result.get("task_id"):
         ended.add(result["task_id"])
 

@@ -134,6 +134,11 @@ def _summarise_input(name, tool_input):
     """The one line that says what a tool call is about to do."""
     if not isinstance(tool_input, dict):
         return str(tool_input or "")[:INPUT_CHARS]
+    questions = tool_input.get("questions")
+    if isinstance(questions, list) and questions:
+        # AskUserQuestion: the questions themselves, not the word "questions".
+        return " / ".join(str(q.get("question") or "") for q in questions
+                          if isinstance(q, dict))[:INPUT_CHARS]
     for key in ("command", "file_path", "path", "pattern", "url", "prompt",
                 "query", "description"):
         value = tool_input.get(key)

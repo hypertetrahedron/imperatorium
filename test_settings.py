@@ -125,9 +125,11 @@ class Saving(Base):
                                           "background.model": "opus",
                                           "notify.speak.enabled": True,
                                           "notify.ntfy.delay": 15,
-                                          "chat.cold_cache_tokens": 50000})
+                                          "chat.cold_cache_tokens": 50000,
+                                          "chat.matrix_status": False})
         self.assertEqual(got["restart"], [])
         self.assertEqual(self.control.cold_cache_tokens, 50000)
+        self.assertFalse(self.control.matrix_status)
         self.assertEqual(self.control.usage.thresholds, (50.0, 90.0))
         self.assertEqual(self.control.background_options["model"], "opus")
         self.assertTrue(self.control.notifier.enabled("speak"))

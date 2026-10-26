@@ -75,6 +75,50 @@ class Background(unittest.TestCase):
               "<event>line</event>\n</task-notification>"}}]
         self.assertEqual(len(self.run_(e)["monitors"]), 1)
 
+    # Shapes copied from real transcripts (Claude Code 2.1.29x).
+    def wake(self, cid, sec, tur, inp=None):
+        return [call(cid, "ScheduleWakeup", inp or {"delaySeconds": 1200, "reason": "watching CI",
+                                                     "prompt": "/babysit"}, sec=sec, mid=cid),
+                result(cid, sec=sec + 1, tur=tur)]
+
+    def test_a_wakeup_is_pending_until_it_fires(self):
+        e = self.wake("w1", 0, {"scheduledFor": (AT0 + 1200) * 1000, "clampedDelaySeconds": 1200,
+                                "wasClamped": False})
+        got = self.run_(e)["wakeups"]
+        self.assertEqual([(w["id"], w["label"], w["fires_at"]) for w in got],
+                         [("wakeup", "watching CI", AT0 + 1200)])
+        self.assertEqual(self.run_(e, now=AT0 + 1201)["wakeups"], [])
+
+    def test_a_new_wakeup_replaces_the_last_and_stop_cancels_it(self):
+        e = (self.wake("w1", 0, {"scheduledFor": (AT0 + 1200) * 1000})
+             + self.wake("w2", 10, {"scheduledFor": (AT0 + 600) * 1000}))
+        self.assertEqual([w["fires_at"] for w in self.run_(e)["wakeups"]], [AT0 + 600])
+        e += self.wake("w3", 20, {"scheduledFor": 0, "stopped": True, "cancelledWakeups": 1},
+                       inp={"stop": True})
+        self.assertEqual(self.run_(e)["wakeups"], [])
+        e += self.wake("w4", 30, {"scheduledFor": (AT0 + 900) * 1000})
+        self.assertEqual(len(self.run_(e)["wakeups"]), 1)
+
+    def cron(self, cid, recurring):
+        return [call(cid, "CronCreate", {"cron": "0 15 20 10 *", "recurring": recurring,
+                                         "prompt": "write the summary"}, mid=cid),
+                result(cid, tur={"id": "197ff261", "humanSchedule": "0 15 20 10 *",
+                                 "recurring": recurring, "durable": False,
+                                 "nextFireAt": (AT0 + 500) * 1000})]
+
+    def test_a_one_shot_cron_ends_when_it_fires(self):
+        e = self.cron("c1", False)
+        got = self.run_(e)["wakeups"]
+        self.assertEqual([(w["label"], w["fires_at"]) for w in got], [("write the summary", AT0 + 500)])
+        self.assertEqual(self.run_(e, now=AT0 + 501)["wakeups"], [])
+
+    def test_a_recurring_cron_lasts_until_deleted(self):
+        e = self.cron("c1", True)
+        self.assertEqual(len(self.run_(e, now=AT0 + 99999)["wakeups"]), 1)
+        e += [call("c2", "CronDelete", {"id": "197ff261"}, sec=50, mid="m2"),
+              result("c2", sec=51, text="Cancelled job 197ff261.")]
+        self.assertEqual(self.run_(e)["wakeups"], [])
+
     def test_background_and_foreground_subagents(self):
         e = [call("a1", "Agent", {"description": "research"}),
              result("a1", tur={"status": "async_launched", "agentId": "ag1",

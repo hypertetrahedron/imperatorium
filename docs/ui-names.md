@@ -66,7 +66,10 @@ the Chat Matrix; everything else is filled in by the script).
       Context Badge, Queued Badge, Cold Badge
 
 **2. Main Area** `#main`
-- **Decision Bar** `#decide`: Decision Rows (`.dq`) with Allow / Deny
+- **Decision Bar** `#decide`: Decision Rows (`.dq`) with Allow / Deny;
+  a parked AskUserQuestion is a Question Card (`.dqq`) instead - one
+  Question (`.qq`) per question with Option buttons (`.qo`) and an Other
+  box (`.qother`), then Submit answer / Answer in terminal / Decline (`.qa`)
 - **Session Header** `#head`: one row, the title on the left and the
   Header Controls on the right
   - Session Title `#title`

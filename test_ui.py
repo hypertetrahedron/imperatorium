@@ -426,6 +426,12 @@ class WorkAtAGlance(unittest.TestCase):
         self.assertEqual(self.parts({"cache_expires_at": 900}, all=True), [])
         self.assertEqual(self.parts(None), [])
 
+    def test_a_scheduled_turn_says_when_on_any_tile(self):
+        w = {"alive": True, "wakes_at": 1000 + 20 * 60, "wakeups": 1}
+        self.assertEqual(self.parts(w), ["wakes 20m"])
+        self.assertEqual(self.parts(dict(w, wakes_at=900)), [])
+        self.assertEqual(self.parts(dict(w, alive=False)), [])
+
     def test_the_four_counts_are_gone_from_the_tile_and_status_line(self):
         self.assertIn('workHtml(s.work, now, "badge work", open)', ui.SCRIPT)
         self.assertNotIn('n.join("/")', ui.SCRIPT)

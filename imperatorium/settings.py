@@ -80,6 +80,10 @@ FIELDS = [
          help="Once a session's prompt cache has expired, the chat says so - with what the "
               "next prompt costs - when its context is at least this many tokens. 0 always "
               "says so."),
+    dict(key="chat.matrix_status", section="chat", label="Always show cost in the matrix",
+         type="bool", default=True, applies=LIVE,
+         help="The chat matrix keeps a cell for the cost and usage tile even when the "
+              "sessions fill the grid. Off, it shows only in cells the grid leaves empty."),
     dict(key="quick.key", section="quick", label="Shortcut", type="key", default="ctrl+space",
          applies=LIVE,
          help="Pressed in the prompt box, opens the phrase list. Ctrl, Alt or Win plus a "

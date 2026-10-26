@@ -1335,6 +1335,20 @@ class IdleAfterStop(Base):
         self.stop()()
         self.assertEqual(self.announced, [])
 
+    def test_a_session_that_scheduled_its_own_next_turn_is_not_waiting(self):
+        # /loop's ScheduleWakeup: idle for up to an hour, then carries on.
+        self.control.stats.read = lambda sid, now: {
+            "wakeups": [{"id": "wakeup", "label": "watching CI", "fires_at": now + 1200}]}
+        self.live(status="idle")
+        self.agent_rows[0]["pid"] = 999999  # work counts only while its process lives
+        self.start_hook()
+        self.assertFalse(self.stop()())
+        self.assertEqual(self.announced, [])
+        row = self.row()
+        self.assertFalse(row["attention"])
+        self.assertEqual(row["work"]["wakeups"], 1)
+        self.assertGreater(row["work"]["wakes_at"], time.time() + 1000)
+
     def test_a_real_idle_prompt_first_is_not_announced_again(self):
         self.live(status="idle")
         self.start_hook()
@@ -1732,6 +1746,164 @@ class ParkWait(unittest.TestCase):
         self.rows = [{"sessionId": "bg", "kind": "background"}]
         self.assertEqual(self.control.park_wait({"session_id": "bg", "wait": 90}), 90)
 
+
+QUESTION = {"session_id": "s", "cwd": "C:/w/proj", "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": [
+                {"question": "Which colour?", "header": "Colour", "multiSelect": False,
+                 "options": [{"label": "Red", "description": "warm"},
+                             {"label": "Green", "description": "cool"}]},
+                {"question": "Which sizes?", "header": "Size", "multiSelect": True,
+                 "options": [{"label": "S"}, {"label": "M"}]}]}}
+
+
+class ParkedQuestions(unittest.TestCase):
+    """AskUserQuestion parked by the permission hook, answered in the window."""
+
+    def park_in_background(self, request, wait=5.0):
+        from imperatorium import pending
+        self.pending = pending.Pending()
+        self.result = None
+        t = threading.Thread(target=lambda: setattr(
+            self, "result", self.pending.park(request, wait=wait)))
+        t.start()
+        for _ in range(100):
+            if self.pending.waiting():
+                break
+            time.sleep(0.01)
+        return t, self.pending.waiting()[0]
+
+    def test_the_item_carries_the_questions(self):
+        t, item = self.park_in_background(QUESTION)
+        self.assertEqual([q["question"] for q in item["questions"]],
+                         ["Which colour?", "Which sizes?"])
+        self.assertEqual(item["questions"][0]["options"][1],
+                         {"label": "Green", "description": "cool"})
+        self.assertTrue(item["questions"][1]["multiSelect"])
+        self.assertEqual(item["input"], "Which colour? / Which sizes?")
+        self.pending.decide(item["id"], "deny")
+        t.join()
+
+    def test_answers_come_back_with_the_allow(self):
+        t, item = self.park_in_background(QUESTION)
+        answers = {"Which colour?": "Green", "Which sizes?": "S, M"}
+        self.assertTrue(self.pending.decide(item["id"], "allow", answers=answers))
+        t.join()
+        self.assertEqual(self.result, ("allow", "window", answers))
+
+    def test_a_bare_allow_is_refused_for_a_question(self):
+        # The Stream Deck and impctl can only send this.
+        t, item = self.park_in_background(QUESTION)
+        self.assertFalse(self.pending.decide(item["id"], "allow"))
+        self.assertFalse(self.pending.decide(item["id"], "allow",
+                                             answers={"Which colour?": "Red"}))
+        self.assertFalse(self.pending.decide(item["id"], "allow", answers={
+            "Which colour?": "Red", "Which sizes?": "  "}))
+        self.assertTrue(self.pending.decide(item["id"], "deny"))
+        t.join()
+        self.assertEqual(self.result, ("deny", "window", None))
+
+    def test_pass_releases_it_to_the_terminal_at_once(self):
+        t, item = self.park_in_background(QUESTION, wait=30)
+        started = time.time()
+        self.assertTrue(self.pending.decide(item["id"], "pass"))
+        t.join()
+        self.assertLess(time.time() - started, 5)
+        self.assertEqual(self.result[0], None)
+        self.assertEqual(self.pending.waiting(), [])
+
+    def test_a_malformed_question_cannot_be_allowed(self):
+        bad = dict(QUESTION, tool_input={"questions": "nope"})
+        t, item = self.park_in_background(bad)
+        self.assertNotIn("questions", item)
+        self.assertFalse(self.pending.decide(item["id"], "allow", answers={"x": "y"}))
+        self.pending.decide(item["id"], "pass")
+        t.join()
+
+    def test_other_tools_are_unchanged(self):
+        t, item = self.park_in_background({"session_id": "s", "tool_name": "Bash",
+                                           "tool_input": {"command": "ls"}})
+        self.assertNotIn("questions", item)
+        self.assertTrue(self.pending.decide(item["id"], "allow"))
+        t.join()
+        self.assertEqual(self.result, ("allow", "window", None))
+
+    def test_the_hook_sends_the_answers_as_updated_input(self):
+        from hooks import cc_permission
+        updated = dict(QUESTION["tool_input"], answers={"Which colour?": "Red"})
+        out = cc_permission.reply("allow", "x", "object", updated)
+        self.assertEqual(out["hookSpecificOutput"]["decision"],
+                         {"behavior": "allow", "updatedInput": updated})
+        # A deny never carries input.
+        out = cc_permission.reply("deny", "no", "object", updated)
+        self.assertNotIn("updatedInput", out["hookSpecificOutput"]["decision"])
+
+    def test_the_chat_line_shows_the_question(self):
+        self.assertEqual(conversation._summarise_input(
+            "AskUserQuestion", QUESTION["tool_input"]), "Which colour? / Which sizes?")
+
+
+class QuestionHook(unittest.TestCase):
+    """cc_permission.main for AskUserQuestion, with the park stubbed."""
+
+    def run_hook(self, fmt, answer):
+        import io
+        import sys as _sys
+        from unittest import mock
+        from hooks import cc_permission
+        out = io.StringIO()
+        with mock.patch.object(cc_permission, "load_policy",
+                               return_value={"decision_format": fmt}), \
+             mock.patch.object(cc_permission, "park", return_value=answer) as park, \
+             mock.patch.object(cc_permission, "audit"), \
+             mock.patch.object(_sys, "stdin", io.StringIO(json.dumps(QUESTION))), \
+             mock.patch.object(_sys, "stdout", out):
+            cc_permission.main()
+        return out.getvalue(), park.called
+
+    def test_answered_in_the_window(self):
+        answers = {"Which colour?": "Red", "Which sizes?": "M"}
+        text, _ = self.run_hook("object", {"verdict": "allow", "answers": answers})
+        decision = json.loads(text)["hookSpecificOutput"]["decision"]
+        self.assertEqual(decision["behavior"], "allow")
+        self.assertEqual(decision["updatedInput"]["answers"], answers)
+        self.assertEqual(decision["updatedInput"]["questions"],
+                         QUESTION["tool_input"]["questions"])
+
+    def test_an_allow_without_answers_says_nothing(self):
+        text, _ = self.run_hook("object", {"verdict": "allow"})
+        self.assertEqual(text, "")
+
+    def test_declined(self):
+        text, _ = self.run_hook("object", {"verdict": "deny"})
+        self.assertEqual(json.loads(text)["hookSpecificOutput"]["decision"]["behavior"],
+                         "deny")
+
+    def test_the_legacy_format_never_parks_a_question(self):
+        text, parked = self.run_hook(None, {"verdict": "allow", "answers": {"a": "b"}})
+        self.assertEqual(text, "")
+        self.assertFalse(parked)
+
+
+class QuestionWait(ParkWait):
+    """Questions wait longer than an Allow in an interactive session."""
+
+    def test_an_interactive_question_gets_the_question_wait(self):
+        self.rows = [{"sessionId": "i", "kind": "interactive"}]
+        self.assertEqual(self.control.park_wait(
+            {"session_id": "i", "tool_name": "AskUserQuestion", "wait": 20,
+             "wait_background": 300, "wait_question": 120}), 120)
+
+    def test_a_background_question_keeps_the_long_wait(self):
+        self.rows = [{"sessionId": "bg", "kind": "background"}]
+        self.assertEqual(self.control.park_wait(
+            {"session_id": "bg", "tool_name": "AskUserQuestion", "wait": 20,
+             "wait_background": 300, "wait_question": 120}), 300)
+
+    def test_other_tools_ignore_it(self):
+        self.rows = [{"sessionId": "i", "kind": "interactive"}]
+        self.assertEqual(self.control.park_wait(
+            {"session_id": "i", "tool_name": "Bash", "wait": 20,
+             "wait_background": 300, "wait_question": 120}), 20)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

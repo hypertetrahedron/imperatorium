@@ -452,6 +452,7 @@ class SessionStatus(Base):
                                        "resume_cost_usd": None,
                                        "alive": True,
                                        "agents": 1, "shells": 1, "monitors": 0,
+                                       "wakeups": 0, "wakes_at": None,
                                        "processes": 3})
 
     def test_an_ended_rows_work_has_no_counts(self):
@@ -700,6 +701,25 @@ class Routing(Base):
         )
         self.assertEqual(out["action"], "dry-run")
         self.assertEqual((self.sent, self.launched), ([], []))
+
+    def test_a_picked_path_wins_over_a_shared_name(self):
+        # Two folders called bookoferrantpages: the picker's C: one opened
+        # the Y: one, because only the name was sent and it resolved first.
+        y = os.path.join("Y:", os.sep, "projects-software", "bookoferrantpages")
+        c = os.path.join("C:", os.sep, "src", "bookoferrantpages")
+        projects.discover = lambda roots=None, extra=None: [
+            {"name": "bookoferrantpages", "path": y, "source": "root"},
+            {"name": "bookoferrantpages", "path": c, "source": "session"}]
+        self.control.invalidate()
+        out = self.control.dispatch(project="bookoferrantpages", path=c,
+                                    prompt="hi", mode="launch", confirm=True)
+        self.assertEqual(out["action"], "launch")
+        self.assertEqual(self.launched, [(c, "hi")])
+
+    def test_a_path_not_in_the_catalogue_dispatches_nothing(self):
+        out = self.control.dispatch(path="C:/nowhere", prompt="hi", mode="launch")
+        self.assertFalse(out["ok"])
+        self.assertEqual(self.launched, [])
 
     def test_an_unmatched_project_dispatches_nothing(self):
         out = self.control.dispatch(text="project: home assistant, why offline")

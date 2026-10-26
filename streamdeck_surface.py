@@ -183,6 +183,9 @@ class Surface:
     def set_decision(self, pending, now=None):
         """Show the oldest parked request, or clear the decision keys."""
         now = time.time() if now is None else now
+        # A question needs its answers chosen, which three keys cannot do;
+        # the dispatcher refuses a bare Allow for one anyway.
+        pending = [p for p in pending if not p.get("questions")]
         oldest = pending[0] if pending else None
         with self.lock:
             if (oldest or {}).get("id") != (self.decision or {}).get("id"):

@@ -23,6 +23,12 @@ stdout with
 Exit code 2 is not honoured for this event, so the decision object is the only
 thing that matters.
 
+AskUserQuestion comes through here too: Claude Code asks this hook before it
+shows the question dialog, and an `allow` whose `updatedInput` carries
+`answers` ({question text: answer}) is taken as the user's answers. So a
+parked question is answered in the window with real choices, not a bare
+Allow. Verified 2026-10-25 on a real background session (2.1.310).
+
 Staying silent means "ask" - Claude Code prompts you exactly as it would
 without this hook. That is what every failure path here does: a missing policy
 file, malformed JSON, an unreadable log, an unexpected exception. The worst
@@ -38,6 +44,10 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 AUDIT_MAX_BYTES = 2 * 1024 * 1024
+QUESTION_TOOL = "AskUserQuestion"
+# How long an interactive session's question waits for the window when
+# policy.json does not say. Longer than an Allow, since it takes reading.
+QUESTION_WAIT = 120.0
 PARK_ENDPOINT = os.environ.get(
     "IMPERATORIUM_PARK_ENDPOINT", "http://127.0.0.1:8792/permission/park"
 )
@@ -89,26 +99,33 @@ def audit(record):
 
 
 def park(request, reason, detail):
-    """Offer the decision to the window; return its verdict, or None.
+    """Offer the decision to the window; return its reply, or {}.
+
+    The reply is {"verdict": "allow"|"deny"|None, "answers": {...}?}.
 
     The wait comes from policy.json. Zero (the default) keeps the old
     behaviour exactly: no network call, straight to the terminal prompt.
     """
     settings = (load_policy().get("park") or {})
     if not settings.get("enabled"):
-        return None
+        return {}
     wait = float(settings.get("wait_seconds") or 0)
     # A background session has no terminal to fall back to, so it can wait
     # far longer; the dispatcher knows which kind this is and picks.
     wait_bg = float(settings.get("background_wait_seconds") or wait)
     if max(wait, wait_bg) <= 0:
-        return None
+        return {}
+    # Never past the longest of the other two: install.py sizes the hook's
+    # timeout from those, and a hook killed mid-wait answers nothing.
+    wait_q = min(float(settings.get("question_wait_seconds") or QUESTION_WAIT),
+                 max(wait, wait_bg))
 
     payload = dict(request)
     payload["_reason"] = reason
     payload["_detail"] = detail
     payload["wait"] = wait
     payload["wait_background"] = wait_bg
+    payload["wait_question"] = wait_q
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         PARK_ENDPOINT, data=body, headers={"Content-Type": "application/json"}
@@ -120,8 +137,8 @@ def park(request, reason, detail):
             answer = json.loads(fh.read().decode())
     except (urllib.error.URLError, OSError, ValueError) as exc:
         _note("park failed, falling through to the terminal: %s" % exc)
-        return None
-    return answer.get("verdict")
+        return {}
+    return answer if isinstance(answer, dict) else {}
 
 
 def main():
@@ -168,6 +185,14 @@ def main():
         "session_id": request.get("session_id"),
     })
 
+    fmt = load_policy().get("decision_format")
+    question = request.get("tool_name") == QUESTION_TOOL
+    updated = None
+    if verdict == "ask" and question and fmt != "object":
+        # The legacy reply cannot carry answers, so the window could only
+        # offer a question it has no way to deliver. The terminal asks it.
+        return 0
+
     if verdict == "ask":
         # Offer it to the window before falling back to the terminal. This is
         # the only way this system can answer a permission prompt at all: a
@@ -177,7 +202,16 @@ def main():
         # Safe because a hook that exceeds its timeout does not block the tool
         # call - "the call continues through the normal permission flow". So
         # nobody watching means the terminal prompts exactly as it always did.
-        parked = park(request, reason, detail)
+        answer = park(request, reason, detail)
+        parked = answer.get("verdict")
+        if question and parked == "allow":
+            # An allow is only an answer when it brings the answers. Without
+            # them the tool would run on nothing, so the terminal asks.
+            answers = answer.get("answers")
+            if not (isinstance(answers, dict) and answers
+                    and isinstance(tool_input, dict)):
+                return 0
+            updated = dict(tool_input, answers=answers)
         if parked in ("allow", "deny"):
             audit({"at": time.time(), "verdict": parked, "reason": "answered in the window",
                    "tier": tier, "tool": request.get("tool_name"), "detail": detail,
@@ -188,13 +222,12 @@ def main():
             # reply contract cannot turn a silence into an approval.
             return 0
 
-    json.dump(reply(verdict, reason, load_policy().get("decision_format")),
-              sys.stdout)
+    json.dump(reply(verdict, reason, fmt, updated), sys.stdout)
     sys.stdout.flush()
     return 0
 
 
-def reply(verdict, reason, fmt=None):
+def reply(verdict, reason, fmt=None, updated_input=None):
     """The JSON this hook prints for an allow or deny.
 
     `fmt="object"` is the documented contract, read on 2026-09-24 from the
@@ -208,9 +241,14 @@ def reply(verdict, reason, fmt=None):
     Legacy stays the default only so that switching auto-approval on is a
     deliberate choice (`"decision_format": "object"` in policy.json), not a
     side effect of a bug fix.
+
+    `updated_input` replaces the tool's input on an allow; it is how a
+    question's answers reach Claude Code, and only the object form has it.
     """
     if fmt == "object":
         decision = {"behavior": verdict}
+        if verdict == "allow" and updated_input is not None:
+            decision["updatedInput"] = updated_input
         if verdict == "deny" and reason:
             decision["message"] = reason
         return {"hookSpecificOutput": {"hookEventName": "PermissionRequest",

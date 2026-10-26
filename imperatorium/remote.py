@@ -691,7 +691,7 @@ STATS_LOOP = r'''
 import json as _json, sys as _sys, time as _time
 _reader = Reader()
 _KEEP = ("cache", "context_tokens", "model_id", "last_reply_at", "tokens",
-         "agents", "shells", "monitors")
+         "agents", "shells", "monitors", "wakeups")
 for _line in _sys.stdin:
     _req = {}
     try:
