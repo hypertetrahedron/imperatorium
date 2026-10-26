@@ -17,6 +17,8 @@ import re
 import subprocess
 import sys
 
+from . import subproc
+
 WINDOWS = sys.platform == "win32"
 
 # `claude --bg` prints a short id; keep this loose, since the surrounding
@@ -86,14 +88,8 @@ def start(prompt, cwd, timeout=DEFAULT_TIMEOUT, **options):
     cmd = build_command(prompt, **{k: v for k, v in options.items()
                                    if k in OPTION_KEYS})
     try:
-        done = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if WINDOWS else 0,
-        )
+        done = subproc.run(cmd, cwd=cwd, capture_output=True, text=True,
+                           timeout=timeout)
     except FileNotFoundError as exc:
         raise BackgroundError("claude is not on PATH") from exc
     except subprocess.TimeoutExpired as exc:

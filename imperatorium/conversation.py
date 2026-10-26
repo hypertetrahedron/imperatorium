@@ -102,6 +102,15 @@ def strip_origin(text):
     return text
 
 
+def _guard_sdk():
+    """Make the SDK's own `git worktree list` timeout kill git's whole tree."""
+    try:
+        from . import subproc
+    except Exception:  # a remote host runs this file as a bare script
+        return
+    subproc.guard_sdk()
+
+
 def available():
     try:
         import claude_agent_sdk  # noqa: F401
@@ -323,6 +332,7 @@ def title(session_id):
         import claude_agent_sdk as sdk
     except Exception:
         return ""
+    _guard_sdk()
     try:
         info = sdk.get_session_info(session_id)
     except Exception:
@@ -474,6 +484,7 @@ def read(session_id, limit=0, include_subagents=False, directory=None, merge=Tru
         import claude_agent_sdk as sdk
     except Exception as exc:
         raise RuntimeError("claude-agent-sdk is not installed: %s" % exc) from exc
+    _guard_sdk()
     messages = _messages(sdk, session_id, directory)
     return to_items(messages, limit=limit, include_subagents=include_subagents,
                     merge=merge)

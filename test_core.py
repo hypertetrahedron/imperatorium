@@ -247,14 +247,14 @@ class BackgroundCommand(unittest.TestCase):
             captured["cmd"] = cmd
             raise OSError("stop here, the command is what matters")
 
-        original = background.subprocess.run
-        background.subprocess.run = fake_run
+        original = background.subproc.run
+        background.subproc.run = fake_run
         try:
             with self.assertRaises(Exception):
                 background.start("do it", os.getcwd(),
                                  _comment="ignore me", permission_mode="plan")
         finally:
-            background.subprocess.run = original
+            background.subproc.run = original
         self.assertIn("--permission-mode", captured["cmd"])
         self.assertNotIn("_comment", " ".join(captured["cmd"]))
 

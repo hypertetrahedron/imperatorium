@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-from . import changes
+from . import changes, subproc
 
 WINDOWS = sys.platform == "win32"
 FIELDS = "number,state,url,title,isDraft,reviewDecision,statusCheckRollup,headRefName"
@@ -73,11 +73,8 @@ def lookup(cwd, timeout=20.0):
     Raises RuntimeError only for a failure worth showing (gh missing).
     """
     try:
-        done = subprocess.run(
-            ["gh", "pr", "view", "--json", FIELDS], cwd=cwd,
-            capture_output=True, text=True, timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if WINDOWS else 0,
-        )
+        done = subproc.run(["gh", "pr", "view", "--json", FIELDS], cwd=cwd,
+                           capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as exc:
         raise RuntimeError("gh is not installed") from exc
     except subprocess.TimeoutExpired:

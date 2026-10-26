@@ -55,6 +55,8 @@ import urllib.request
 import zipfile
 from xml.sax.saxutils import escape as xml_escape
 
+from imperatorium import subproc  # standard library only, like this file
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINDOWS = sys.platform == "win32"
 VENV = os.path.join(HERE, ".venv")
@@ -97,7 +99,8 @@ def run(cmd, cwd=None, check=True, capture=False, timeout=None):
 def output(cmd, timeout=20):
     """stdout of a command, or None if it cannot be run."""
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # `claude --version` and friends may run children; a timeout ends them too.
+        done = subproc.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if done.returncode != 0:
@@ -625,8 +628,11 @@ def remove_host(cfg, name):
 def ssh(host, command, data=None, timeout=60, batch=True):
     """(returncode, stdout, stderr). Never raises for a host that is down."""
     argv = ["ssh"] + (SSH_OPTS if batch else ["-o", "StrictHostKeyChecking=accept-new"]) + [host, command]
+    # Interactive ssh keeps plain subprocess: on POSIX a session of its own
+    # would cut it off from the terminal it asks for a password on.
+    runner = subproc.run if batch else subprocess.run
     try:
-        done = subprocess.run(argv, input=data, capture_output=True, text=True, timeout=timeout)
+        done = runner(argv, input=data, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 255, "", str(exc)
     return done.returncode, done.stdout or "", (done.stderr or "").strip()

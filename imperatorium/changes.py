@@ -19,6 +19,8 @@ import re
 import subprocess
 import sys
 
+from . import subproc
+
 WINDOWS = sys.platform == "win32"
 TIMEOUT = 20.0
 MAX_DIFF = 400 * 1024
@@ -32,13 +34,8 @@ class GitError(RuntimeError):
 def git(cwd, *args, timeout=TIMEOUT, check=True):
     """stdout of `git -C cwd args`. Raises GitError on failure when `check`."""
     try:
-        done = subprocess.run(
-            ["git", "-C", cwd, *args],
-            capture_output=True,
-            timeout=timeout,
-            # A console window would flash on Windows once per call.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if WINDOWS else 0,
-        )
+        done = subproc.run(["git", "-C", cwd, *args], capture_output=True,
+                           timeout=timeout)
     except FileNotFoundError as exc:
         raise GitError("git is not on PATH") from exc
     except subprocess.TimeoutExpired as exc:
@@ -340,10 +337,8 @@ def finish(project, path, action, force=False, runner=None):
 
 def _run(cmd, cwd=None, timeout=60.0):
     try:
-        done = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                              timeout=timeout,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                              if WINDOWS else 0)
+        done = subproc.run(cmd, cwd=cwd, capture_output=True, text=True,
+                           timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, str(exc)
     return done.returncode, (done.stdout or "") + (done.stderr or "")

@@ -20,6 +20,8 @@ import subprocess
 import sys
 import time
 
+from . import subproc
+
 WINDOWS = sys.platform == "win32"
 
 # `status` applies to a live process, `state` to a background job. A session
@@ -99,14 +101,9 @@ def agents(timeout=20.0, include_done=True):
     if include_done:
         cmd.append("--all")
     try:
-        out = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            # A console window would flash on Windows once per poll.
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if WINDOWS else 0,
-        )
+        # subproc, not subprocess: `claude agents` runs git, and a timeout
+        # must not leave that behind. No console window flashes either.
+        out = subproc.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return []
     if out.returncode != 0:

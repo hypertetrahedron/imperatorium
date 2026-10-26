@@ -30,6 +30,8 @@ import sys
 import threading
 import time
 
+from . import subproc
+
 SAMPLE_RATE = 16000  # what Whisper wants; resampling anything else is waste
 CHANNELS = 1
 
@@ -262,7 +264,6 @@ def load_settings(config_path=None):
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPLY_TIMEOUT = 180.0  # a cold load plus a long utterance on CPU, with room
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def worker_command(settings, exe=None):
@@ -277,22 +278,17 @@ def worker_command(settings, exe=None):
 
 
 def _spawn(settings):
-    return subprocess.Popen(
+    # In a job of its own: it dies with the dispatcher, and can be ended whole.
+    return subproc.popen(
         worker_command(settings), cwd=PROJECT_ROOT,
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        creationflags=NO_WINDOW)
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 
 def _kill_tree(proc):
     # On Windows a venv's python.exe is a launcher with the real interpreter
     # as its child, so killing `proc` alone would leave the model running.
     try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           creationflags=NO_WINDOW)
-        else:
-            proc.kill()
+        subproc.kill_tree(proc)
     except Exception:
         pass
 

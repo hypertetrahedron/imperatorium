@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 
-from . import procs
+from . import procs, subproc
 
 WINDOWS = sys.platform == "win32"
 
@@ -54,11 +54,11 @@ def _wait_gone(pid, wait, alive):
 def _type(pid, *chunks):
     """Type `chunks` into `pid`'s console, pausing between them. True on success."""
     try:
-        r = subprocess.run([sys.executable, "-m", "imperatorium.closing", str(pid)]
-                           + [KEYS.get(c, c) for c in chunks],
-                           cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                           capture_output=True, timeout=15,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # A venv's python.exe is a launcher; a timeout must end the real one too.
+        r = subproc.run([sys.executable, "-m", "imperatorium.closing", str(pid)]
+                        + [KEYS.get(c, c) for c in chunks],
+                        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        capture_output=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return False
     return r.returncode == 0

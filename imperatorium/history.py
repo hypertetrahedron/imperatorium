@@ -35,6 +35,7 @@ def _sdk():
         import claude_agent_sdk as sdk
     except Exception as exc:
         raise RuntimeError("claude-agent-sdk is not installed: %s" % exc) from exc
+    conversation._guard_sdk()
     return sdk
 
 

@@ -38,6 +38,8 @@ import sys
 import threading
 import time
 
+from . import subproc
+
 WINDOWS = sys.platform == "win32"
 
 DEFAULT_CLAUDE = "$HOME/.local/bin/claude"
@@ -112,13 +114,7 @@ def load_hosts(config):
 
 
 def _run(argv, timeout):
-    return subprocess.run(
-        argv,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if WINDOWS else 0,
-    )
+    return subproc.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
 # Separates `claude agents` output from the session files in one SSH call.
@@ -196,13 +192,7 @@ INJECT_SCRIPT = (
 
 
 def _run_input(argv, data, timeout):
-    return subprocess.run(
-        argv,
-        input=data,
-        capture_output=True,
-        timeout=timeout,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if WINDOWS else 0,
-    )
+    return subproc.run(argv, input=data, capture_output=True, timeout=timeout)
 
 
 def inject(host, socket_path, token, content, timeout=30.0):
@@ -449,29 +439,30 @@ class Tunnel:
         with self._lock:
             proc = self._proc
         if proc and proc.poll() is None:
-            proc.terminate()
+            subproc.kill_tree(proc)
 
     def _run(self):
         while not self._stop.is_set():
             started = time.time()
             try:
-                proc = subprocess.Popen(
+                # In a job of its own, so it dies with the dispatcher: an
+                # orphaned ssh would keep the host's port, and every later
+                # tunnel would fail with "remote port forwarding failed".
+                proc = subproc.popen(
                     self.argv(),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
-                    creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                                   if WINDOWS else 0),
                 )
             except OSError as exc:
                 self._down("ssh could not run: %s" % exc)
                 self._stop.wait(BACKOFF_START)
                 continue
-            _bind_to_this_process(proc)
             with self._lock:
                 self._proc = proc
                 self._state.update(up=True, since=started, error=None)
             err = proc.communicate()[1] or b""
+            subproc.kill_tree(proc)  # anything ssh left, and the job handle
             lines = [l for l in err.decode("utf-8", "replace").splitlines()
                      if l.strip()]
             reason = (lines[-1] if lines else "ssh exited %s" % proc.returncode)
@@ -565,12 +556,10 @@ class Reader:
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, self.MODULE), encoding="utf-8") as fh:
             source = fh.read() + "\n" + self.loop()
-        proc = subprocess.Popen(
+        proc = subproc.popen(
             self.argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if WINDOWS else 0,
         )
-        _bind_to_this_process(proc)
         lines = queue.Queue()
 
         def pump(stream, tag):
@@ -612,12 +601,7 @@ class Reader:
     def _stop(self, error):
         proc, self._proc, self._lines = self._proc, None, None
         if proc:
-            if proc.poll() is None:
-                proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+            subproc.kill_tree(proc)
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 try:
                     stream.close()
@@ -734,71 +718,6 @@ class Stats(Reader):
         got = self._call({"sessions": list(session_ids)}, timeout).get("stats")
         return got if isinstance(got, dict) else {}
 
-
-_job = None
-
-
-def _bind_to_this_process(proc):
-    """Make `proc` die with this process on Windows.
-
-    The dispatcher is restarted by killing it. An orphaned ssh would keep the
-    host's port, so every later tunnel would fail with "remote port forwarding
-    failed" and the host's hooks would still be feeding a dead listener's
-    port - working by accident until the orphan went too. A job object with
-    KILL_ON_JOB_CLOSE ties the child to this process's lifetime.
-    """
-    global _job
-    if not WINDOWS:
-        return
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        if _job is None:
-            class BASIC(ctypes.Structure):
-                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
-                            ("PerJobUserTimeLimit", ctypes.c_int64),
-                            ("LimitFlags", wintypes.DWORD),
-                            ("MinimumWorkingSetSize", ctypes.c_size_t),
-                            ("MaximumWorkingSetSize", ctypes.c_size_t),
-                            ("ActiveProcessLimit", wintypes.DWORD),
-                            ("Affinity", ctypes.c_size_t),
-                            ("PriorityClass", wintypes.DWORD),
-                            ("SchedulingClass", wintypes.DWORD)]
-
-            class IO(ctypes.Structure):
-                _fields_ = [(n, ctypes.c_uint64) for n in (
-                    "ReadOperationCount", "WriteOperationCount",
-                    "OtherOperationCount", "ReadTransferCount",
-                    "WriteTransferCount", "OtherTransferCount")]
-
-            class EXTENDED(ctypes.Structure):
-                _fields_ = [("BasicLimitInformation", BASIC),
-                            ("IoInfo", IO),
-                            ("ProcessMemoryLimit", ctypes.c_size_t),
-                            ("JobMemoryLimit", ctypes.c_size_t),
-                            ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                            ("PeakJobMemoryUsed", ctypes.c_size_t)]
-
-            k32.CreateJobObjectW.restype = wintypes.HANDLE
-            job = k32.CreateJobObjectW(None, None)
-            if not job:
-                return
-            info = EXTENDED()
-            info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
-            k32.SetInformationJobObject.argtypes = [
-                wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-            if not k32.SetInformationJobObject(job, 9, ctypes.byref(info),
-                                               ctypes.sizeof(info)):
-                return
-            _job = job
-        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        k32.AssignProcessToJobObject(_job, int(proc._handle))
-    except Exception:
-        # Best effort: without it a restart can orphan one ssh, which the
-        # next tunnel reports as a forwarding failure rather than hiding.
-        pass
 
 
 if __name__ == "__main__":
