@@ -88,8 +88,9 @@ def start(prompt, cwd, timeout=DEFAULT_TIMEOUT, **options):
     cmd = build_command(prompt, **{k: v for k, v in options.items()
                                    if k in OPTION_KEYS})
     try:
+        # keep: the session it starts must outlive it.
         done = subproc.run(cmd, cwd=cwd, capture_output=True, text=True,
-                           timeout=timeout)
+                           timeout=timeout, keep=True)
     except FileNotFoundError as exc:
         raise BackgroundError("claude is not on PATH") from exc
     except subprocess.TimeoutExpired as exc:

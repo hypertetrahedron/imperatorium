@@ -1,7 +1,7 @@
 # Roadmap
 
 Status legend: Not Started · In Progress · Complete · Deferred
-Last updated: 2026-10-26
+Last updated: 2026-10-29
 
 Imperatorium (package `imperatorium`): a single input
 surface for dispatching prompts to, and tracking attention across, ~20
@@ -10,6 +10,7 @@ https://github.com/hypertetrahedron/imperatorium (MIT).
 
 | Feature | Status | Notes |
 |---|---|---|
+| Orphaned suspended git after a clean exit | In Progress | Reports 2-3 (corporate laptop, latest build 2816ae0): real git appears ~90 ms after a poll ends and stays suspended. When claude exits, libuv's job kills the `cmd\git.exe` wrapper mid-CreateProcess; the real git silently breaks away from that job and is never resumed. 2816ae0 released our job on a clean exit, so it survived. Now `subproc.run` kills job leftovers unless `keep=True` (only `claude --bg`), and `kill_tree` seals the job (active-process limit 0) before terminating, so a late joiner is refused. 11 subproc tests + all suites pass. Left: commit, restart dispatcher, confirm with the reporting user |
 | Child-process tree cleanup | Complete | Reported leak: a `claude agents` timeout killed claude.exe and left its git.exe children suspended. `imperatorium/subproc.py`: each child starts suspended in its own kill-on-close job (POSIX: own session), so a timeout kills the whole tree; a clean exit lets survivors run (`claude --bg`). Wired into registry, background, changes, prs, remote (replaces `_bind_to_this_process`), closing, voice, setup_machine, and the Agent SDK's `git worktree list`. test_subproc + all 23 suites pass. Live dispatcher restarted 2026-10-26; a real background dispatch started, outlived its launcher and finished; no orphaned git/claude |
 | Answer AskUserQuestion from the window | In Progress | 2026-10-25 (peer request). Claude Code asks the PermissionRequest hook before showing the question dialog, and an `allow` with `updatedInput.answers` ({question: answer}) is taken as the answers - verified on a throwaway background session (2.1.310): the tool returned `"Which colour do you prefer?"="Green"` from the hook. Built: `pending` keeps the questions and only allows a question with an answer for each (so the Stream Deck/impctl bare Allow is refused; the deck no longer shows questions); a `pass` verdict hands it to the terminal at once; `cc_permission` replies with `updatedInput` (object format only; legacy never parks a question); an interactive question waits `park.question_wait_seconds` (default 120, capped at the existing waits so the hook timeout is unchanged); the window's banner draws a card per question - options with descriptions, multi-select, free-text Other, Submit / Answer in terminal / Decline; the chat line shows the question text. 15 tests; 1007 pass. End to end on a test dispatcher (8799) with the real hook script and headless Chrome: card shown, Submit enabled only once both answered, hook printed the answers. Left: restart the live dispatcher and answer one from a real session. |
 | + new picker opens the folder picked | Complete | 2026-10-24: two projects with the same name (bookoferrantpages on Y: and C:) - the picker sent only the name, which resolved to the first. Now sends path/host; /api/dispatch matches it exactly. Tested; live dispatcher needs a restart to pick it up |

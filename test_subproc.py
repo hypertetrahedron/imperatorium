@@ -1,4 +1,4 @@
-"""subproc: a timeout kills the whole tree; a clean exit lets survivors be.
+"""subproc: the whole tree goes with the command, unless it is kept.
 
 Run: python test_subproc.py
 """
@@ -22,6 +22,16 @@ PARENT = (
     "open(sys.argv[1], 'w').write(str(g.pid))\n"
     "if sys.argv[2] == 'sleep':\n"
     "    time.sleep(60)\n"
+)
+
+# A parent that exits while its child is still suspended - what is left when
+# claude.exe ends inside CreateProcess for git.
+SUSPENDED_PARENT = (
+    "import subprocess, sys\n"
+    "g = subprocess.Popen([sys.executable, '-c', 'pass'], creationflags=0x4,\n"
+    "                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,\n"
+    "                     stderr=subprocess.DEVNULL)\n"
+    "open(sys.argv[1], 'w').write(str(g.pid))\n"
 )
 
 
@@ -71,14 +81,59 @@ class Tree(unittest.TestCase):
         self.assertTrue(gone_within(self.grandchild, 5),
                         "grandchild %d outlived the timeout" % self.grandchild)
 
-    def test_a_clean_exit_leaves_what_it_started_running(self):
+    def test_keep_leaves_what_it_started_running(self):
         # `claude --bg` exits and its session must carry on.
         done = subproc.run([sys.executable, "-c", PARENT, self.pidfile, "exit"],
-                           capture_output=True, timeout=30)
+                           capture_output=True, timeout=30, keep=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.grandchild = self._grandchild()
         time.sleep(0.5)
         self.assertTrue(alive(self.grandchild), "a clean exit killed the grandchild")
+
+    @unittest.skipUnless(sys.platform == "win32", "the sweep is the job's")
+    def test_a_clean_exit_kills_what_it_left(self):
+        done = subproc.run([sys.executable, "-c", PARENT, self.pidfile, "exit"],
+                           capture_output=True, timeout=30)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.grandchild = self._grandchild()
+        self.assertTrue(gone_within(self.grandchild, 5),
+                        "grandchild %d outlived a clean exit" % self.grandchild)
+
+    @unittest.skipUnless(sys.platform == "win32", "CREATE_SUSPENDED is Windows'")
+    def test_a_child_left_suspended_by_a_clean_exit_is_killed(self):
+        # The second report: claude.exe exits normally and the git it was
+        # still creating stays suspended, its parent gone.
+        done = subproc.run([sys.executable, "-c", SUSPENDED_PARENT, self.pidfile],
+                           capture_output=True, timeout=30)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.grandchild = self._grandchild()
+        self.assertTrue(gone_within(self.grandchild, 5),
+                        "suspended grandchild %d was orphaned" % self.grandchild)
+
+    @unittest.skipUnless(sys.platform == "win32", "job objects are Windows'")
+    def test_a_sealed_job_refuses_a_late_child(self):
+        # The third report: the real git joined the job ~90 ms after claude
+        # exited, after a one-shot kill would already have run. kill_tree
+        # seals the job before killing, so a late child cannot start at all.
+        member = ("import subprocess, sys\n"
+                  "print('ready', flush=True)\n"
+                  "sys.stdin.readline()\n"
+                  "try:\n"
+                  "    subprocess.Popen([sys.executable, '-c', 'pass'])\n"
+                  "    print('spawned')\n"
+                  "except OSError:\n"
+                  "    print('refused')\n")
+        proc = subproc.popen([sys.executable, "-c", member], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            # Not before it runs: a venv's python.exe is a launcher, and a
+            # seal that early would refuse the real interpreter.
+            self.assertEqual(proc.stdout.readline().strip(), "ready")
+            self.assertTrue(subproc._seal(proc._job))
+            out, err = proc.communicate("go\n", timeout=30)
+            self.assertEqual(out.strip(), "refused", err)
+        finally:
+            subproc.kill_tree(proc)
 
     def test_kill_tree_ends_a_long_lived_child_and_its_children(self):
         proc = subproc.popen([sys.executable, "-c", PARENT, self.pidfile, "sleep"],

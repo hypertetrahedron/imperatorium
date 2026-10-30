@@ -14,8 +14,20 @@ suspended - so nothing it spawns can escape it by being quick. And because
 the job is KILL_ON_JOB_CLOSE while it is held, a dispatcher that is killed
 mid-call takes its children with it.
 
-A child that exits normally is let go, not cleaned up after: `claude --bg`
-must leave its session running, and git may leave its fsmonitor daemon.
+When a command exits, whatever it left in its job is killed too, unless the
+caller passes keep=True - `claude --bg` must leave its session running. The
+leftovers matter. `claude agents` starts git's `cmd\\git.exe` wrapper in its
+last few milliseconds; when claude exits, its own job kills the wrapper, but
+not the real git the wrapper is starting - grandchildren silently break away
+from that job. Windows creates every process suspended and resumes it only
+when CreateProcess finishes, so a real git whose parent died mid-create is
+never resumed. Users saw those as suspended git.exe appearing ~90 ms after a
+poll ended, then staying forever.
+
+Killing the job once is not enough for that: the late git can join it after
+the kill. So `kill_tree` seals the job first - an active-process limit of
+zero, which refuses any process that tries to join, and terminates it -
+and only then kills what is in it.
 
 Standard library only: setup_machine.py uses it before anything is installed.
 """
@@ -30,6 +42,7 @@ WINDOWS = sys.platform == "win32"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 CREATE_SUSPENDED = 0x4
 KILL_ON_JOB_CLOSE = 0x2000
+ACTIVE_PROCESS = 0x8
 # A child that asks to break away may - one that does would otherwise fail
 # to start at all. Nothing that does not ask leaves the job.
 BREAKAWAY_OK = 0x800
@@ -55,8 +68,13 @@ def popen(cmd, **kwargs):
     return proc
 
 
-def run(cmd, input=None, timeout=None, capture_output=False, check=False, **kwargs):
-    """subprocess.run, except that a timeout kills the whole tree."""
+def run(cmd, input=None, timeout=None, capture_output=False, check=False,
+        keep=False, **kwargs):
+    """subprocess.run, except that the whole tree goes with it.
+
+    A timeout kills everything `cmd` started; so does a normal exit, unless
+    `keep` - for a command whose point is to leave something running.
+    """
     if capture_output:
         kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
     if input is not None:
@@ -74,7 +92,12 @@ def run(cmd, input=None, timeout=None, capture_output=False, check=False, **kwar
     except BaseException:
         kill_tree(proc)
         raise
-    release(proc)
+    if keep or not WINDOWS:
+        # No sweep on POSIX: once the leader is reaped its group id can be
+        # reused, and killpg could reach a stranger.
+        release(proc)
+    else:
+        kill_tree(proc)
     done = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
     if check:
         done.check_returncode()
@@ -87,6 +110,7 @@ def kill_tree(proc):
     if job:
         proc._job = None
         k32 = _kernel32()
+        _seal(job)
         k32.TerminateJobObject(job, 1)
         k32.CloseHandle(job)
     elif not WINDOWS:
@@ -198,6 +222,15 @@ def _set_limits(job, flags):
     info = _limit_info(flags)
     return _kernel32().SetInformationJobObject(
         job, EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info))
+
+
+def _seal(job):
+    """Refuse any process that tries to join `job` from now on.
+
+    An active-process limit of zero: the members stay, and a process being
+    created into the job is terminated and its CreateProcess fails.
+    """
+    return _set_limits(job, KILL_ON_JOB_CLOSE | ACTIVE_PROCESS)
 
 
 def _assign_job(proc):
