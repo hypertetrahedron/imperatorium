@@ -1004,6 +1004,15 @@ class HeavyWarnings(unittest.TestCase):
         self.assertIn("cache-write price", got[1])
         self.assertEqual(got[2:], ["", ""])
 
+    def test_the_cold_button_closes_until_the_next_expiry(self):
+        got = glance_js(
+            "(() => { const s = {id: 'a', pid: 7, work: {context_tokens: 230000, cache_expires_at: 50}};"
+            " const open = coldHtml(s, 100, {});"
+            " const closed = coldHtml(s, 100, {[coldKey(s)]: true});"
+            " const later = coldHtml({...s, work: {...s.work, cache_expires_at: 90}}, 100, {[coldKey(s)]: true});"
+            " return [open.includes('data-coldact=\"dismiss\"'), closed, later.length > 0]; })()")
+        self.assertEqual(got, [True, "", True])
+
     def test_the_cold_button_sits_above_show_most_recent(self):
         js = ui.SCRIPT
         self.assertLess(js.index('<div class="cold" hidden>'), js.index('data-newest="1"'))
@@ -1256,6 +1265,84 @@ class SpendShown(unittest.TestCase):
         self.assertIn('#meter::after{content:"\\25BE"', ui.CSS)
         self.assertFalse([c for c in ui.CSS if ord(c) < 32 and c not in "\n\t"])
 
+
+def presses_js(tail):
+    """The press-hold helpers, say/showSaid, with a stub DOM; `tail` after them."""
+    a = ui.SCRIPT.index("const pressedIn")
+    body = ui.SCRIPT[a:ui.SCRIPT.index("\nfunction drawSessions")]
+    js = ("const line = {textContent: ''}; const $ = () => line;"
+          " let selected = 'a'; const timers = []; const setTimeout = f => timers.push(f);\n" + body
+          + "\nprocess.stdout.write(JSON.stringify(" + tail + "));")
+    out = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True,
+                         encoding="utf-8", timeout=30)
+    if out.returncode:
+        raise AssertionError(out.stderr)
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(NODE, "node not installed")
+class SendLine(unittest.TestCase):
+    """The line under the prompt box belongs to the session it is about."""
+
+    def test_switching_hides_it_and_switching_back_shows_it(self):
+        got = presses_js(
+            "(() => { say('refused: no inbox'); const a = line.textContent;"
+            " selected = 'b'; showSaid(); const b = line.textContent;"
+            " selected = 'a'; showSaid(); return [a, b, line.textContent]; })()")
+        self.assertEqual(got, ["refused: no inbox", "", "refused: no inbox"])
+
+    def test_a_reply_after_a_switch_is_kept_for_its_session(self):
+        got = presses_js(
+            "(() => { say('sending…', 'a'); selected = 'b'; showSaid();"
+            " say('refused', 'a'); const onB = line.textContent;"
+            " selected = 'a'; showSaid(); return [onB, line.textContent]; })()")
+        self.assertEqual(got, ["", "refused"])
+
+
+@unittest.skipUnless(NODE, "node not installed")
+class HeldRedraws(unittest.TestCase):
+    """A redraw between press and release would eat the click."""
+
+    def test_a_redraw_waits_for_the_release_and_then_runs_once(self):
+        got = presses_js(
+            "(() => { let n = 0; const draw = () => n++;"
+            " pressedIn.add('#sessions');"
+            " const a = held('#sessions', draw), b = held('#sessions', draw), other = held('#status', draw);"
+            " releasePresses(); const queued = timers.length; timers.forEach(f => f());"
+            " return [a, b, other, queued, n, held('#sessions', draw)]; })()")
+        # held twice, once queued; another panel is not held; after the
+        # release the draw runs once, and nothing is held any more.
+        self.assertEqual(got, [True, True, False, 1, 1, False])
+
+    def test_set_text_leaves_equal_text_alone(self):
+        got = presses_js(
+            "(() => { let writes = 0; const el = {_t: 'x', get textContent(){ return this._t; },"
+            " set textContent(v){ writes++; this._t = v; }};"
+            " setText(el, 'x'); setText(el, 'y'); return [writes, el.textContent]; })()")
+        self.assertEqual(got, [1, "y"])
+
+
+class RedrawGuards(unittest.TestCase):
+    """Panels redrawn on a timer replace their content only when it changed."""
+
+    def test_timer_panels_are_held_while_pressed(self):
+        js = ui.SCRIPT
+        for fn, sel in (("drawSessions", "#sessions"), ("drawStatus", "#status"), ("drawProcs", "#procs")):
+            start = js.index("function %s(){" % fn)
+            self.assertIn('held("%s", %s)' % (sel, fn), js[start:start + 200], fn)
+        start = js.index("function drawLog(force){")
+        self.assertIn('held("#log", () => drawLog(force))', js[start:start + 200])
+        self.assertIn('["#sessions", "#status", "#procs", "#log"].forEach(holdPresses)', js)
+        self.assertIn('window.addEventListener("pointerup", releasePresses, true)', js)
+
+    def test_timer_panels_compare_against_what_they_drew(self):
+        js = ui.SCRIPT
+        for el in ("#sessions", "#proctabs", "#meter", "#activity", "#curbody"):
+            self.assertIn('if ($("%s").dataset.sig !== ' % el, js, el)
+        self.assertIn("if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }", js)
+        # innerHTML comes back in the browser's own quoting, so it is never
+        # what was drawn: comparing against it redrew every time.
+        self.assertNotIn('.innerHTML !== ', js)
 
 
 if __name__ == "__main__":

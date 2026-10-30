@@ -163,7 +163,11 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 #log.cold{padding-bottom:150px}
 .coldbtn{max-width:min(520px,calc(100% - 16px));background:var(--warnbg);border:1px solid var(--warn);
   border-radius:6px;overflow:hidden;font-size:12px}
-.coldbtn .ct{padding:7px 12px;color:var(--ink)}
+.coldbtn{position:relative}
+.coldbtn .ct{padding:7px 28px 7px 12px;color:var(--ink)}
+.coldbtn .coldx{position:absolute;top:3px;right:3px;width:22px;height:22px;padding:0;border-radius:4px;
+  background:transparent;color:var(--warn);font-size:16px;line-height:20px}
+.coldbtn .coldx:hover{background:var(--warn);color:var(--onaccent)}
 .coldbtn .ct b{color:var(--warn)}
 .coldbtn .ct .cn{color:var(--muted);margin-top:3px}
 .coldbtn .segs{display:flex;border-top:1px solid var(--warn)}
@@ -1243,7 +1247,52 @@ function famClicked(f){
   famClick = {f, t: setTimeout(() => { famClick = null; toggleFold(f); }, DOUBLE_MS)};
 }
 
+// A click is a press and a release on the same element. The session list,
+// the status panel, the waiting-on tabs and a busy session's log are redrawn
+// on a timer or on every pushed change, and a redraw between press and
+// release replaces the element under the pointer: the click then lands on
+// its container and does nothing - a tile that would not select while
+// sessions were busy. So a panel's redraw waits while a press inside it is
+// down, and runs once it is released (after the click, which comes in the
+// same task as the release).
+const pressedIn = new Set(), heldDraws = new Map();
+function holdPresses(sel){
+  $(sel).addEventListener("pointerdown", e => { if (e.button === 0) pressedIn.add(sel); });
+}
+// True while `sel` is pressed; `draw` then runs on the release instead.
+function held(sel, draw){
+  if (!pressedIn.has(sel)) return false;
+  heldDraws.set(sel, draw);
+  return true;
+}
+function releasePresses(){
+  pressedIn.clear();
+  const draws = [...heldDraws.values()];
+  heldDraws.clear();
+  if (draws.length) setTimeout(() => draws.forEach(f => f()), 0);
+}
+// textContent replaced only when it differs: the same text set again still
+// swaps the node, and drops a selection in it.
+function setText(el, text){ if (el.textContent !== text) el.textContent = text; }
+
+// The line under the prompt box is about one session. Switching away hides
+// it and switching back shows it again; a reply that lands after a switch is
+// kept for the session it is about, not shown on another's.
+const said = {};
+let saidFor;
+function say(text, k){
+  if (k === undefined) k = selected;
+  said[k] = text;
+  if (k === selected){ $("#say").textContent = text; saidFor = k; }
+}
+function showSaid(){
+  if (saidFor === selected) return;
+  saidFor = selected;
+  $("#say").textContent = said[selected] || "";
+}
+
 function drawSessions(){
+  if (held("#sessions", drawSessions)) return;
   // Whatever wants a human first, then this machine, then idle.
   sessions.sort((a,b) =>
     (a.attention?0:1) - (b.attention?0:1) ||
@@ -1252,6 +1301,7 @@ function drawSessions(){
     nameOf(a).localeCompare(nameOf(b)));
   if (selected && !sessions.some(s => key(s) === selected)) selected = null;
   if (!selected && sessions.length) selected = key(sessions[0]);
+  showSaid();
 
   const q = ($("#filter").value || "").trim().toLowerCase();
   const hit = s => !q || [nameOf(s), s.name, s.project, s.cwd, s.window_title, s.doing, s.host]
@@ -1289,7 +1339,10 @@ function drawSessions(){
     html += `<div class="g fold" id="archfold"><span>${showArchived ? "▾" : "▸"} archived</span><span>${hidden.length}</span></div>`;
     if (showArchived) html += hidden.map(s => tile(s)).join("");
   }
-  $("#sessions").innerHTML = html || `<div class="note">${q ? "no match" : "no sessions"}</div>`;
+  html = html || `<div class="note">${q ? "no match" : "no sessions"}</div>`;
+  // Unchanged, the tiles stay: a node that is not replaced keeps its hover
+  // and can take a click.
+  if ($("#sessions").dataset.sig !== html){ $("#sessions").innerHTML = html; $("#sessions").dataset.sig = html; }
 
   document.querySelectorAll(".s").forEach(el =>
     el.onclick = () => { selected = el.dataset.k; showCached(); drawSessions(); refreshTab(true); loadStatus(true); });
@@ -1314,8 +1367,8 @@ function drawSessions(){
 function drawHead(){
   const s = current();
   if (view !== "session") return;
-  $("#title").textContent = s ? nameOf(s) : "no session selected";
-  $("#sub").textContent = s ? [s.window_title, s.cwd].filter(Boolean).join("  ·  ") : "";
+  setText($("#title"), s ? nameOf(s) : "no session selected");
+  setText($("#sub"), s ? [s.window_title, s.cwd].filter(Boolean).join("  ·  ") : "");
   $("#sub").title = $("#sub").textContent;
   $("#send").disabled = !s || !!s.remote;
   $("#sendmore").classList.toggle("off", !s || !!s.remote);
@@ -1465,6 +1518,8 @@ function showEarlier(all){
 
 function drawLog(force){
   if (!selected) return;
+  // A busy session repaints the log on every change; not under a press.
+  if (held("#log", () => drawLog(force))) return;
   const log = $("#log");
   if (openedFor !== selected){ opened = new Set(); openedFor = selected; logShown = LOG_WINDOW; }
   if (force) logFollow = true;
@@ -1551,8 +1606,9 @@ function drawCurrent(){
   $("#curbtn").textContent = showCurrent ? "Hide Current Prompt" : "Show Current Prompt";
   box.classList.toggle("fold", currentFolded);
   $("#curfold").innerHTML = currentFolded ? "&#9656;" : "&#9662;";
-  $("#curbody").innerHTML = currentPrompt ? renderText(currentPrompt)
+  const html = currentPrompt ? renderText(currentPrompt)
     : `<div class="note" style="padding:6px 0">no prompt yet in this session</div>`;
+  if ($("#curbody").dataset.sig !== html){ $("#curbody").innerHTML = html; $("#curbody").dataset.sig = html; }
 }
 
 // -- the selected session, in numbers --------------------------------------
@@ -1687,9 +1743,11 @@ function drawStatus(){
   const box = $("#status"), s = current();
   box.hidden = !s;
   if (!s) return;
+  if (held("#status", drawStatus)) return;
   const d = statusFor === selected && statusData ? statusData : {};
   box.classList.toggle("fold", statusFolded);
-  box.innerHTML = statusHtml(s, d, Date.now() / 1000 + statusSkew, statusFolded);
+  const html = statusHtml(s, d, Date.now() / 1000 + statusSkew, statusFolded);
+  if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }
 }
 
 // -- what the session is waiting on ------------------------------------------
@@ -1734,6 +1792,7 @@ async function loadProcs(){
 }
 
 function drawProcs(){
+  if (held("#procs", drawProcs)) return;
   const box = $("#procs"), v = procView(procFor === selected ? procTasks : [], procPick);
   procPick = v.pick;
   box.hidden = !v.show;
@@ -1741,7 +1800,10 @@ function drawProcs(){
   const tabs = v.tabs.map(t => `<button role=tab data-proc="${esc(t.id)}" class="${t.on ? "on" : ""}${
       t.live ? " live" : ""}" title="${esc(t.id === "auto" ? "follows whichever printed last" : t.label)}">${
       t.kind ? `<span class=k>${PROC_MARK[t.kind] || "$"}</span>` : ""}${esc(t.label)}</button>`).join("");
-  if ($("#proctabs").innerHTML !== tabs) $("#proctabs").innerHTML = tabs;
+  // Against what was drawn, not innerHTML: the browser writes that back with
+  // its own quoting (role="tab"), so it never matched and the tabs were
+  // rebuilt every second.
+  if ($("#proctabs").dataset.sig !== tabs){ $("#proctabs").innerHTML = tabs; $("#proctabs").dataset.sig = tabs; }
   const pre = $("#proctext"), text = v.show.text || "";
   const sig = v.show.id + "\n" + text;
   if (sig === procShown) return;
@@ -2031,12 +2093,20 @@ function drawHeavy(s){
   drawCold(s);
 }
 
+// Closed with its X, the button stays away for that expiry: it is back only
+// once the cache has been warmed and has gone cold again.
+let coldGone = {};
+const coldKey = s => key(s) + "@" + (s.work || {}).cache_expires_at;
+
 // Pure: the cold-cache button for row `s`, or "" while its cache is warm, it
-// is small, or it is not on this machine.
-function coldHtml(s, now){
+// is small, it is not on this machine, or it was closed (in `gone`).
+function coldHtml(s, now, gone){
   if (!s || s.remote || !heavyWarnings(s, now).some(h => h.kind === "cold")) return "";
+  if ((gone || coldGone)[coldKey(s)]) return "";
   const w = s.work, cost = w.resume_cost_usd;
-  return `<div class="coldbtn" role="group" aria-label="prompt cache expired"><div class="ct"><b>Prompt cache expired.</b> ` +
+  return `<div class="coldbtn" role="group" aria-label="prompt cache expired">` +
+    `<button class="coldx" data-coldact="dismiss" aria-label="close" title="close - it comes back only when the cache next expires">&times;</button>` +
+    `<div class="ct"><b>Prompt cache expired.</b> ` +
     `Continuing this session re-sends ${esc(kfmt(w.context_tokens))} tokens of context` +
     (cost != null ? ` - about ${esc(usd(cost))} at the cache-write price` : " at the full cache-write price") +
     `. Click to start a new session, or to close this one and start a new session.` +
@@ -2328,7 +2398,8 @@ function wireQuestion(card){
 async function drawMeter(){
   let u;
   try { u = await get("/api/usage"); } catch (e) { return; }
-  $("#meter").innerHTML = meterHtml(u);
+  const html = meterHtml(u);
+  if ($("#meter").dataset.sig !== html){ $("#meter").innerHTML = html; $("#meter").dataset.sig = html; }
 }
 
 // A click opens the Meter Details and another folds them; remembered here.
@@ -2493,9 +2564,9 @@ async function sendReview(toBox){
     noteDraft(); clearReviews(key(s)); box.focus();
     return;
   }
-  $("#say").textContent = "sending review…";
+  say("sending review…", key(s));
   const r = await post("/api/dispatch", {session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: "auto"});
-  $("#say").textContent = r.ok ? outcome(r) : (r.error || "refused");
+  say(r.ok ? outcome(r) : (r.error || "refused"), key(s));
   if (r.ok) clearReviews(key(s));
 }
 
@@ -2518,11 +2589,11 @@ $("#changes").addEventListener("click", e => {
 
 async function loadActivity(){
   const s = current();
-  if (!s){ $("#activity").innerHTML = `<div class="note">select a session</div>`; return; }
+  if (!s){ $("#activity").innerHTML = `<div class="note">select a session</div>`; $("#activity").dataset.sig = ""; return; }
   let d;
   try { d = await get("/api/activity?session=" + encodeURIComponent(key(s))); } catch (e) { return; }
   if (key(s) !== selected || tab !== "activity") return;
-  if (!d.ok){ $("#activity").innerHTML = `<div class="note">${esc(d.error)}</div>`; return; }
+  if (!d.ok){ $("#activity").innerHTML = `<div class="note">${esc(d.error)}</div>`; $("#activity").dataset.sig = ""; return; }
   const t = d.tally;
   const tools = Object.entries(t.by_tool).sort((a,b) => b[1][0] - a[1][0])
     .map(([k,[n,e]]) => `${esc(k)} ${n}${e ? ` <span style="color:var(--fail)">(${e} failed)</span>` : ""}`).join(" · ");
@@ -2536,8 +2607,9 @@ async function loadActivity(){
     return `<div class="ev"><span class="t">${when}</span>${mark}<span class="x"><b>${esc(e.tool)}</b> ${esc(e.summary)}${
       esc(dur)}${e.error ? `<span class="err">${esc(e.error)}</span>` : ""}</span></div>`;
   }).join("");
-  $("#activity").innerHTML = `<div class="kv">${t.calls} tool calls · ${t.errors} failed · ${esc(src)}</div>
+  const html = `<div class="kv">${t.calls} tool calls · ${t.errors} failed · ${esc(src)}</div>
     <div class="kv">${tools}</div>${rows || `<div class="note">no tool calls yet</div>`}`;
+  if ($("#activity").dataset.sig !== html){ $("#activity").innerHTML = html; $("#activity").dataset.sig = html; }
 }
 
 async function loadWorktrees(){
@@ -2628,29 +2700,29 @@ async function act(what){
   }
   if (what === "show"){
     const r = await post("/api/focus", {session_id: key(s)});
-    $("#say").textContent = r.ok ? (r.note || "raised its window") : (r.error || "refused");
+    say(r.ok ? (r.note || "raised its window") : (r.error || "refused"), key(s));
     return;
   }
   if (what === "new" || what === "new-close"){
     const close = what === "new-close";
     if (close && !confirm("Open a new session in " + (s.cwd || "this project") + " and close " + nameOf(s) + "?" +
         (s.status === "busy" ? "\n\nIt is working right now - its turn will be interrupted." : ""))) return;
-    $("#say").textContent = close ? "opening a new session and closing this one…" : "opening a new session…";
+    say(close ? "opening a new session and closing this one…" : "opening a new session…", key(s));
     const r = await post("/api/new", {session_id: key(s), cwd: s.cwd || null, close});
-    if (!r.ok){ $("#say").textContent = r.error || "refused"; return; }
+    if (!r.ok){ say(r.error || "refused", key(s)); return; }
     follow(r.session_id);
     const c = r.closed;
-    $("#say").textContent = "opened a new session in " + (s.cwd || "its project") + " - selecting it once it starts" +
+    say("opened a new session in " + (s.cwd || "its project") + " - selecting it once it starts" +
       (!c ? "" : !c.ok ? "; could not close the old one: " + (c.error || "refused")
         : c.how === "killed" ? "; the old one had to be ended forcibly, so its tab is still open"
-        : c.tab_closed === false && c.how !== "gone" ? "; the old one has exited, its tab is still open" : "; the old one is closed");
+        : c.tab_closed === false && c.how !== "gone" ? "; the old one has exited, its tab is still open" : "; the old one is closed"), key(s));
     return;
   }
   const [kind, where] = what.split("-");
   const r = await post("/api/resume", {session_id: key(s), where, fork: kind === "fork",
     prompt: $("#prompt").value.trim() || null});
-  $("#say").textContent = r.ok ? (r.where === "background" ? kind + "ed in the background · " + (r.id || "")
-    : "opened a new tab: " + r.command) : (r.error || "refused");
+  say(r.ok ? (r.where === "background" ? kind + "ed in the background · " + (r.id || "")
+    : "opened a new tab: " + r.command) : (r.error || "refused"), key(s));
   if (r.ok && where === "background") clearPrompt(key(s));
 }
 
@@ -2695,9 +2767,9 @@ async function queue(){
   const text = $("#prompt").value.trim();
   if (!s || !text) return;
   const r = await post("/api/queue", {session_id: key(s), prompt: text});
-  if (r.ok){ clearPrompt(key(s)); $("#say").textContent = r.waiting ?
-      "queued - delivered when its current turn ends (" + r.waiting + " waiting)" : "delivered now - it was idle"; }
-  else $("#say").textContent = r.error || "refused";
+  if (r.ok){ clearPrompt(key(s)); say(r.waiting ?
+      "queued - delivered when its current turn ends (" + r.waiting + " waiting)" : "delivered now - it was idle", key(s)); }
+  else say(r.error || "refused", key(s));
   queuedSig = "";
 }
 
@@ -2792,13 +2864,13 @@ async function send(mode){
   const s = sessions.find(x => key(x) === selected);
   const text = $("#prompt").value.trim();
   if (!s || !text || busy) return;
-  busy = true; $("#say").textContent = "sending…";
+  busy = true; say("sending…", key(s));
   const r = await post("/api/dispatch", {
     session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: mode || "auto"
   });
   busy = false;
-  if (r.ok){ clearPrompt(key(s)); $("#say").textContent = outcome(r); }
-  else $("#say").textContent = r.error || "refused";
+  if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
+  else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
 }
 
@@ -2809,11 +2881,11 @@ async function sendTyped(){
   const s = sessions.find(x => key(x) === selected);
   const text = $("#prompt").value.trim();
   if (!s || !text || busy) return;
-  busy = true; $("#say").textContent = "typing…";
+  busy = true; say("typing…", key(s));
   const r = await post("/api/typed", {session_id: key(s), prompt: text});
   busy = false;
-  if (r.ok){ clearPrompt(key(s)); $("#say").textContent = outcome(r); }
-  else $("#say").textContent = r.error || "refused";
+  if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
+  else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
 }
 
@@ -2995,6 +3067,11 @@ $("#prompt").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(e.ctrlKey ? "background" : "auto"); }
 });
 $("#filter").addEventListener("input", drawSessions);
+["#sessions", "#status", "#procs", "#log"].forEach(holdPresses);
+// On the window, so a press released outside the panel still lets it redraw.
+window.addEventListener("pointerup", releasePresses, true);
+window.addEventListener("pointercancel", releasePresses, true);
+window.addEventListener("blur", releasePresses);
 $("#group").onchange = () => savePrefs({group: $("#group").value});
 $("#tabpick").onchange = () => setTab($("#tabpick").value);
 $("#curbtn").onclick = () => { closeMenus(); showCurrent = !showCurrent; currentFolded = false; drawCurrent(); };
@@ -3034,7 +3111,10 @@ $("#log").addEventListener("click", e => {
   if (b) showEarlier(b.dataset.earlier === "all");
   if (e.target.closest && e.target.closest("[data-newest]")) showNewest();
   const c = e.target.closest && e.target.closest("[data-coldact]");
-  if (c) act(c.dataset.coldact);
+  if (c && c.dataset.coldact === "dismiss"){
+    const s = current();
+    if (s){ coldGone[coldKey(s)] = true; drawCold(s); }
+  } else if (c) act(c.dataset.coldact);
 });
 // A scroll is the reader's, or ours to the end (which lands at the end, so
 // it keeps following). Content growing does not fire one.
