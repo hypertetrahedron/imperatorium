@@ -17,9 +17,13 @@ being necessary.
 ## Install
 
 You need Python 3.9+, [Claude Code](https://claude.com/claude-code) 2.1.234+
-(2.1.224 on macOS/Linux) and git. `gh`, Windows Terminal and Edge are
-optional; each switches a feature on (PR badges, Resume/Fork tabs, a
-chromeless window). [ONBOARDING.md](ONBOARDING.md) walks through the whole
+(2.1.224 on macOS/Linux) and git. Claude Code 2.1.287+ adds
+[the Imperatorium mod](#the-imperatorium-mod), which setup offers when it
+finds that version. `gh`, Windows Terminal and Edge are optional; each
+switches a feature on (PR badges, Resume/Fork tabs, a chromeless window).
+For a Claude Code without mods, [v0.1.0](https://github.com/hypertetrahedron/imperatorium/releases/tag/v0.1.0)
+is the last version built only on hooks, the statusline and each session's
+socket; this one still works that way when the mod is not installed. [ONBOARDING.md](ONBOARDING.md) walks through the whole
 thing step by step, including other machines.
 
 **From nothing** - the bootstrap script checks the prerequisites, offers to
@@ -295,8 +299,9 @@ Settings window (gear), under Notifications.
 
 Python 3.9+, standard library only. Claude Code 2.1.234 or later on native
 Windows (2.1.224 on macOS/Linux) - that is when a session's inbox became
-reachable. The optional Stream Deck surface has its own dependencies and is
-kept separate for that reason.
+reachable. Claude Code 2.1.287 or later for the mod, which is optional. The
+optional Stream Deck surface has its own dependencies and is kept separate
+for that reason.
 
 ## Running it
 
@@ -360,6 +365,8 @@ python -m imperatorium.deeplink Y:/projects-software/gem-trip "fix it"
 | GET | `/api/conversation` | `?session=<id>&limit=N` - what a session said |
 | GET | `/api/sessions` | merged registry |
 | GET | `/api/stream` | server-sent events: the merged registry whenever it changes |
+| POST | `/api/mod/beat` | the mod's beat: state, usage, prompt acknowledgements; answers the prompts to submit and the status line (mod token) |
+| POST | `/api/mod/check` | the permission policy's verdict on one tool call (mod token) |
 | GET | `/api/projects` | the project catalogue |
 | GET | `/api/events` | recent attention events |
 | GET | `/api/decisions` | recent auto-approval verdicts |
@@ -410,7 +417,53 @@ Bound to `127.0.0.1`. POSTs must be JSON and must carry no `Origin` header: a
 cross-origin `fetch` with a plain-text body is a CORS "simple request", so a
 page you merely had open could otherwise drive this.
 
+## The Imperatorium mod
+
+`mod/imperatorium` is a [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview):
+a small TypeScript module Claude Code loads into every session (2.1.287+),
+listed in `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` by
+`python hooks/install.py --mod` (setup does it when you say yes). It is the
+dispatcher's hand inside each session:
+
+- **Prompts from the window arrive as your own words.** A prompt sent to a
+  session's socket arrives as another session's message (below), which
+  Claude treats as someone else's request. With the mod, the dispatcher hands
+  the prompt to the session's mod, which submits it with `$.prompt.submit`
+  once the session is idle - as you, when you sent it from the window.
+  Anything else - `impctl`, the palette, a script, another Claude session
+  calling the API - is still submitted framed as someone else's, because
+  the window's page token is the only proof the dispatcher has that a person
+  sent it. Send As Typed goes the same way, busy session or not.
+- **State and usage, pushed.** The mod beats to `POST /api/mod/beat` every
+  two seconds and at once when a turn starts or ends: busy or idle, and
+  `$.session.usage()` - context, cost, the 5-hour and weekly limits - which
+  feeds the same meters, pace and alerts the statusline did. The statusline
+  is no longer needed.
+- **A line under each session's prompt**: who else is waiting on you, and
+  what is queued for this session. `/imperatorium` says whether the mod
+  reaches the dispatcher.
+- **The permission policy, in-process.** For a tool call the session's
+  rules and mode would put to you, the mod asks `POST /api/mod/check`, which
+  runs the same `policy.decide` as the permission hook, and only while
+  auto-approval is on (`"decision_format": "object"`). No answer within 1.5
+  seconds, or no dispatcher, leaves the session's own decision standing. The
+  PermissionRequest hook stays: it parks what the policy leaves as an ask in
+  the window, and answers AskUserQuestion, which a mod cannot.
+
+Both endpoints want the token the dispatcher keeps in its state folder
+(`mod-token`), which the mod reads from disk. A session without a live mod -
+an older Claude Code, a remote host - is reached through its socket, as
+before. The status panel's **link** row says which a session uses.
+
+`claude plugin validate mod/imperatorium` and `claude plugin test
+mod/imperatorium` check and test it. `IMPERATORIUM_MOD_ENDPOINT` and
+`IMPERATORIUM_MOD_TOKEN_FILE` point one session's mod at another dispatcher,
+for testing.
+
 ## How dispatch actually works
+
+With the mod installed, the next paragraphs describe the fallback: sessions
+without a live mod.
 
 Claude Code binds an inbox for each session - a named pipe on Windows, a Unix
 socket elsewhere - and exports its path and a per-session token to that

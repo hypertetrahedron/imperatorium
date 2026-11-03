@@ -22,6 +22,13 @@ Two opt-in extras, off unless asked for:
                    out context use and the 5-hour / weekly rate limits. It
                    prints a compact line of its own. Refuses to replace a
                    statusline that is not ours.
+    --mod          the Imperatorium mod (mod/imperatorium, Claude Code
+                   2.1.287+), loaded into every session through
+                   CLAUDE_CODE_PLUGIN_DIRS in the settings' `env`: prompts
+                   from the window arrive as your own words, sessions report
+                   their state and usage at once, and the permission policy
+                   decides in-process. Other folders already listed there
+                   are kept. Makes the statusline unnecessary.
 """
 import argparse
 import json
@@ -34,6 +41,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HOOK_SCRIPT = os.path.join(HERE, "cc_hook.py")
 PERMISSION_SCRIPT = os.path.join(HERE, "cc_permission.py")
 STATUSLINE_SCRIPT = os.path.join(HERE, "cc_statusline.py")
+MOD_DIR = os.path.join(os.path.dirname(HERE), "mod", "imperatorium")
+PLUGIN_DIRS = "CLAUDE_CODE_PLUGIN_DIRS"
 
 # Stamped onto every entry so uninstall can find exactly what it added and
 # leave anyone else's hooks alone.
@@ -93,6 +102,45 @@ def apply_statusline(settings, uninstall=False, python=None):
                               "command": statusline_command(python),
                               "padding": 0}
     return ["replace statusLine" if cur else "add statusLine"]
+
+
+def _same_dir(a, b):
+    norm = lambda p: os.path.normcase(os.path.normpath(os.path.expanduser(p)))  # noqa: E731
+    return norm(a) == norm(b)
+
+
+def has_mod(settings, mod_dir=MOD_DIR):
+    value = ((settings.get("env") or {}).get(PLUGIN_DIRS) or "")
+    return any(_same_dir(d, mod_dir) for d in value.split(os.pathsep) if d.strip())
+
+
+def apply_mod(settings, uninstall=False, mod_dir=MOD_DIR):
+    """Add or remove the mod's folder in CLAUDE_CODE_PLUGIN_DIRS, keeping the
+    folders anything else put there. Returns [description of the change]."""
+    env = settings.get("env")
+    if env is not None and not isinstance(env, dict):
+        return ["SKIP mod: settings `env` is not an object"]
+    env = dict(env or {})
+    dirs = [d for d in str(env.get(PLUGIN_DIRS) or "").split(os.pathsep) if d.strip()]
+    ours = [d for d in dirs if _same_dir(d, mod_dir)]
+    if uninstall:
+        if not ours:
+            return []
+        dirs = [d for d in dirs if not _same_dir(d, mod_dir)]
+        if dirs:
+            env[PLUGIN_DIRS] = os.pathsep.join(dirs)
+        else:
+            env.pop(PLUGIN_DIRS, None)
+        if env:
+            settings["env"] = env
+        else:
+            settings.pop("env", None)
+        return ["remove the mod from env.%s" % PLUGIN_DIRS]
+    if ours:
+        return []
+    env[PLUGIN_DIRS] = os.pathsep.join(dirs + [mod_dir])
+    settings["env"] = env
+    return ["add the mod to env.%s: %s" % (PLUGIN_DIRS, mod_dir)]
 
 
 def settings_path():
@@ -270,6 +318,8 @@ def main():
                     help="also install the per-tool-call activity hooks")
     ap.add_argument("--statusline", action="store_true",
                     help="also install the usage-reporting statusline")
+    ap.add_argument("--mod", action="store_true",
+                    help="also load the Imperatorium mod in every session (Claude Code 2.1.287+)")
     args = ap.parse_args()
 
     if args.remote:
@@ -289,6 +339,10 @@ def main():
     updated, changes = apply(settings, uninstall=args.uninstall, events=events)
     if args.statusline or args.uninstall:
         changes += apply_statusline(updated, uninstall=args.uninstall)
+    if args.mod or args.uninstall:
+        if not os.path.exists(os.path.join(MOD_DIR, ".claude-plugin", "plugin.json")):
+            raise SystemExit("the mod is missing: %s" % MOD_DIR)
+        changes += apply_mod(updated, uninstall=args.uninstall)
 
     print("settings : %s" % path)
     print("hooks    : %s" % sys.executable)
@@ -302,6 +356,8 @@ def main():
         print(json.dumps(updated.get("hooks", {}), indent=2))
         if "statusLine" in updated:
             print("statusLine: %s" % json.dumps(updated["statusLine"]))
+        if (updated.get("env") or {}).get(PLUGIN_DIRS):
+            print("env.%s: %s" % (PLUGIN_DIRS, updated["env"][PLUGIN_DIRS]))
         return 0
 
     os.makedirs(os.path.dirname(path), exist_ok=True)

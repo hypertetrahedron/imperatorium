@@ -1462,7 +1462,9 @@ function tileSignals(s, now, open){
     out.push(`<span class="badge heavy" title="${esc(h.text)}">${esc(h.short)}</span>`));
   if (!open && u.context_pct >= CTX_HI)
     out.push(`<span class="badge ctx-hi" title="context used">ctx ${Math.round(u.context_pct)}%</span>`);
-  if (s.queued) out.push(`<span class="badge q" title="prompts queued">${s.queued} queued</span>`);
+  // Queued here, and handed to the session's mod but not yet started.
+  const waiting = (s.queued || 0) + (s.mod_pending || 0);
+  if (waiting) out.push(`<span class="badge q" title="prompts queued">${waiting} queued</span>`);
   if (!open && s.pr && s.pr.checks === "failing" && s.pr.state === "open") out.push(prBadge(s.pr));
   return out.join("");
 }
@@ -2060,6 +2062,12 @@ function statusHtml(s, d, now, folded){
     cell("lines", `+${u.lines_added || 0} −${u.lines_removed || 0}`);
   if (st.compactions) cell("compactions", String(st.compactions));
   if (s.queued) cell("queued", String(s.queued));
+  // How a prompt from here reaches it: the Imperatorium mod (as your own
+  // words) or the session's messaging socket (as another session's message).
+  if (!s.remote) cell("link", s.mod ? "mod" + (s.mod.mod_version ? " " + s.mod.mod_version : "")
+                                  : s.dispatchable ? "socket" : "",
+                      s.mod ? "prompts sent from this window arrive as your own words"
+                            : "prompts arrive as a message from another session");
   cell("branch", st.branch || "");
   if (st.version) cell("version", st.version, "Claude Code");
   if (d.note) cell("note", d.note);

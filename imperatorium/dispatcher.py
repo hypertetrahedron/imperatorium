@@ -26,6 +26,8 @@ from . import (activity, background, changes, closing, conversation, convcache,
                deeplink, history, inbox, matrix, notify, pending, procs, projects,
                prs, registry, remote, sessionstat, slash, taskout, ui, usage, voice,
                winfocus)
+from . import modlink
+from . import policy as policymod
 from . import settings as settingsmod
 from .store import Store
 
@@ -191,6 +193,11 @@ class Control:
             path=os.path.join(os.path.dirname(store_path), "limits.json")
             if isinstance(store_path, str) else None)
         self.live = activity.Live()
+        # The Imperatorium mod in each session (mod/imperatorium): its beats,
+        # the prompts waiting for it, and the token it proves itself with.
+        self.modlink = modlink.ModLink(
+            os.path.dirname(os.path.abspath(store_path)) if isinstance(store_path, str)
+            else os.path.dirname(default_state_path()))
         self.stats = sessionstat.Reader()
         # Parsed transcripts, reread only when one changes: the chat poll,
         # the doing lines and the activity tab all read through this.
@@ -299,6 +306,20 @@ class Control:
                 row["pr"] = pr
         if queued.get(key):
             row["queued"] = len(queued[key])
+        if not row.get("remote"):
+            mod = self.modlink.state(row["sessionId"])
+            if mod:
+                # The mod reaches the session without its socket, and knows
+                # whether a turn is running the moment it starts or ends.
+                row["mod"] = {"busy": mod["busy"], "since": mod["since"],
+                              "version": mod.get("version"),
+                              "mod_version": mod.get("mod_version")}
+                row["dispatchable"] = True
+                if row.get("status") in (None, "idle", "busy") and not row.get("attention"):
+                    row["status"] = "busy" if mod["busy"] else "idle"
+            pending_mod = self.modlink.pending(row["sessionId"])
+            if pending_mod:
+                row["mod_pending"] = len(pending_mod)
         if row.get("state") in ("done", "failed", "stopped") or (
                 row.get("kind") == "background" and not row.get("pid")
                 and not row.get("status")):
@@ -550,6 +571,90 @@ class Control:
         # Where the last load landed, so the window can say "on CPU" while
         # the user is still speaking; None before the first load finishes.
         return dict(self._voice.where or {}, ok=True, running=self._voice.running)
+
+    # -- the Imperatorium mod ---------------------------------------------
+    def mod_beat(self, beat):
+        """One beat from a session's mod (POST /api/mod/beat): what it is
+        doing, its usage, and what became of the prompts it was given.
+        Answers the prompts to submit now and the line to show."""
+        sid = str(beat.get("session_id") or "")
+        if not sid:
+            return {"ok": False, "error": "no session_id"}
+        was = self.modlink.state(sid)
+        give = self.modlink.beat(beat)
+        for ack in beat.get("acks") or []:
+            if isinstance(ack, dict) and ack.get("outcome") == "dropped":
+                self._event(None, {"kind": "dispatch_dropped", "session_id": sid,
+                                   "cwd": beat.get("cwd"),
+                                   "summary": str(ack.get("reason") or "")[:280]})
+        usage_now = beat.get("usage")
+        if isinstance(usage_now, dict):
+            self.usage.ingest(sid, modlink.statusline_payload(usage_now))
+        if was is None or was["busy"] != bool(beat.get("busy")) or give or beat.get("acks"):
+            self.invalidate()
+        return {"ok": True, "deliver": give, "status": self.mod_status_line(sid)}
+
+    def mod_status_line(self, sid):
+        """The line a session's mod shows under its prompt: who else is
+        waiting on you, and what is queued here. None: nothing to say."""
+        try:
+            # Any snapshot the window or the sweep made lately will do: a
+            # fresh one runs `claude agents --json`, and a beat is due every
+            # two seconds from every session.
+            rows = self.sessions(max_age=self.LOOKUP_AGE)["sessions"]
+        except Exception:
+            return None
+        waiting = [r for r in rows if r.get("attention") and r.get("sessionId") != sid]
+        parts = []
+        if waiting:
+            names = ", ".join((r.get("name") or os.path.basename(str(r.get("cwd") or "").rstrip("/\\")) or "?")[:24]
+                              for r in waiting[:3])
+            more = " +%d" % (len(waiting) - 3) if len(waiting) > 3 else ""
+            parts.append("%d waiting on you: %s%s" % (len(waiting), names, more))
+        here = len(self.store.queued(sid)) + len(self.modlink.pending(sid))
+        if here:
+            parts.append("%d queued here" % here)
+        return " · ".join(parts) or None
+
+    def mod_check(self, request):
+        """The permission policy's verdict on one tool call a session's mod
+        asks about (POST /api/mod/check) - the call its rules and mode would
+        put to you. The same policy.decide the PermissionRequest hook runs,
+        and only once auto-approval is switched on (`decision_format:
+        "object"`): otherwise, as everywhere it is unsure, `ask`, which
+        leaves the session's own decision standing."""
+        policy = self._policy()
+        if policy.get("decision_format") != "object":
+            return {"verdict": "ask", "reason": "auto-approval is off"}
+        req = {"tool_name": request.get("tool_name"), "tool_input": request.get("tool_input"),
+               "cwd": request.get("cwd"), "session_id": request.get("session_id")}
+        verdict, reason, tier = policymod.decide(req, policy)
+        tool_input = req["tool_input"] if isinstance(req["tool_input"], dict) else {}
+        self._audit({"at": time.time(), "verdict": verdict, "reason": reason, "tier": tier,
+                     "tool": req["tool_name"], "via": "mod",
+                     "detail": str(tool_input.get("command") or tool_input.get("file_path")
+                                   or tool_input.get("pattern") or "")[:200],
+                     "cwd": req["cwd"], "session_id": req["session_id"],
+                     "agent_id": request.get("agent_id")})
+        return {"verdict": verdict, "reason": reason, "tier": tier}
+
+    def _policy(self):
+        path = os.environ.get("IMPERATORIUM_POLICY") or os.path.join(PROJECT_DIR, "policy.json")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                got = json.load(fh)
+            return got if isinstance(got, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _audit(self, record):
+        """One line in decisions.jsonl, beside the hook's own (see decisions)."""
+        path = os.path.join(os.path.dirname(self.store.path), "decisions.jsonl")
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     def decisions(self, limit=60):
         """Recent auto-approval verdicts, newest first.
@@ -888,6 +993,8 @@ class Control:
             self.store.forget(key)
             self.live.forget(key)
             self.usage.forget(key)
+            if not host:
+                self.modlink.forget(sid)
             self.invalidate()
             self._event(host, {"kind": "session_end", "session_id": sid,
                                "cwd": payload.get("cwd") or gone.get("cwd"),
@@ -1065,7 +1172,7 @@ class Control:
                               "used": crossing["used"]})
 
     # -- queued prompts ----------------------------------------------------
-    def enqueue(self, session_id, prompt):
+    def enqueue(self, session_id, prompt, as_user=False):
         """Hold `prompt` for a session until its turn ends.
 
         A session that is idle and reachable right now gets it immediately:
@@ -1083,7 +1190,7 @@ class Control:
             if why:
                 return {"ok": False, "error": why}
         key = row.get("key") or session_id
-        item = self.store.enqueue(key, prompt)
+        item = self.store.enqueue(key, prompt, as_user=as_user)
         self.invalidate()
         if (row.get("status") == "idle" and not row.get("attention")
                 and row.get("dispatchable")):
@@ -1106,7 +1213,7 @@ class Control:
             got = self.run_command(row, item["prompt"])
             error = None if got["ok"] else got["error"]
         else:
-            error = self._deliver(row, item["prompt"])
+            error = self._deliver(row, item["prompt"], bool(item.get("as_user")))
         if error:
             self.store.requeue_front(key, item, error)
             return None
@@ -1429,7 +1536,7 @@ class Control:
 
     # -- dispatch --------------------------------------------------------
     def dispatch(self, text=None, project=None, prompt=None, mode="auto",
-                 confirm=False, session_id=None, path=None, host=None):
+                 confirm=False, session_id=None, path=None, host=None, as_user=False):
         """Route an utterance. mode is auto | inject | launch | background | dry-run.
 
         `session_id` short-circuits project matching: the window has already
@@ -1450,7 +1557,7 @@ class Control:
                 return {"ok": False, "error":
                         "that session is not reachable (no credential yet - it "
                         "registers on its next hook event)"}
-            error = self._deliver(row, prompt)
+            error = self._deliver(row, prompt, as_user)
             if error:
                 return {"ok": False, "error": error}
             return {"ok": True, "action": "inject", "session": session_id,
@@ -1519,7 +1626,7 @@ class Control:
             # work becomes a background session over there.
             if mode in ("auto", "inject"):
                 target = self._session_for(match["path"], host=host["name"])
-                error = self._deliver(target, prompt) if target else (
+                error = self._deliver(target, prompt, as_user) if target else (
                     "no dispatchable session for that project")
                 if not error:
                     out.update(ok=True, action="inject", host=host["name"],
@@ -1572,7 +1679,7 @@ class Control:
         if mode in ("auto", "inject"):
             target = self._session_for(match["path"])
             if target:
-                error = self._deliver(target, prompt)
+                error = self._deliver(target, prompt, as_user)
                 if error:
                     if mode == "inject":
                         out.update(ok=False, error=error)
@@ -1744,6 +1851,10 @@ class Control:
             return {"ok": False, "error": why}
         if slash.is_command(clean):
             return dict(self.run_command(row, clean), cleaned=changed)
+        if not row.get("remote") and self.modlink.live(row["sessionId"]):
+            self._deliver(row, clean, as_user=True)
+            return {"ok": True, "action": "typed", "via": "mod", "cleaned": changed,
+                    "session": row["sessionId"], "session_name": row.get("name")}
         self.invalidate()
         row = self._row(row.get("key") or row["sessionId"]) or row
         why = slash.blocked(row, self.pending.waiting())
@@ -1757,8 +1868,23 @@ class Control:
         return {"ok": True, "action": "typed", "cleaned": changed,
                 "session": row["sessionId"], "session_name": row.get("name")}
 
-    def _deliver(self, row, prompt):
-        """Put `prompt` in `row`'s inbox, wherever it is. None, or the error."""
+    def _deliver(self, row, prompt, as_user=False):
+        """Put `prompt` in `row`'s inbox, wherever it is. None, or the error.
+
+        Where the session's mod is live it takes the prompt, and submits it
+        once the session is idle: `as_user` - the person sent it from the
+        window - as their own words, otherwise framed under the mod's name.
+        Elsewhere (no mod: Claude Code before 2.1.287, a remote host) the
+        session's socket takes it, as a peer's message.
+        """
+        if not row.get("remote") and self.modlink.live(row["sessionId"]):
+            text = prompt if as_user else conversation.with_origin(prompt)
+            pid = self.modlink.offer(row["sessionId"], text, as_user)
+            self._event(None, {"kind": "dispatch_mod", "session_id": row["sessionId"],
+                               "cwd": row.get("cwd"), "as_user": bool(as_user),
+                               "mod_prompt": pid, "summary": prompt[:280]})
+            self.invalidate()
+            return None
         prompt = conversation.with_origin(prompt)
         try:
             if row.get("remote"):
@@ -2053,6 +2179,16 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             return
         c = self.control
+        if path in ("/api/mod/beat", "/api/mod/check"):
+            if not isinstance(payload, dict):
+                self._send(400, {"error": "expected an object"})
+                return
+            if not c.modlink.authentic(self.headers.get("X-Imperatorium-Mod") or ""):
+                self._send(403, {"ok": False, "error": "not the Imperatorium mod"})
+                return
+            self._send(200, c.mod_beat(payload) if path == "/api/mod/beat"
+                       else c.mod_check(payload))
+            return
         if path == "/hook":
             self._send(200, c.on_hook(payload if isinstance(payload, dict) else {}))
         elif path == "/api/voice/warm":
@@ -2070,7 +2206,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})
                 return
-            self._send(200, self._post_api(path, payload))
+            self._send(200, self._post_api(path, payload, self._from_window()))
         elif path == "/permission/park":
             # The hook blocks here. Held open until a human answers or the
             # wait expires; an expiry is a silent "ask", which is what the
@@ -2110,16 +2246,20 @@ class Handler(BaseHTTPRequestHandler):
                     session_id=payload.get("session_id"),
                     path=payload.get("path"),
                     host=payload.get("host"),
+                    # Only what the person sent from the window speaks as
+                    # them (see _deliver); impctl, scripts and other
+                    # sessions stay framed as someone else's.
+                    as_user=self._from_window(),
                 ),
             )
         else:
             self._send(404, {"error": "no such path"})
 
 
-    def _post_api(self, path, p):
+    def _post_api(self, path, p, from_window=False):
         c = self.control
         if path == "/api/queue":
-            return c.enqueue(p.get("session_id"), p.get("prompt"))
+            return c.enqueue(p.get("session_id"), p.get("prompt"), as_user=from_window)
         if path == "/api/unqueue":
             ok = c.store.unqueue(p.get("session"), p.get("id"))
             c.invalidate()

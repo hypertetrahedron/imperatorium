@@ -154,7 +154,7 @@ class Store:
     # -- queued prompts ---------------------------------------------------
     # A prompt held for a session until its current turn ends. Persisted,
     # because "I queued that before the restart" should not silently vanish.
-    def enqueue(self, session_id, prompt, note=None):
+    def enqueue(self, session_id, prompt, note=None, as_user=False):
         with self._lock:
             q = self._data["queue"].setdefault(session_id, [])
             # Random, not the clock: two prompts queued in the same tick
@@ -163,6 +163,10 @@ class Store:
                     "at": time.time()}
             if note:
                 item["note"] = note
+            if as_user:
+                # Queued from the window: delivered as the person's own words
+                # where the session's mod is live (Control._deliver).
+                item["as_user"] = True
             q.append(item)
             self._flush_locked()
             return dict(item)

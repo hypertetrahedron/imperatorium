@@ -70,6 +70,10 @@ WINDOW_URL = "http://127.0.0.1:8792/"
 MIN_PYTHON = (3, 9)
 # When a session's inbox became reachable - what dispatch depends on.
 MIN_CLAUDE = (2, 1, 234) if WINDOWS else (2, 1, 224)
+# Mods (mod/imperatorium): an extra, offered from this version on. Without it
+# everything works as in v0.1.0 - hooks, the statusline and each session's
+# messaging socket.
+MIN_CLAUDE_MOD = (2, 1, 287)
 
 # The official Windows build, pinned. vendor/hidapi.dll on the machine this
 # was written on is byte-identical to x64/hidapi.dll in this archive.
@@ -331,7 +335,7 @@ def fetch_hidapi():
 
 
 # -- hooks and service -------------------------------------------------------------
-def install_hooks(statusline, tool_hooks, uninstall=False):
+def install_hooks(statusline, tool_hooks, uninstall=False, mod=False):
     cmd = [sys.executable, os.path.join(HERE, "hooks", "install.py")]
     if uninstall:
         cmd.append("--uninstall")
@@ -340,7 +344,13 @@ def install_hooks(statusline, tool_hooks, uninstall=False):
             cmd.append("--statusline")
         if tool_hooks:
             cmd.append("--tool-hooks")
+        if mod:
+            cmd.append("--mod")
     run(cmd)
+
+
+def claude_version():
+    return parse_version(output(["claude", "--version"]) or "") if shutil.which("claude") else None
 
 
 def pythonw():
@@ -909,6 +919,17 @@ def hooks_state():
     return path, events, hook_install.is_our_statusline(settings.get("statusLine"))
 
 
+def mod_state():
+    """Whether the settings load the Imperatorium mod."""
+    sys.path.insert(0, os.path.join(HERE, "hooks"))
+    import install as hook_install
+    try:
+        with open(hook_install.settings_path(), encoding="utf-8") as fh:
+            return hook_install.has_mod(json.load(fh))
+    except (OSError, ValueError):
+        return False
+
+
 def cmd_check(args):
     step("Prerequisites")
     ok = report(check_prereqs())
@@ -921,6 +942,8 @@ def cmd_check(args):
     say("   %-8s reporting and permission hooks: %s" % (
         "ok " if "SessionStart" in events else "MISSING", ", ".join(events) or "none"))
     say("   %-8s statusline (usage meter)" % ("ok " if statusline else "-- "))
+    say("   %-8s the Imperatorium mod (Claude Code %s+)" % (
+        "ok " if mod_state() else "-- ", ".".join(map(str, MIN_CLAUDE_MOD))))
     ok = ok and bool(events)
     step("Service")
     say("   %-8s %s" % ("ok " if service_installed() else "-- ",
@@ -955,8 +978,17 @@ def cmd_install(args):
     auto = args.auto_approve if args.auto_approve is not None else ask(
         "Auto-approve cheap permission prompts (reads, git status, tests) - see README 'Auto-approval'?",
         False, y)
+    ver = claude_version()
+    mod_ok = bool(ver and ver >= MIN_CLAUDE_MOD)
+    mod = not args.no_mod and mod_ok and ask(
+        "The Imperatorium mod (prompts from the window arrive as your own words; "
+        "live status and usage; the permission policy decides in-process)?", True, y)
+    if not mod_ok and not args.no_mod:
+        say("   (the mod needs Claude Code %s or later; this machine has %s)" % (
+            ".".join(map(str, MIN_CLAUDE_MOD)), ".".join(map(str, ver)) if ver else "none"))
+    # The mod reads usage itself, so the statusline is only offered without it.
     statusline = not args.no_statusline and ask(
-        "Statusline (usage meter: context %, 5-hour and weekly limits)?", True, y)
+        "Statusline (usage meter: context %, 5-hour and weekly limits)?", not mod, y)
     tool_hooks = not args.no_tool_hooks and ask(
         "Tool hooks (live, timed activity; one short process per tool call)?", True, y)
     push = args.ntfy if args.ntfy is not None else ask(
@@ -994,7 +1026,7 @@ def cmd_install(args):
             say("   get x64/hidapi.dll from %s into vendor/ by hand" % HIDAPI_URL)
 
     step("5/7 Claude Code hooks")
-    install_hooks(statusline, tool_hooks)
+    install_hooks(statusline, tool_hooks, mod=mod)
 
     step("6/7 Keep it running")
     if service:
@@ -1053,6 +1085,8 @@ def main(argv=None):
                     help="phone pushes through ntfy.sh, on an unguessable topic")
     ap.add_argument("--no-ntfy", dest="ntfy", action="store_false")
     ap.add_argument("--no-statusline", action="store_true")
+    ap.add_argument("--no-mod", action="store_true",
+                    help="leave out the Imperatorium mod (Claude Code 2.1.287+)")
     ap.add_argument("--no-tool-hooks", action="store_true")
     ap.add_argument("--no-service", action="store_true")
     remote = ap.add_argument_group("remote add / remove")

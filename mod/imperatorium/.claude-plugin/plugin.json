@@ -1,0 +1,13 @@
+{
+  "name": "imperatorium",
+  "version": "0.2.0",
+  "description": "Connects each Claude Code session to the Imperatorium dispatcher: prompts from its window arrive as your own words, the session reports its state and usage, and the permission policy decides in-process.",
+  "userConfig": {
+    "endpoint": {
+      "type": "string",
+      "title": "Dispatcher address",
+      "description": "Where the Imperatorium dispatcher listens.",
+      "default": "http://127.0.0.1:8792"
+    }
+  }
+}
