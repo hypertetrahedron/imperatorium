@@ -41,6 +41,7 @@ _NAME = re.compile(r"^[A-Za-z0-9._:\[\]-]*$")
 _TOPIC = re.compile(r"^[A-Za-z0-9_-]{0,64}$")
 _HOTKEY = re.compile(r"^[a-z0-9]+(\+[a-z0-9]+)*$")
 _LANG = re.compile(r"^[a-z]{0,3}$")
+_COLOR = re.compile(r"^#[0-9a-f]{6}$")
 
 
 def _voice_on(config):
@@ -52,6 +53,8 @@ def _voice_on(config):
 SECTIONS = [
     ("projects", "Projects"),
     ("chat", "Chat"),
+    ("highlight", "Highlighting"),
+    ("colors", "Highlight colours"),
     ("quick", "Quick phrases"),
     ("background", "Background sessions"),
     ("notify", "Notifications"),
@@ -84,6 +87,13 @@ FIELDS = [
          type="bool", default=True, applies=LIVE,
          help="The chat matrix keeps a cell for the cost and usage tile even when the "
               "sessions fill the grid. Off, it shows only in cells the grid leaves empty."),
+    dict(key="chat.font_size", section="chat", label="Chat text size (px)", type="int",
+         min=10, max=28, default=14, applies=LIVE,
+         help="The conversation in the main window. Code, tables and tool lines scale "
+              "with it. 14 is the standard size."),
+    dict(key="chat.matrix_font_size", section="chat", label="Matrix text size (px)",
+         type="int", min=9, max=24, default=13, applies=LIVE,
+         help="The replies and current step in each chat matrix tile. 13 is the standard size."),
     dict(key="quick.key", section="quick", label="Shortcut", type="key", default="ctrl+space",
          applies=LIVE,
          help="Pressed in the prompt box, opens the phrase list. Ctrl, Alt or Win plus a "
@@ -161,6 +171,65 @@ FIELDS = [
          default=[], applies=STREAMDECK,
          help="Projects on fixed keys, in order, one per line. Live sessions fill the rest."),
 ]
+
+# Highlighting in the conversation (ui.py draws every mark; these switches
+# only decide which are shown, so a change needs no redraw).
+HIGHLIGHTS = [
+    ("code", "Code blocks", True,
+     "Keywords, strings, comments, numbers and function names in fenced code, by the "
+     "block's language or a guess at it: Python, JS/TS and other C-like languages, shell, "
+     "PowerShell, JSON, YAML, HTML and SQL."),
+    ("diffs", "Diffs", True,
+     "Added and removed lines in diff blocks, and under each Edit call the lines it "
+     "replaced and what it put there."),
+    ("prose", "Paths, commands and references", True,
+     "In Claude's text: file paths and file:line (click one to copy it), commands in "
+     "backticks, commit hashes and #numbers, and amounts with units - tokens, $, %, "
+     "durations, sizes."),
+    ("tools", "Tool calls", True,
+     "Tool name, file paths, commands, flags and patterns told apart in each tool line; "
+     "a result that was cut short says so."),
+    ("signals", "Errors, passes and questions", True,
+     "Error, failed, Traceback and the like; passed, OK and test counts; warnings; and "
+     "the lines where Claude asks you something."),
+    ("mute", "Mute boilerplate", True,
+     "Claude Code's own messages and the output of Read, Glob, Grep and similar lookups "
+     "are dimmed until pointed at, so the conversation stands out."),
+    ("guides", "Indent guides", True,
+     "Faint vertical lines at each indent level in code blocks and nested lists."),
+    ("shape", "Mark by shape as well as colour", True,
+     "Errors are also underlined, passes bold and warnings dotted, so they read the "
+     "same without telling the colours apart."),
+]
+COLORS = [
+    ("keyword", "Keywords", "if, def, const, return ..."),
+    ("string", "Strings", ""),
+    ("comment", "Comments", ""),
+    ("number", "Numbers and flags", "Numbers in code; --flags in shell."),
+    ("function", "Functions and keys", "Function names, JSON and YAML keys, shell commands."),
+    ("variable", "Variables", "$name in shell and PowerShell."),
+    ("added", "Added lines", ""),
+    ("removed", "Removed lines", ""),
+    ("path", "File paths", ""),
+    ("command", "Commands", "Commands in backticks, and the command of a Bash call."),
+    ("ref", "Hashes and #numbers", ""),
+    ("quantity", "Amounts", "Tokens, $, %, durations and sizes."),
+    ("tool", "Tool names", ""),
+    ("error", "Errors", ""),
+    ("success", "Passes", ""),
+    ("warning", "Warnings", ""),
+    ("question", "Questions to you", ""),
+    ("guide", "Indent guides", ""),
+]
+for _name, _label, _on, _help in HIGHLIGHTS:
+    FIELDS.append(dict(key="highlight." + _name, section="highlight", label=_label, type="bool",
+                       default=_on, applies=LIVE, help=_help))
+for _i, (_name, _label, _help) in enumerate(COLORS):
+    FIELDS.append(dict(key="highlight.colors." + _name, section="colors", label=_label,
+                       type="color", name=_name, default="", applies=LIVE,
+                       help=_help if _i else
+                       "Blank uses the theme's colour, which follows light and dark mode; a "
+                       "colour set here is used in both. " + _help))
 BY_KEY = {f["key"]: f for f in FIELDS}
 
 # Browser key combinations, written the way the page builds them from an
@@ -238,6 +307,11 @@ def check(field, v, current=None):
         raise Invalid("must be one of: %s" % ", ".join(c or "(blank)" for c in field["choices"]))
     if not isinstance(v, (str, list)):
         raise Invalid("expected text")
+    if t == "color":
+        v = v.strip().lower() if isinstance(v, str) else None
+        if v is None or (v and not _COLOR.match(v)):
+            raise Invalid("a colour like #3a7bd5, or blank for the theme's")
+        return v
     if t == "name":
         v = v.strip() if isinstance(v, str) else None
         if v is None or len(v) > 100 or not _NAME.match(v):
@@ -355,7 +429,7 @@ def apply(config, changes):
             if not isinstance(node.get(part), dict):
                 node[part] = {}
             node = node[part]
-        if key.startswith("background.") and got == "":
+        if (key.startswith("background.") or f["type"] == "color") and got == "":
             node.pop(last, None)
         else:
             node[last] = got
@@ -393,6 +467,25 @@ def save(path, config):
         except OSError:
             pass
         raise
+
+
+LOOK_KEYS = ("chat.font_size", "chat.matrix_font_size", "highlight.")
+
+
+def look(config):
+    """What the pages draw with: text sizes, which highlights are on, and the
+    colours set in place of the theme's. Served in each page and on
+    /api/health (ui.look_head, applyLook)."""
+    colors = {}
+    for name, _label, _help in COLORS:
+        v = value(config, BY_KEY["highlight.colors." + name])
+        if isinstance(v, str) and _COLOR.match(v.lower()):
+            colors[name] = v.lower()
+    return {"fonts": {"chat": value(config, BY_KEY["chat.font_size"]),
+                      "matrix": value(config, BY_KEY["chat.matrix_font_size"])},
+            "hl": {name: bool(value(config, BY_KEY["highlight." + name]))
+                   for name, *_ in HIGHLIGHTS},
+            "colors": colors}
 
 
 def restarts(keys):

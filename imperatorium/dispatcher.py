@@ -171,6 +171,9 @@ class Control:
                       "phrases": settingsmod.value(config, settingsmod.BY_KEY["quick.phrases"])}
         self.cold_cache_tokens = settingsmod.value(config, settingsmod.BY_KEY["chat.cold_cache_tokens"])
         self.matrix_status = settingsmod.value(config, settingsmod.BY_KEY["chat.matrix_status"])
+        # Text sizes and highlighting for the window and the matrix: put into
+        # each page as it is served, and on /api/health for open pages.
+        self.look = settingsmod.look(config)
 
         budget = config.get("budget") or {}
         self.notifier = notify.Notifier(config, still_waiting=self._still_waiting)
@@ -788,6 +791,8 @@ class Control:
                 config, settingsmod.BY_KEY["chat.cold_cache_tokens"])
         if "chat.matrix_status" in changes:
             self.matrix_status = bool(changes["chat.matrix_status"])
+        if any(k.startswith(settingsmod.LOOK_KEYS) for k in changes):
+            self.look = settingsmod.look(config)
         for name in ("key", "phrases"):
             if "quick." + name in changes:
                 self.quick[name] = settingsmod.value(
@@ -1942,9 +1947,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
         c = self.control
         if path == "/":
-            self._send(200, ui.render_shell(c.window_token, c.boot_id), "text/html; charset=utf-8")
+            self._send(200, ui.render_shell(c.window_token, c.boot_id, c.look), "text/html; charset=utf-8")
         elif path == "/matrix":
-            self._send(200, ui.render_matrix(c.boot_id), "text/html; charset=utf-8")
+            self._send(200, ui.render_matrix(c.boot_id, c.look), "text/html; charset=utf-8")
         elif path == "/settings":
             self._send(200, ui.render_settings(c.window_token, c.boot_id), "text/html; charset=utf-8")
         elif path == "/api/matrix":
@@ -2031,7 +2036,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/hosts":
             self._send(200, c.hosts_status())
         elif path == "/api/health":
-            self._send(200, {"ok": True, "pid": os.getpid(), "boot": self.control.boot_id})
+            self._send(200, {"ok": True, "pid": os.getpid(), "boot": self.control.boot_id,
+                             "look": self.control.look})
         else:
             self._send(404, {"error": "no such path"})
 

@@ -63,6 +63,9 @@ COMMAND_TAGS = re.compile(r"</?local-command-std(?:out|err)>")
 # the window can ask for the rest.
 RESULT_CHARS = 1200
 INPUT_CHARS = 600
+# What an Edit call changed, shown under it: its old and new text as diff
+# lines, capped so a large rewrite does not ride along on every poll.
+DIFF_CHARS = 3000
 
 # What Claude Code wraps around an inbox prompt before the model sees it. The
 # window shows what was typed, not the wrapper.
@@ -159,13 +162,35 @@ def _summarise_input(name, tool_input):
     return ", ".join(sorted(tool_input)[:6])[:INPUT_CHARS]
 
 
+def edit_diff(name, tool_input):
+    """An Edit or MultiEdit call's change as diff lines ('-' old, '+' new),
+    one hunk per edit, or "" for any other tool. Cut at DIFF_CHARS."""
+    if name not in ("Edit", "MultiEdit") or not isinstance(tool_input, dict):
+        return ""
+    edits = tool_input.get("edits") if name == "MultiEdit" else [tool_input]
+    hunks = []
+    for edit in edits if isinstance(edits, list) else []:
+        if not isinstance(edit, dict):
+            continue
+        old, new = str(edit.get("old_string") or ""), str(edit.get("new_string") or "")
+        if not old and not new:
+            continue
+        lines = ["-" + l for l in old.split("\n")] if old else []
+        lines += ["+" + l for l in new.split("\n")] if new else []
+        hunks.append("\n".join(lines))
+    text = "\n@@\n".join(hunks)
+    if len(text) > DIFF_CHARS:
+        text = text[:DIFF_CHARS].rsplit("\n", 1)[0] + "\n… (cut short)"
+    return text
+
+
 def to_items(messages, limit=0, include_subagents=False, merge=True):
     """Normalise SDK messages into render-ready items, oldest first.
 
     Each item is {speaker, role, blocks:[...]}, where a block is one of:
       {kind: "text",     text}
       {kind: "thinking", text}
-      {kind: "tool",     name, summary, id}
+      {kind: "tool",     name, summary, id, diff?}  (diff: Edit/MultiEdit only)
       {kind: "result",   text, truncated, is_error, id}
 
     A prompt that arrived through the inbox carries `via: "inbox"`.
@@ -203,13 +228,17 @@ def to_items(messages, limit=0, include_subagents=False, merge=True):
                 if text:
                     blocks.append({"kind": THINKING, "text": text})
             elif kind == "tool_use":
-                blocks.append({
+                tool = {
                     "kind": TOOL,
                     "name": block.get("name") or "tool",
                     "summary": _summarise_input(block.get("name"),
                                                 block.get("input")),
                     "id": block.get("id"),
-                })
+                }
+                diff = edit_diff(block.get("name"), block.get("input"))
+                if diff:
+                    tool["diff"] = diff
+                blocks.append(tool)
             elif kind == "tool_result":
                 text = _text_of(block.get("content"))
                 blocks.append({

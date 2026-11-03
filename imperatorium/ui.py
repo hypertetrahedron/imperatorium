@@ -15,7 +15,9 @@ function does no work per request and the page survives the dispatcher
 restarting under it.
 """
 import html
+import json
 import os
+import re
 
 
 CSS = """
@@ -54,13 +56,25 @@ CSS = """
   /* The model mix, after claude-lens: an ironbow ramp in cost order, darkest
      cheapest. --iron-other is a model with no known price, off the ramp. */
   --iron-1:#33206b; --iron-2:#93206e; --iron-3:#cc3a17; --iron-4:#b87b00; --iron-other:#8a8880;
+  /* Highlighting (Settings > Highlight colours sets any of these in place of
+     the theme's, in both themes). Each 4.5:1 or better on --code and --bg. */
+  --hl-keyword:#7a3fb0; --hl-string:#00736f; --hl-comment:#5f6670; --hl-number:#a34a00;
+  --hl-function:#2863ab; --hl-variable:#93206e; --hl-added:#00736f; --hl-removed:#af2843;
+  --hl-path:#2863ab; --hl-command:#7a3fb0; --hl-ref:#7a5a00; --hl-quantity:#8a4f00;
+  --hl-tool:#2863ab; --hl-error:#af2843; --hl-success:#00736f; --hl-warning:#9f4500;
+  --hl-question:#2863ab; --hl-guide:#c4cad3;
 }
 @media (prefers-color-scheme: dark){
   :root{ --bg:#0f1318; --panel:#1a1e25; --side:#14191e; --ink:#e4e8ed;
          --muted:#a5abb4; --line:#30363e; --warn:#f7ab5d; --warnbg:#2e2112;
          --ok:#6fcabf; --busy:#79b6f4; --sel:#202f42; --code:#0a0e12;
          --fail:#f2808b; --done:#6c737d; --onaccent:#0f1318;
-         --iron-1:#7551e0; --iron-2:#a52a86; --iron-3:#ef6a1a; --iron-4:#ffcf4d; --iron-other:#6f6d66}
+         --iron-1:#7551e0; --iron-2:#a52a86; --iron-3:#ef6a1a; --iron-4:#ffcf4d; --iron-other:#6f6d66;
+         --hl-keyword:#c79bff; --hl-string:#6fcabf; --hl-comment:#8b929c; --hl-number:#f7ab5d;
+         --hl-function:#79b6f4; --hl-variable:#f08cc8; --hl-added:#6fcabf; --hl-removed:#f2808b;
+         --hl-path:#79b6f4; --hl-command:#c79bff; --hl-ref:#e3c46a; --hl-quantity:#e3c46a;
+         --hl-tool:#79b6f4; --hl-error:#f2808b; --hl-success:#6fcabf; --hl-warning:#f7ab5d;
+         --hl-question:#79b6f4; --hl-guide:#353c45}
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -153,6 +167,10 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
    a line of it. Show Most Recent only while the end of the conversation is
    out of view; the cold-cache button, above it, while the cache is cold -
    and the log keeps room under its end so it does not cover the last reply. */
+/* The Settings window's chat text size (--chatz, see font_vars) zooms each
+   turn rather than the scroller, so scrolling stays in the page's own px and
+   the prose width stays the same number of characters. */
+#log>:not(.newest){zoom:var(--chatz,1)}
 #log .newest{position:sticky;bottom:0;height:0;pointer-events:none;z-index:2}
 #log .newest .float{position:absolute;left:0;right:0;bottom:14px;display:flex;flex-direction:column;
   align-items:center;gap:8px}
@@ -272,6 +290,44 @@ blockquote{border-left:3px solid var(--line);margin:6px 0;padding:0 0 0 10px;
   max-height:220px;overflow:auto;word-break:break-all}
 .res.err{border-left:2px solid var(--warn)}
 .think{color:var(--muted);font-style:italic;white-space:pre-wrap;margin:5px 0}
+/* Highlighting. Every mark is in the page; html.hl-<name> (Settings >
+   Highlighting) shows it. Colours are the --hl-* above. */
+html.hl-code .tk-kw{color:var(--hl-keyword)}
+html.hl-code .tk-str{color:var(--hl-string)}
+html.hl-code .tk-com{color:var(--hl-comment);font-style:italic}
+html.hl-code .tk-num{color:var(--hl-number)}
+html.hl-code .tk-fn{color:var(--hl-function)}
+html.hl-code .tk-var{color:var(--hl-variable)}
+html.hl-diffs .dl-a{color:var(--hl-added);background:color-mix(in srgb,var(--hl-added) 12%,transparent)}
+html.hl-diffs .dl-r{color:var(--hl-removed);background:color-mix(in srgb,var(--hl-removed) 12%,transparent)}
+html.hl-diffs .dl-h{color:var(--hl-path)}
+html.hl-diffs .dl-f{font-weight:600}
+pre.code.tdiff{max-height:260px;overflow:auto;margin:2px 0 7px}
+html:not(.hl-diffs) pre.tdiff{display:none}
+html.hl-prose .pth:not(.tp){color:var(--hl-path);cursor:copy;text-decoration:underline dotted 1px;text-underline-offset:3px}
+html.hl-prose code.cmd{color:var(--hl-command)}
+html.hl-prose .ref{color:var(--hl-ref)}
+html.hl-prose .qty{color:var(--hl-quantity);font-weight:600}
+html.hl-tools .tool b{color:var(--hl-tool)}
+html.hl-tools .tool .tp{color:var(--hl-path);cursor:copy}
+html.hl-tools .tool .tc{color:var(--hl-command);font-weight:600}
+html.hl-tools .tool .tf{opacity:.7}
+html.hl-tools .tool .tq{color:var(--hl-string)}
+.res .cutmark{color:var(--muted);font-style:italic}
+html.hl-tools .res.cut{border-bottom:2px dashed var(--line)}
+html.hl-signals .sg-err{color:var(--hl-error)}
+html.hl-signals .sg-pass{color:var(--hl-success)}
+html.hl-signals .sg-warn{color:var(--hl-warning)}
+html.hl-signals.hl-shape .sg-err{font-weight:700;text-decoration:underline wavy 1px;text-underline-offset:3px}
+html.hl-signals.hl-shape .sg-pass{font-weight:700}
+html.hl-signals.hl-shape .sg-warn{text-decoration:underline dotted 1.5px;text-underline-offset:3px}
+html.hl-signals .turn:not(.you-turn) .ask,html.hl-signals .rp .ask{
+  background:color-mix(in srgb,var(--hl-question) 13%,transparent);box-shadow:inset 3px 0 var(--hl-question);
+  padding:1px 4px 1px 7px;border-radius:3px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+html.hl-mute .turn.sys,html.hl-mute .res.quiet{opacity:.55;transition:opacity .15s}
+html.hl-mute .turn.sys:hover,html.hl-mute .res.quiet:hover{opacity:1}
+html.hl-guides .ig{background:linear-gradient(to right,var(--hl-guide) 0 1px,transparent 1px)}
+html.hl-guides .md li>ul,html.hl-guides .md li>ol{border-left:1px solid var(--hl-guide)}
 .note{color:var(--muted);padding:26px 0;text-align:center}
 
 #ask{padding:10px 16px;border-top:1px solid var(--line);background:var(--panel)}
@@ -563,12 +619,35 @@ try {
 // page asks now and then and calls `onNew` once the answer changes.
 const BOOT = typeof document === "undefined" ? ""
   : (document.querySelector("meta[name=imp-boot]") || {}).content || "";
+// What Settings says the pages draw with (settings.look): text sizes as
+// zoom factors over the sizes the CSS is written at (ui.FONT_BASE), which
+// highlights show (html.hl-*), and colours set in place of the theme's.
+// Served in the page (ui.look_head) and on /api/health, so an open page
+// follows a change without a reload. Not on the Settings page, whose colour
+// pickers show the theme's own colours.
+const FONT_BASE = {chat: 14, matrix: 13};
+function applyLook(l){
+  const head = document.getElementById("lookvars");
+  if (!l || !head) return;
+  const root = document.documentElement, f = l.fonts || {}, c = l.colors || {};
+  for (const k in FONT_BASE){
+    const n = Number(f[k]);
+    if (n > 0) root.style.setProperty("--" + k + "z", String(n / FONT_BASE[k]));
+  }
+  for (const [k, on] of Object.entries(l.hl || {})) root.classList.toggle("hl-" + k, !!on);
+  for (const prop of [...root.style].filter(x => x.startsWith("--hl-")))
+    if (!c[prop.slice(5)]) root.style.removeProperty(prop);
+  for (const [k, v] of Object.entries(c))
+    if (/^#[0-9a-f]{6}$/i.test(v)) root.style.setProperty("--hl-" + k, v);
+  head.textContent = "";   // the page's own style now says it all
+}
 let bootChecking = false;
 async function checkBoot(onNew){
   if (!BOOT || bootChecking) return;
   bootChecking = true;
   try {
     const h = await (await fetch("/api/health", {cache: "no-store"})).json();
+    if (h && h.look) applyLook(h.look);
     if (h && h.boot && h.boot !== BOOT) onNew();
   } catch (e) { /* down or restarting: ask again next time */ }
   bootChecking = false;
@@ -844,6 +923,254 @@ function cells(line){
 const attr = s => esc(s).replace(/"/g, "&quot;");
 const link = (href, text) => `<a href="${attr(href)}" target="_blank" rel="noopener">${text}</a>`;
 
+// -- highlighting -------------------------------------------------------------
+// Every mark is always drawn; the html.hl-<name> classes (Settings >
+// Highlighting, applyLook) decide which show, so a switch needs no redraw.
+// Marks are spans around the text and never change it, so find, copy and
+// the line counts read the same as before.
+
+// Text set aside while the rest is marked: placeholders of private-use
+// characters, which no \w, \d or \s in the patterns below can match.
+function holder(){
+  const kept = [];
+  const hold = h => "\uE000" + [...(kept.push(h) - 1).toString(16)]
+    .map(c => String.fromCharCode(0xE010 + parseInt(c, 16))).join("") + "\uE001";
+  const HELD = /\uE000([\uE010-\uE01F]+)\uE001/g;
+  const back = s => {
+    for (let n = 0; n < 8 && HELD.test(s); n++)
+      s = s.replace(HELD, (_, d) => kept[parseInt([...d].map(c => (c.charCodeAt(0) - 0xE010).toString(16)).join(""), 16)]);
+    return s;
+  };
+  return {hold, back};
+}
+
+// File paths: rooted (C:\, ~/, ./, ../, /), relative with a file extension,
+// or a bare name with a known one; each may end in :line or :line:col.
+const PATH_EXTS = "py|pyi|js|mjs|cjs|ts|tsx|jsx|json|jsonc|md|txt|yml|yaml|toml|ini|cfg|conf|ps1|psm1|sh|bash|bat|cmd|" +
+  "html|htm|css|scss|go|rs|java|kt|c|h|cc|cpp|hpp|cs|rb|php|sql|lock|log|xml|csv|tsv|env|vue|svelte|swift|lua|r|ipynb";
+const PATH_SRC = /(?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|\/(?=[\w.]))(?:[\w.@+-]+[\\/])*[\w.@+-]*\w/.source + "|" +
+  /(?:[\w.@+-]+[\\/])+[\w@+-]*\.[A-Za-z0-9]{1,8}/.source + "|" +
+  "[\\w-]+(?:\\.[\\w-]+)*\\.(?:" + PATH_EXTS + ")";
+const LINE_SRC = /(?::\d+(?:[:-]\d+)?)?/.source;
+const PATH_RE = new RegExp(/(?<![\w\/\\.:@-])/.source + "(?:" + PATH_SRC + ")" + LINE_SRC + /(?![\w\/\\])/.source, "g");
+const PATH_ONLY = new RegExp("^(?:" + PATH_SRC + ")" + LINE_SRC + "$");
+// Commit hashes (7-40 hex with a digit and a letter) and #123.
+const REF_RE = /(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w-])|(?<![\w&#])#\d{1,6}(?!\w)/g;
+// Amounts: $ and numbers with a unit - tokens, durations, sizes, %.
+const QTY_RE = new RegExp(/\$\d[\d,]*(?:\.\d+)?(?:\s?[kKMB](?!\w))?/.source + "|" +
+  /(?<![\w.$])\d[\d,]*(?:\.\d+)?(?:\s?[kKM](?=\s?tokens?\b))?\s?/.source +
+  "(?:tokens?|ms|secs?|seconds?|mins?|minutes?|hrs?|hours?|days?|weeks?|[kKMGT]i?B|bytes?|px|%|s|h|m)(?!\\w)", "g");
+// What a test run or a log says went wrong, went right, or wants a look.
+const SIGNALS = [
+  ["err", /\b\d+ (?:failed|failures?|errors?)\b|\b(?:FAILED|FAIL|FAILURES?|ERROR|Error|Errors|Traceback|Exception|Fatal|fatal|failed|failure|failing|panic(?:ked)?)\b|\b[A-Z]\w*(?:Error|Exception)\b/g],
+  ["pass", /\bRan \d+ tests?\b|\b\d+ (?:passed|tests? passed|succeeded)\b|\b(?:PASSED|PASS|OK|passed|passing|succeeded|successful(?:ly)?)\b/g],
+  ["warn", /\b(?:WARNING|WARN|Warning|warning|warnings|deprecated|[A-Z]\w*Warning)\b/g],
+];
+// A code span that is a command: a known program first, or a cmdlet.
+const CMD_RE = new RegExp("^(?:\\$\\s+)?(?:\\S*[\\\\/])?(?:git|gh|python3?|py|pip3?|uv|pytest|npm|npx|node|yarn|pnpm|" +
+  "deno|bun|cargo|go|make|cmake|docker|kubectl|helm|terraform|cd|ls|dir|cat|grep|rg|find|sed|awk|curl|wget|ssh|" +
+  "scp|rsync|rm|mv|cp|mkdir|touch|chmod|chown|echo|export|source|sudo|winget|choco|scoop|claude|impctl|bash|sh|" +
+  "zsh|pwsh|powershell|code|setx|tar|unzip|java|dotnet|ruby|gem|bundle|php|brew|apt|apt-get|systemctl|journalctl)" +
+  "(?:\\.exe)?(?:\\s|$)|^[A-Z][a-z]+-[A-Z]\\w+");
+
+const pathSpan = (p, extra) =>
+  `<span class="pth${extra ? " " + extra : ""}" data-copy="${attr(p)}" title="click to copy">${esc(p)}</span>`;
+function markWith(s, hold, sigs){
+  s = s.replace(PATH_RE, m => hold(pathSpan(m)));
+  s = s.replace(REF_RE, m => hold(`<span class="ref">${esc(m)}</span>`));
+  for (const [cls, re] of SIGNALS) s = s.replace(re, m => hold(`<span class="sg-${cls}">${esc(m)}</span>`));
+  if (!sigs) s = s.replace(QTY_RE, m => hold(`<span class="qty">${esc(m)}</span>`));
+  return s;
+}
+// Plain text (a tool result) with its paths, references and signals marked.
+function markPlain(text){
+  const {hold, back} = holder();
+  return back(esc(markWith(String(text == null ? "" : text), hold, true)));
+}
+
+// Code: one tokenizer per family, each an ordered list of [class, pattern];
+// a bare word is a keyword from the family's list, a function when "(" is
+// next, or plain. Patterns may not hold capturing groups.
+const NUM = /\b(?:0[xX][\da-fA-F_]+|0[bBoO][0-7_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)[a-zA-Z]{0,2}\b/.source;
+const DQ = /"(?:\\.|[^"\\\n])*"/.source, SQ = /'(?:\\.|[^'\\\n])*'/.source;
+const C_KW = "abstract as async await break case catch class const continue debugger default defer delete do else " +
+  "enum export extends false final finally fn for from func function go goto if impl implements import in " +
+  "instanceof interface let loop match mod mut namespace new nil null of package private protected pub public " +
+  "readonly return self Self static struct super switch this throw throws true try type typeof undefined use " +
+  "using var void where while with yield int char bool float double long short unsigned string";
+const LANGS = {
+  py: {kw: "and as assert async await break case class continue def del elif else except False finally for from " +
+      "global if import in is lambda match None nonlocal not or pass raise return self True try while with yield",
+    rules: [["com", /#.*/.source],
+            ["str", /[rRbBfFuU]{0,2}(?:'{3}[\s\S]*?'{3}|"{3}[\s\S]*?"{3})/.source + "|" + /[rRbBfFuU]{0,2}/.source + "(?:" + DQ + "|" + SQ + ")"],
+            ["fn", /@[\w.]+/.source], ["num", NUM], ["id", /[A-Za-z_]\w*/.source]]},
+  c: {kw: C_KW,
+    rules: [["com", /\/\/.*|\/\*[\s\S]*?\*\//.source],
+            ["str", DQ + "|" + SQ + "|" + /`(?:\\[\s\S]|[^`\\])*`/.source],
+            ["fn", /@\w+/.source], ["num", NUM], ["id", /[A-Za-z_$][\w$]*/.source]]},
+  sh: {kw: "if then else elif fi for in do done while until case esac function return local export readonly " +
+      "unset shift exit source true false time select", cmd: true,
+    rules: [["com", /(?<![\w$#{])#.*/.source], ["str", /"(?:\\[\s\S]|[^"\\])*"|'[^']*'/.source],
+            ["var", /\$\{[^}\n]*\}|\$[A-Za-z_]\w*|\$[@#?*!$0-9]/.source],
+            ["num", /(?<=\s)--?[A-Za-z][\w-]*/.source + "|" + NUM], ["id", /[A-Za-z_][\w.-]*/.source]]},
+  ps: {kw: "begin break catch class continue data do dynamicparam else elseif end exit filter finally for foreach " +
+      "from function if in param process return switch throw trap try until using var while", ci: true,
+    rules: [["com", /<#[\s\S]*?#>|#.*/.source], ["str", /"(?:`[\s\S]|""|[^"`])*"|'(?:''|[^'])*'/.source],
+            ["var", /\$\{[^}\n]*\}|\$(?:env:|script:|global:)?[\w]+/.source],
+            ["fn", /\b[A-Za-z]+-[A-Za-z]+\b/.source],
+            ["num", /(?<=\s)-[A-Za-z]\w*/.source + "|" + NUM], ["id", /[A-Za-z_]\w*/.source]]},
+  json: {kw: "true false null",
+    rules: [["fn", DQ + /(?=\s*:)/.source], ["str", DQ], ["num", /-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/.source],
+            ["id", /[A-Za-z_]\w*/.source]]},
+  yaml: {kw: "true false null yes no on off True False Null", flags: "m",
+    rules: [["com", /(?<!\S)#.*/.source], ["kw", /^[ \t]*\[[^\]\n]+\]/.source],
+            ["fn", /(?<=^[ \t]*(?:- +)?)[\w.$-][\w .$\/-]*?(?=[ \t]*:(?:\s|$))/.source],
+            ["str", DQ + "|" + /'(?:''|[^'\n])*'/.source], ["num", NUM], ["id", /[A-Za-z_]\w*/.source]]},
+  html: {kw: "",
+    rules: [["com", /<!--[\s\S]*?-->/.source], ["kw", /<\/?[A-Za-z][\w:-]*|\/?>/.source],
+            ["fn", /(?<=\s)[\w:@.-]+(?==)/.source], ["str", /"[^"]*"|'[^']*'/.source]]},
+  sql: {kw: "select from where and or not insert into values update set delete create table index view drop alter " +
+      "add join left right inner outer full cross on as group by order having limit offset union all distinct case " +
+      "when then else end null is in like between exists primary key foreign references default begin commit " +
+      "rollback with returning asc desc count sum avg min max", ci: true,
+    rules: [["com", /--.*|\/\*[\s\S]*?\*\//.source], ["str", /'(?:''|[^'])*'/.source], ["num", NUM],
+            ["id", /[A-Za-z_]\w*/.source]]},
+};
+const LANG_OF = {python: "py", py: "py", python3: "py", py3: "py", pyi: "py",
+  js: "c", javascript: "c", jsx: "c", mjs: "c", ts: "c", typescript: "c", tsx: "c", java: "c", c: "c", h: "c",
+  cpp: "c", "c++": "c", cc: "c", cs: "c", csharp: "c", go: "c", golang: "c", rust: "c", rs: "c", kotlin: "c",
+  kt: "c", swift: "c", php: "c", css: "c", scss: "c", dart: "c", scala: "c",
+  sh: "sh", bash: "sh", shell: "sh", zsh: "sh", console: "sh", terminal: "sh", shellsession: "sh",
+  ps: "ps", ps1: "ps", powershell: "ps", pwsh: "ps",
+  json: "json", jsonc: "json", json5: "json", yaml: "yaml", yml: "yaml", toml: "yaml", ini: "yaml",
+  html: "html", xml: "html", svg: "html", vue: "html", sql: "sql", diff: "diff", patch: "diff", udiff: "diff"};
+
+// No language named: a guess from the text, or none.
+function guessLang(src){
+  const s = src.trim();
+  if (/^(?:diff --git|--- \S|\+\+\+ \S|@@ )/m.test(s) && /^[-+]/m.test(s)) return "diff";
+  if (/^[\[{]/.test(s)) { try { JSON.parse(s); return "json"; } catch (e) {} }
+  if (/^\s*(?:def \w+\(|class \w+[(:]|import \w+$|from [\w.]+ import |if __name__)/m.test(s)) return "py";
+  if (/\b(?:Get|Set|New|Remove|Start|Stop|Write|Invoke|Test)-[A-Z]\w+|\$env:/.test(s)) return "ps";
+  if (/^\s*(?:const|let|var|function|export|import .* from|interface|fn|func|package|#include|public class) /m.test(s)
+      || /\) =>|=> \{/.test(s)) return "c";
+  if (/^\s*(?:\$ |#!\/|git |cd |python|npm |pip |ls |sudo |curl |\.\/)/m.test(s)) return "sh";
+  if (/^\s*<[A-Za-z!?]/.test(s)) return "html";
+  if (/^\s*(?:SELECT|INSERT|UPDATE|CREATE|WITH)\s/i.test(s) && /;\s*$|\bFROM\b/i.test(s)) return "sql";
+  if (/^[\w.-]+:(?:\s|$)/m.test(s) && !/[;{}()]/.test(s)) return "yaml";
+  return "";
+}
+
+function tokenize(src, lang){
+  const L = LANGS[lang];
+  if (!L.re){
+    L.re = new RegExp(L.rules.map(r => "(" + r[1] + ")").join("|"), "g" + (L.flags || ""));
+    L.kwset = new Set(L.kw.split(" ").filter(Boolean).map(w => L.ci ? w.toLowerCase() : w));
+  }
+  const out = [];
+  let at = 0;
+  for (const m of src.matchAll(L.re)){
+    if (!m[0]) continue;
+    if (m.index > at) out.push(["", src.slice(at, m.index)]);
+    let cls = L.rules[m.slice(1).findIndex(x => x !== undefined)][0];
+    if (cls === "id"){
+      const end = m.index + m[0].length;
+      if (L.kwset.has(L.ci ? m[0].toLowerCase() : m[0])) cls = "kw";
+      else if (L.cmd && /(?:^|[|;&(]|\$ )\s*(?:sudo\s+)?$/.test(src.slice(src.lastIndexOf("\n", m.index - 1) + 1, m.index))) cls = "fn";
+      else if (/^\s*\(/.test(src.slice(end, end + 20))) cls = "fn";
+      else cls = "";
+    }
+    out.push([cls, m[0]]);
+    at = m.index + m[0].length;
+  }
+  if (at < src.length) out.push(["", src.slice(at)]);
+  return out;
+}
+
+// Indent guides: each indent level's leading whitespace as its own span,
+// which html.hl-guides draws a faint line at the start of.
+function indentUnit(src){
+  let u = 0;
+  for (const m of src.matchAll(/^( +)\S/gm)){ const n = m[1].length; if (n >= 2 && (!u || n < u)) u = n; }
+  return Math.min(u || 4, 8);
+}
+function guides(ws, unit){
+  if (ws.includes("\t")) return ws.replace(/\t/g, '<span class="ig">\t</span>');
+  const n = Math.floor(ws.length / unit);
+  return `<span class="ig">${" ".repeat(unit)}</span>`.repeat(n) + ws.slice(n * unit);
+}
+function codeHtml(src, lang){
+  const lines = [[]];
+  for (const [c, t] of LANGS[lang] ? tokenize(src, lang) : [["", src]])
+    t.split("\n").forEach((p, i) => { if (i) lines.push([]); if (p) lines[lines.length - 1].push([c, p]); });
+  const unit = indentUnit(src);
+  return lines.map(line => {
+    let html = "", lead = true;
+    for (let [c, t] of line){
+      if (lead){
+        const ws = /^[ \t]*/.exec(t)[0];
+        if (ws){ html += guides(ws, unit); t = t.slice(ws.length); }
+        if (!t) continue;
+        lead = false;
+      }
+      html += c ? `<span class="tk-${c}">${esc(t)}</span>` : esc(t);
+    }
+    return html;
+  }).join("\n");
+}
+// A diff, line by line. `plain` (an Edit's own change) has no file headers,
+// so a removed "-- comment" is not read as one.
+function diffCodeHtml(src, plain){
+  return String(src).split("\n").map(l => {
+    const c = !plain && /^(?:diff --git|index |\+\+\+ |--- )/.test(l) ? "f" : l.startsWith("@@") ? "h"
+            : l[0] === "+" ? "a" : l[0] === "-" ? "r" : "";
+    return c ? `<span class="dl-${c}">${esc(l)}</span>` : esc(l);
+  }).join("\n");
+}
+function codeBlock(src, info){
+  const named = LANG_OF[info];
+  const lang = named || (info ? "" : guessLang(src));
+  if (lang === "diff") return `<pre class="code dif">${diffCodeHtml(src)}</pre>`;
+  return `<pre class="code"${lang ? ` data-lang="${lang}"` : ""}>${codeHtml(src, lang)}</pre>`;
+}
+
+// A line of Claude's that asks something: marked so it is found again in a
+// long reply (shown only in Claude's turns; see the CSS).
+const ASK = /\?\s*(?:[*_)"'\]]+\s*)?$/;
+const askLine = l => ASK.test(l) && l.trim().length > 3 ? `<span class="ask">${inline(l)}</span>` : inline(l);
+
+// Tool calls: the name, then its argument told apart - a command and its
+// flags, a pattern, a file path - and under an Edit what it changed.
+const PATH_TOOLS = /^(?:Read|Edit|MultiEdit|Write|NotebookEdit|NotebookRead|LS)$/;
+const SHELL_TOOLS = /^(?:Bash|PowerShell|Monitor)$/;
+const QUIET_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "ToolSearch",
+  "NotebookRead", "TaskOutput", "BashOutput", "TaskList", "TaskGet", "ListMcpResourcesTool", "ReadMcpResourceTool"]);
+let toolNames = new Map();   // tool call id -> tool name, for its result
+function cmdLine(s){
+  const {hold, back} = holder();
+  const t = s
+    .replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, m => hold(`<span class="tq">${esc(m)}</span>`))
+    .replace(/(^|\n|[|;&(]\s*)([^\s|;&()\uE000][^\s|;&()]*)/g, (_, pre, w) => pre + hold(`<span class="tc">${esc(w)}</span>`))
+    .replace(/(^|\s)(--?[A-Za-z][\w-]*)/g, (_, sp, f) => sp + hold(`<span class="tf">${esc(f)}</span>`))
+    .replace(PATH_RE, m => hold(pathSpan(m, "tp")));
+  return back(esc(t));
+}
+function toolHtml(b){
+  const s = String(b.summary || "");
+  const arg = !s ? "" : SHELL_TOOLS.test(b.name) ? cmdLine(s)
+    : /^(?:Grep|Glob)$/.test(b.name) ? `<span class="tq">${esc(s)}</span>`
+    : (PATH_TOOLS.test(b.name) && !s.includes("\n")) || PATH_ONLY.test(s) ? pathSpan(s, "tp")
+    : esc(s);
+  return `<div class="tool"><b>${esc(b.name)}</b> ${arg}</div>` +
+    (b.diff ? `<pre class="code dif tdiff">${diffCodeHtml(b.diff, true)}</pre>` : "");
+}
+function resultHtml(b){
+  const quiet = QUIET_TOOLS.has(toolNames.get(b.id));
+  return `<div class="res${b.is_error ? " err" : ""}${quiet ? " quiet" : ""}${b.truncated ? " cut" : ""}">${
+    markPlain(b.text)}${b.truncated ? '<span class="cutmark">\n… cut short</span>' : ""}</div>`;
+}
+// -- end highlighting --
+
 function emph(s){
   return s
     .replace(/\*\*(?!\s)([^\n]+?)(?<!\s)\*\*/g, "<b>$1</b>")
@@ -853,15 +1180,19 @@ function emph(s){
     .replace(/~~(?!\s)([^\n]+?)(?<!\s)~~/g, "<s>$1</s>");
 }
 
+// Then paths, references, signals and amounts are marked (see highlighting);
+// a code span that is a path or a command says so.
+const codeSpan = c => PATH_ONLY.test(c)
+  ? `<code class="pth" data-copy="${attr(c)}" title="click to copy">${esc(c)}</code>`
+  : `<code${CMD_RE.test(c) ? ' class="cmd"' : ""}>${esc(c)}</code>`;
 function inline(s){
-  const kept = [];
-  const hold = h => "\u0000" + (kept.push(h) - 1) + "\u0000";
+  const {hold, back} = holder();
   s = String(s == null ? "" : s)
-    .replace(/`([^`\n]+)`/g, (_, c) => hold("<code>" + esc(c) + "</code>"))
+    .replace(/`([^`\n]+)`/g, (_, c) => hold(codeSpan(c)))
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => hold(link(u, emph(esc(t)))))
-    .replace(/\bhttps?:\/\/[^\s<>()\[\]"'`\u0000]*[^\s<>()\[\]"'`\u0000.,;:!?*_~]/g,
+    .replace(/\bhttps?:\/\/[^\s<>()\[\]"'`\uE000\uE001]*[^\s<>()\[\]"'`\uE000\uE001.,;:!?*_~]/g,
              u => hold(link(u, esc(u))));
-  return emph(esc(s)).replace(/\u0000(\d+)\u0000/g, (_, i) => kept[+i]);
+  return back(emph(esc(markWith(s, hold))));
 }
 
 function renderTable(head, sep, rows){
@@ -892,7 +1223,7 @@ function renderText(text){
   let run = [], lists = [], listHtml = "";
   const flush = () => {
     const t = run.join("\n").replace(/^\n+|\n+$/g, "");
-    if (t) out.push(`<div class="txt">${inline(t)}</div>`);
+    if (t) out.push(`<div class="txt">${t.split("\n").map(askLine).join("\n")}</div>`);
     run = [];
   };
   const closeList = () => {
@@ -912,9 +1243,10 @@ function renderText(text){
 
     if (FENCE.test(line)){
       const mark = line.trim().slice(0, 3), body = [];
+      const info = (line.trim().slice(3).trim().split(/\s+/)[0] || "").toLowerCase();
       let j = i + 1;
       while (j < lines.length && !lines[j].trim().startsWith(mark)) body.push(lines[j++]);
-      block(`<pre class="code">${esc(body.join("\n"))}</pre>`);
+      block(codeBlock(body.join("\n"), info));
       i = j;
       continue;
     }
@@ -943,7 +1275,7 @@ function renderText(text){
         listHtml += ordered ? (n > 1 ? `<ol start="${n}">` : "<ol>") : "<ul>";
         lists.push(top = {indent, ordered, open: false});
       }
-      listHtml += (top.open ? "</li>" : "") + "<li>" + inline(item[3]);
+      listHtml += (top.open ? "</li>" : "") + "<li>" + askLine(item[3]);
       top.open = true;
       continue;
     }
@@ -1406,9 +1738,8 @@ function renderBlocks(blocks){
 function renderBlock(b){
   if (b.kind === "text")     return renderText(b.text);
   if (b.kind === "thinking") return `<div class="think">${esc(b.text)}</div>`;
-  if (b.kind === "tool")     return `<div class="tool"><b>${esc(b.name)}</b> ${esc(b.summary)}</div>`;
-  if (b.kind === "result")   return `<div class="res${b.is_error?" err":""}">${
-    esc(b.text)}${b.truncated?"\n…":""}</div>`;
+  if (b.kind === "tool")     return toolHtml(b);
+  if (b.kind === "result")   return resultHtml(b);
   return "";
 }
 
@@ -1527,6 +1858,8 @@ function drawLog(force){
   const earlier = start ? `<div class="earlier"><button data-earlier="1">show ${Math.min(start, LOG_STEP)} earlier</button>${
     start > LOG_STEP ? ` <button data-earlier="all">show all ${start}</button>` : ""}</div>` : "";
   const findSet = new Set(finds.hits);
+  toolNames = new Map();
+  for (const it of logItems) for (const b of it.blocks) if (b.kind === "tool" && b.id) toolNames.set(b.id, b.name);
   log.innerHTML = earlier + logItems.slice(start).map((it, j) => {
     const i = start + j;
     // Where the session compacted: the summary that replaced everything above
@@ -1536,7 +1869,7 @@ function drawLog(force){
         renderBlocks(it.blocks)}</details>`;
     const body = shapeBlocks(it, i, opened);
     if (!body) return "";
-    return `<div class="turn${it.speaker === "you" ? " you-turn" : ""}${findSet.has(i) ? " found" : ""}" data-i="${i}"><div class="who ${esc(it.speaker || it.role)}">${
+    return `<div class="turn${it.speaker === "you" ? " you-turn" : ""}${it.note ? " sys" : ""}${findSet.has(i) ? " found" : ""}" data-i="${i}"><div class="who ${esc(it.speaker || it.role)}">${
       esc(it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${body}</div>`;
   }).join("") || `<div class="note">${logItems.length ? "everything here is hidden - see the display settings below" : "nothing yet"}</div>`;
   log.insertAdjacentHTML("beforeend", `<div class="newest"><div class="float"><div class="cold" hidden></div>` +
@@ -3107,6 +3440,14 @@ $("#shape").addEventListener("change", e => {
   drawLog();
 });
 $("#log").addEventListener("click", e => {
+  // A marked path (Settings > Highlighting) is copied by a click, unless the
+  // click ended a selection.
+  const pth = e.target.closest && e.target.closest(".pth");
+  if (pth && document.documentElement.classList.contains(pth.classList.contains("tp") ? "hl-tools" : "hl-prose")
+      && !String(getSelection() || "")){
+    const p = pth.dataset.copy || pth.textContent;
+    navigator.clipboard.writeText(p).then(() => { $("#say").textContent = "copied: " + p; }, () => {});
+  }
   const b = e.target.closest && e.target.closest("[data-earlier]");
   if (b) showEarlier(b.dataset.earlier === "all");
   if (e.target.closest && e.target.closest("[data-newest]")) showNewest();
@@ -3316,15 +3657,52 @@ SHORTCUTS = [
 ]
 
 
-def _with_meta(token, page, boot=""):
-    """`page` carrying the window token (see Control.send_typed) and which
-    dispatcher served it (see checkBoot)."""
+# The sizes the page's own CSS is written at; the Settings window's
+# chat.font_size and chat.matrix_font_size scale from these.
+FONT_BASE = {"chat": 14, "matrix": 13}
+
+
+HIGHLIGHTS_ON = ("code", "diffs", "prose", "tools", "signals", "mute", "guides", "shape")
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_WORD = re.compile(r"^[a-z]+$")
+
+
+def look_head(look):
+    """The page's text sizes, highlight switches and colours (settings.look),
+    for its <head>: CSS custom properties, and the html.hl-* classes. Every
+    highlight is on when no look is given."""
+    look = look or {}
+    fonts = look.get("fonts") or {}
+    props = []
+    for name, base in FONT_BASE.items():
+        try:
+            size = float(fonts.get(name) or base)
+        except (TypeError, ValueError):
+            size = base
+        props.append("--%sz:%s" % (name, round(size / base, 4)))
+    for name, v in sorted((look.get("colors") or {}).items()):
+        if _WORD.match(str(name)) and _HEX.match(str(v)):
+            props.append("--hl-%s:%s" % (name, v.lower()))
+    hl = look.get("hl")
+    on = [n for n in HIGHLIGHTS_ON if hl is None or hl.get(n)]
+    on += [n for n, v in (hl or {}).items() if v and n not in on and _WORD.match(str(n))]
+    classes = ("<script>document.documentElement.classList.add(%s)</script>"
+               % ",".join(json.dumps("hl-" + n) for n in on)) if on else ""
+    return "<style id=lookvars>html:root{%s}</style>%s" % (";".join(props), classes)
+
+
+def _with_meta(token, page, boot="", look=False):
+    """`page` carrying the window token (see Control.send_typed), which
+    dispatcher served it (see checkBoot) and, unless `look` is False, what it
+    draws with (see look_head)."""
     head = "<meta charset=utf-8>"
     return page.replace(head, head + '<meta name=imp-window content="%s"><meta name=imp-boot content="%s">'
-                        % (html.escape(token or "", quote=True), html.escape(boot or "", quote=True)), 1)
+                        '%s'
+                        % (html.escape(token or "", quote=True), html.escape(boot or "", quote=True),
+                           "" if look is False else look_head(look)), 1)
 
 
-def render_shell(token="", boot=""):
+def render_shell(token="", boot="", look=None):
     return _with_meta(token, (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">'
@@ -3418,7 +3796,7 @@ def render_shell(token="", boot=""):
         '<div id=jlist></div><div class=keys>&#8593;&#8595; choose · Enter open · Esc close · '
         'elsewhere: j/k next/previous · n next waiting for you · alt+1-9</div></div></div>'
         "<script>%s</script></body></html>" % (CSS, SCRIPT)
-    ), boot)
+    ), boot, look)
 
 
 # -- the chat matrix ---------------------------------------------------------
@@ -3450,7 +3828,7 @@ body{overflow:hidden}
   display:flex;flex-direction:column;justify-content:flex-end;
   -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 28px);
   mask-image:linear-gradient(to bottom,transparent 0,#000 28px)}
-.tb > *{flex:none}
+.tb > *{flex:none;zoom:var(--matrixz,1)}
 .tb .rp{padding:5px 0;overflow-wrap:anywhere}
 .tb .rp.newturn{border-top:1px dashed var(--line);margin-top:4px;padding-top:8px}
 .tb .rp .txt{white-space:pre-wrap}
@@ -3751,6 +4129,10 @@ body{overflow:auto}
   font:13px var(--ui);max-width:100%}
 #set textarea{font-family:var(--mono);min-height:58px;resize:vertical}
 #set input[type=checkbox]{width:16px;height:16px;margin:5px 0 0}
+#set .clr{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#set .clr input[type=color]{width:34px;height:26px;padding:0 2px;border:1px solid var(--line);border-radius:5px;background:var(--panel)}
+#set .clr input[type=text]{width:10.5em;font-family:var(--mono)}
+#set .clr .ex{font:600 13px var(--mono)}
 #set .help{color:var(--muted);font-size:12px}
 #set .when{font-size:12px;color:var(--muted)}
 #set .when.live{color:var(--ok)}
@@ -3808,9 +4190,36 @@ function control(f){
   if (f.type === "key")
     return `<input type=text id="${id}" value="${esc(v)}" spellcheck=false data-record=1 ` +
       `placeholder="press the keys">`;
+  if (f.type === "color")
+    return `<span class="clr"><input type=color data-for="${id}" value="${esc(v || themeColor(f.name))}" ` +
+      `aria-label="${esc(f.label)}"><input type=text id="${id}" value="${esc(v)}" placeholder="theme default" ` +
+      `spellcheck=false size=9><button type=button class=small data-clear="${id}">Theme default</button>` +
+      `<span class="ex" data-ex="${esc(f.name)}">Sample</span></span>`;
   if (f.type === "int" || f.type === "optint")
     return `<input type=number id="${id}" min="${f.min}" max="${f.max}" step=1 value="${esc(v)}">`;
   return `<input type=text id="${id}" value="${esc(v)}" spellcheck=false>`;
+}
+// The theme's own colour for a highlight (the CSS --hl-* custom property).
+const themeColor = name => getComputedStyle(document.documentElement).getPropertyValue("--hl-" + name).trim() || "#000000";
+const HEX = /^#[0-9a-fA-F]{6}$/;
+function wireColors(){
+  const ex = (id) => {
+    const t = document.getElementById(id), s = t && t.closest(".clr").querySelector(".ex");
+    if (s) s.style.color = HEX.test(t.value.trim()) ? t.value.trim() : themeColor(s.dataset.ex);
+  };
+  for (const pick of document.querySelectorAll("#set input[type=color][data-for]")){
+    const text = document.getElementById(pick.dataset.for);
+    pick.oninput = () => { text.value = pick.value; ex(text.id); };
+    text.addEventListener("input", () => { if (HEX.test(text.value.trim())) pick.value = text.value.trim(); ex(text.id); });
+    ex(text.id);
+  }
+  for (const b of document.querySelectorAll("#set [data-clear]")) b.onclick = () => {
+    const text = document.getElementById(b.dataset.clear);
+    text.value = "";
+    text.closest(".clr").querySelector("input[type=color]").value = themeColor(text.closest(".clr").querySelector(".ex").dataset.ex);
+    ex(text.id);
+    mark();
+  };
 }
 function read(f){
   const el = document.getElementById("f-" + f.key.replace(/\W/g, "_"));
@@ -3841,6 +4250,7 @@ function draw(d){
       (sec.id === "notify" ? notifyExtrasHtml(d) : "") + `</section>`).join("") +
     shortcutsHtml(d);
   $("#set").oninput = $("#set").onchange = mark;
+  wireColors();
   wireDesk();
   wireHosts();
   // A key field takes the combination pressed in it rather than typed text.
@@ -4025,7 +4435,7 @@ def render_settings(token="", boot=""):
     ), boot)
 
 
-def render_matrix(boot=""):
+def render_matrix(boot="", look=None):
     return _with_meta("", (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
@@ -4033,4 +4443,4 @@ def render_matrix(boot=""):
         "<div id=mx><div id=grid></div></div>"
         "<div id=gone hidden>dispatcher not answering - retrying</div>"
         "<script>%s</script></body></html>" % (CSS, MATRIX_CSS, MATRIX_SCRIPT)
-    ), boot)
+    ), boot, look)

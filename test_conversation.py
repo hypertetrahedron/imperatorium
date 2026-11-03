@@ -393,3 +393,20 @@ class Summaries(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class EditDiff(unittest.TestCase):
+    def test_edit_and_multiedit(self):
+        from imperatorium.conversation import edit_diff
+        self.assertEqual(edit_diff("Edit", {"old_string": "a\nb", "new_string": "c"}), "-a\n-b\n+c")
+        self.assertEqual(edit_diff("MultiEdit", {"edits": [{"old_string": "a", "new_string": "b"},
+                                                            {"old_string": "", "new_string": "n"}]}),
+                         "-a\n+b\n@@\n+n")
+        self.assertEqual(edit_diff("Read", {"old_string": "a"}), "")
+        self.assertEqual(edit_diff("Edit", "junk"), "")
+
+    def test_cut_short(self):
+        from imperatorium.conversation import DIFF_CHARS, edit_diff
+        got = edit_diff("Edit", {"old_string": "x\n" * DIFF_CHARS, "new_string": ""})
+        self.assertLessEqual(len(got), DIFF_CHARS + 20)
+        self.assertTrue(got.endswith("(cut short)"))

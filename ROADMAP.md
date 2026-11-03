@@ -1,7 +1,7 @@
 # Roadmap
 
 Status legend: Not Started · In Progress · Complete · Deferred
-Last updated: 2026-10-29
+Last updated: 2026-11-03
 
 Imperatorium (package `imperatorium`): a single input
 surface for dispatching prompts to, and tracking attention across, ~20
@@ -10,6 +10,8 @@ https://github.com/hypertetrahedron/imperatorium (MIT).
 
 | Feature | Status | Notes |
 |---|---|---|
+| Chat and matrix text size settings | Complete | Settings > Chat: `chat.font_size` (10-28, default 14) and `chat.matrix_font_size` (9-24, default 13), live; CSS zoom on each chat turn / matrix tile body, served in the page and on /api/health. Verified live 2026-11-03. |
+| Chat syntax highlighting | Complete | All 8 recommendations built 2026-11-03: code tokens (py, C-like, sh, ps, json, yaml, html, sql + guessing), diff blocks and Edit-call diffs, prose marks (paths click-to-copy, commands, hashes/#n, amounts), tool-line layout and cut-short results, error/pass/warning/question signals, muted boilerplate, indent guides, shape cues. Settings > Highlighting (8 switches) and Highlight colours (18 pickers), live. Unit tests pass; verified live 2026-11-03. |
 | Redraws that eat clicks / redraw unchanged | Complete | Session list, status panel, waiting-on tabs and the log were rebuilt on timers or pushes; a rebuild between press and release lost the click. Shared `held()` press-hold for all four; signature guards on the list, status, meter, activity, current prompt; waiting-on tabs' guard compared against browser-reserialized innerHTML and never matched (rebuilt every 1 s). Exercised live 2026-10-29: a tile pressed during forced redraws survived and selected; idle status panel no longer rebuilt. List still rebuilds each tick while a session is busy (live seconds counter) - press-hold covers clicks. Open: log fully rebuilt on each change (loses text selection) - needs incremental append |
 | Send-bar line per session | Complete | `#say` was one global line, never cleared on a switch. Now `say(text, key)` keeps it per session: hidden on switch, restored on return, late replies kept for their own session (send, typed, queue, review, act()). Node tests pass; exercised live 2026-10-29 (hidden on switch, restored on return) |
 | Close button on the cold-cache box | Complete | X on the prompt-cache-expired box; closed per session per expiry, back when the cache next expires. Node tests pass; exercised live 2026-10-29 (X closes it, stays closed on redraw) |

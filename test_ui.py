@@ -15,6 +15,24 @@ from imperatorium import ui
 NODE = shutil.which("node")
 
 
+def highlighting():
+    """The highlighter's half of SHARED, from attr() to its end marker."""
+    return ui.SCRIPT[ui.SCRIPT.index("const attr ="):ui.SCRIPT.index("// -- end highlighting --")]
+
+
+def run(expr):
+    """`expr` evaluated in node with the renderer loaded; its JSON."""
+    start = ui.SCRIPT.index("const esc =")
+    esc = ui.SCRIPT[start:ui.SCRIPT.index("\n\n", start)]
+    body = ui.SCRIPT[ui.SCRIPT.index("const TABLE_SEP"):ui.SCRIPT.index("function renderBlocks")]
+    js = esc + "\n" + body + "\nprocess.stdout.write(JSON.stringify(%s));" % expr
+    out = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True,
+                         encoding="utf-8", timeout=30)
+    if out.returncode:
+        raise AssertionError(out.stderr)
+    return json.loads(out.stdout)
+
+
 def render(text):
     start = ui.SCRIPT.index("const esc =")
     esc = ui.SCRIPT[start:ui.SCRIPT.index("\n\n", start)]
@@ -112,7 +130,7 @@ class MarkdownTests(unittest.TestCase):
 
     def test_fenced_code_is_escaped_and_left_raw(self):
         self.assertEqual(render("```python\nx = **y** <z>\n```"),
-                         '<pre class="code">x = **y** &lt;z&gt;</pre>')
+                         '<pre class="code" data-lang="py">x = **y** &lt;z&gt;</pre>')
 
     def test_unclosed_fence_runs_to_the_end(self):
         self.assertIn('<pre class="code">a\n- b</pre>', render("```\na\n- b"))
@@ -334,7 +352,7 @@ class Shape(unittest.TestCase):
         start = ui.SCRIPT.index("const esc =")
         esc = ui.SCRIPT[start:ui.SCRIPT.index("\n\n", start)]
         a = ui.SCRIPT.index("function renderBlock(b)")
-        body = ui.SCRIPT[a:ui.SCRIPT.index("function drawShape")]
+        body = highlighting() + "\n" + ui.SCRIPT[a:ui.SCRIPT.index("function drawShape")]
         js = ("const renderText = t => '[' + t + ']';\n"
               "const localStorage = {getItem: () => %s};\n" % json.dumps(json.dumps(shape))
               + esc + "\n" + body +
@@ -352,7 +370,7 @@ class Shape(unittest.TestCase):
         self.assertEqual(you, "[do the thing]")
         self.assertIn('<div class="think">', claude)
         self.assertIn("[on it]", claude)
-        self.assertIn("<b>Bash</b> ls -la", claude)
+        self.assertIn('<b>Bash</b> <span class="tc">ls</span> <span class="tf">-la</span>', claude)
         self.assertIn('class="res err"', claude)
         self.assertNotIn("<details", claude)
         self.assertEqual(note, "[build passed]")
@@ -1392,3 +1410,134 @@ class AwaitedPanel(unittest.TestCase):
     def test_panel_sits_directly_under_the_chat(self):
         page = ui.render_shell()
         self.assertIn("<div id=log></div><div id=procs hidden>", page)
+
+
+@unittest.skipUnless(NODE, "node not installed")
+class Highlighting(unittest.TestCase):
+    """Marks are spans around the text: they never change what it says."""
+
+    def strip(self, html):
+        import re
+        return __import__("html").unescape(re.sub(r"<[^>]+>", "", html))
+
+    def test_python_tokens(self):
+        html = render('```python\ndef f(x):\n    return "hi"  # done\n```')
+        self.assertIn('<span class="tk-kw">def</span> <span class="tk-fn">f</span>(x):', html)
+        self.assertIn('<span class="ig">    </span><span class="tk-kw">return</span>', html)
+        self.assertIn('<span class="tk-str">&quot;hi&quot;</span>'.replace("&quot;", '"'), html)
+        self.assertIn('<span class="tk-com"># done</span>', html)
+
+    def test_text_is_unchanged_by_marks(self):
+        for src in ['```js\nconst a = `x ${y}` // c\nif (a) { b(1.5e3); }\n```',
+                    "```\n$ git commit -m \"msg\" --amend\n```",
+                    "```powershell\nGet-ChildItem -Path $env:TEMP # list\n```",
+                    '```json\n{"a": [1, true, null]}\n```',
+                    "```yaml\nkey: value # c\n- item: 2\n```",
+                    "```sql\nSELECT a FROM t WHERE b = 'x';\n```",
+                    "```\n<div class=\"a\">t</div>\n```",
+                    "```\n\tdeep\n\t\tdeeper\n```"]:
+            body = src.split("\n", 1)[1].rsplit("\n", 1)[0]
+            self.assertEqual(self.strip(render(src)), body, src)
+
+    def test_guesses_the_language(self):
+        self.assertEqual(run('["def f():\\n  pass", "const x = 1;", "$ ls -la", \'{"a": 1}\', '
+                             '"Get-Item x", "plain words here"].map(guessLang)'),
+                         ["py", "c", "sh", "json", "ps", ""])
+
+    def test_a_named_unknown_language_is_left_plain(self):
+        self.assertEqual(render("```text\nif x then y\n```"), '<pre class="code">if x then y</pre>')
+
+    def test_diff_block(self):
+        html = render("```diff\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n same\n```")
+        self.assertIn('<pre class="code dif"><span class="dl-f">--- a/x</span>', html)
+        self.assertIn('<span class="dl-r">-old</span>\n<span class="dl-a">+new</span>\n same', html)
+
+    def test_prose_marks(self):
+        html = render("See imperatorium/ui.py:120 and C:\\Users\\x\\a.txt, commit a265fcf, #42, "
+                      "run `git status`, `docs/ui-names.md`, 1.5k tokens for $0.42 in 3s.")
+        self.assertIn('<span class="pth" data-copy="imperatorium/ui.py:120" title="click to copy">'
+                      'imperatorium/ui.py:120</span>', html)
+        self.assertIn('data-copy="C:\\Users\\x\\a.txt"', html)
+        self.assertIn('<span class="ref">a265fcf</span>', html)
+        self.assertIn('<span class="ref">#42</span>', html)
+        self.assertIn('<code class="cmd">git status</code>', html)
+        self.assertIn('<code class="pth" data-copy="docs/ui-names.md"', html)
+        self.assertIn('<span class="qty">1.5k tokens</span>', html)
+        self.assertIn('<span class="qty">$0.42</span>', html)
+        self.assertIn('<span class="qty">3s</span>', html)
+
+    def test_words_that_are_not_paths(self):
+        html = render("and/or, read/write, 24/7, e.g. this, 2026/11/03, version 1.2")
+        self.assertNotIn("pth", html)
+        self.assertNotIn("ref", html)
+
+    def test_marks_leave_emphasis_and_snake_case_alone(self):
+        html = render("**bold** a_b_c and _it_ in my_file.py")
+        self.assertIn("<b>bold</b>", html)
+        self.assertIn("a_b_c", html)
+        self.assertIn("<i>it</i>", html)
+        self.assertIn('data-copy="my_file.py"', html)
+
+    def test_signals(self):
+        html = render("Ran 1027 tests: OK, 2 failed, TypeError raised, a DeprecationWarning")
+        self.assertIn('<span class="sg-pass">Ran 1027 tests</span>', html)
+        self.assertIn('<span class="sg-pass">OK</span>', html)
+        self.assertIn('<span class="sg-err">2 failed</span>', html)
+        self.assertIn('<span class="sg-err">TypeError</span>', html)
+        self.assertIn('<span class="sg-warn">DeprecationWarning</span>', html)
+
+    def test_question_lines(self):
+        html = render("I did it.\nShall I commit?\n- or this one?")
+        self.assertIn('<span class="ask">Shall I commit?</span>', html)
+        self.assertIn('<li><span class="ask">or this one?</span>', html)
+        self.assertNotIn('<span class="ask">I did it.', html)
+
+    def test_html_in_text_is_still_escaped(self):
+        html = render("<img src=x onerror=alert(1)> at a/b.py `<b>`")
+        self.assertNotIn("<img", html)
+        self.assertIn("<code>&lt;b&gt;</code>", html)
+
+    def test_tool_lines(self):
+        got = run('[toolHtml({name: "Read", summary: "C:\\\\My Docs\\\\a.py"}), '
+                  'toolHtml({name: "Grep", summary: "def \\\\w+"}), '
+                  'toolHtml({name: "Edit", summary: "a.py", diff: "-x\\n+y"}), '
+                  'toolHtml({name: "Bash", summary: "cd x && git log --oneline \\"a b\\""})]')
+        self.assertIn('<span class="pth tp" data-copy="C:\\My Docs\\a.py"', got[0])
+        self.assertIn('<span class="tq">def \\w+</span>', got[1])
+        self.assertIn('<pre class="code dif tdiff"><span class="dl-r">-x</span>\n<span class="dl-a">+y</span></pre>',
+                      got[2])
+        self.assertEqual(self.strip(got[3]), 'Bash cd x && git log --oneline "a b"')
+        self.assertIn('<span class="tc">git</span>', got[3])
+        self.assertIn('<span class="tf">--oneline</span>', got[3])
+        self.assertIn('<span class="tq">"a b"</span>', got[3])
+
+    def test_results(self):
+        got = run('(toolNames.set("t1", "Read"), [resultHtml({id: "t1", text: "x.py:3: Error", truncated: true}), '
+                  'resultHtml({id: "t2", text: "fine", is_error: true})])')
+        self.assertIn('class="res quiet cut"', got[0])
+        self.assertIn('<span class="sg-err">Error</span>', got[0])
+        self.assertIn("cut short", got[0])
+        self.assertIn('class="res err"', got[1])
+
+
+class LookHead(unittest.TestCase):
+    def test_defaults_turn_every_highlight_on(self):
+        head = ui.look_head(None)
+        self.assertIn("--chatz:1.0;--matrixz:1.0", head)
+        for name in ui.HIGHLIGHTS_ON:
+            self.assertIn('"hl-%s"' % name, head)
+
+    def test_only_hex_colours_and_known_shapes_get_in(self):
+        head = ui.look_head({"fonts": {"chat": 21}, "hl": {"code": True, "diffs": False},
+                             "colors": {"keyword": "#AABBCC", "string": "red;}</style>",
+                                        "bad name": "#000000"}})
+        self.assertIn("--chatz:1.5", head)
+        self.assertIn("--hl-keyword:#aabbcc", head)
+        self.assertNotIn("red", head)
+        self.assertNotIn("bad name", head)
+        self.assertIn('"hl-code"', head)
+        self.assertNotIn('"hl-diffs"', head)
+
+    def test_settings_page_has_no_look(self):
+        self.assertNotIn("<style id=lookvars", ui.render_settings("t", "b"))
+        self.assertIn("<style id=lookvars", ui.render_matrix("b"))

@@ -137,6 +137,33 @@ class Saving(Base):
         # Kept where /api/notify keeps it, which wins at start.
         self.assertTrue(self.control.store.prefs()["notify"]["speak"])
 
+    def test_text_sizes_apply_at_once_and_reach_the_pages(self):
+        from imperatorium import ui
+        self.assertEqual(self.control.look["fonts"], {"chat": 14, "matrix": 13})
+        got = self.control.save_settings({"chat.font_size": 21, "chat.matrix_font_size": 26})
+        self.assertIn("chat.matrix_font_size", got["errors"])   # above the 24 maximum
+        got = self.control.save_settings({"chat.font_size": 21, "chat.matrix_font_size": 13})
+        self.assertEqual(got["restart"], [])
+        self.assertEqual(self.control.look["fonts"], {"chat": 21, "matrix": 13})
+        page = ui.render_shell("t", "b", self.control.look)
+        self.assertIn("<style id=lookvars>html:root{--chatz:1.5;--matrixz:1.0}</style>", page)
+
+    def test_highlighting_applies_at_once(self):
+        self.assertTrue(all(self.control.look["hl"].values()))
+        self.assertEqual(self.control.look["colors"], {})
+        got = self.control.save_settings({"highlight.mute": False,
+                                          "highlight.colors.keyword": "#AA00FF"})
+        self.assertEqual(got["restart"], [])
+        self.assertFalse(self.control.look["hl"]["mute"])
+        self.assertEqual(self.control.look["colors"], {"keyword": "#aa00ff"})
+        self.assertEqual(self.on_disk()["highlight"]["colors"]["keyword"], "#aa00ff")
+        got = self.control.save_settings({"highlight.colors.string": "red"})
+        self.assertIn("highlight.colors.string", got["errors"])
+        # Blank goes back to the theme's: the key leaves config.json.
+        self.control.save_settings({"highlight.colors.keyword": ""})
+        self.assertEqual(self.control.look["colors"], {})
+        self.assertNotIn("keyword", self.on_disk()["highlight"].get("colors", {}))
+
     def test_a_toggle_made_through_api_notify_shows_as_it_is(self):
         self.control.notifier.set_enabled("speak", True)
         view = self.control.settings_view()
