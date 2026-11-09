@@ -2019,8 +2019,12 @@ class Handler(BaseHTTPRequestHandler):
     # a new one, so a page that vanished without closing its socket costs a
     # thread for minutes, not forever.
     STREAM_SECONDS = 600.0
-    STREAM_EVERY = 1.0      # how often the session list is looked at
-    STREAM_MIN_GAP = 0.5    # and never more often than this
+    # Each look that finds the snapshot stale forks `claude agents` (and its
+    # git children), so this is a process-creation rate, not only a latency:
+    # at 1 s it was about one new `claude.exe` a second, steady, all day.
+    # Hooks still wake the loop at once; this only bounds the idle poll.
+    STREAM_EVERY = 5.0      # how often the session list is looked at
+    STREAM_MIN_GAP = 2.0    # and never more often than this
     STREAM_KEEPALIVE = 15.0
 
     def _stream(self):
@@ -2028,7 +2032,8 @@ class Handler(BaseHTTPRequestHandler):
 
         A hook event wakes the loop at once (Control.invalidate), so a
         session asking for you shows without waiting for a poll; otherwise
-        the list is looked at every second and sent only when it differs.
+        the list is looked at every STREAM_EVERY seconds and sent only when
+        it differs.
         """
         c = self.control
         self.send_response(200)
@@ -2088,7 +2093,9 @@ class Handler(BaseHTTPRequestHandler):
                 # Fonts only change with the code, so a day's cache is safe.
                 self._send(200, data, "font/woff2", cache="max-age=86400")
         elif path == "/api/sessions":
-            self._send(200, c.sessions())
+            # The Stream Deck surface polls this once a second; an older
+            # snapshot is as good for a key colour and saves a fork.
+            self._send(200, c.sessions(max_age=self.STREAM_EVERY))
         elif path == "/api/stream":
             self._stream()
         elif path == "/api/costs":

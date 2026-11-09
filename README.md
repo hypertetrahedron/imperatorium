@@ -259,7 +259,11 @@ next prompt costs (and when the context is nearly full). By default that is
 said for any size of context; Settings > Chat > *Cache-expired warning from
 (tokens)* sets a floor. The session list arrives over server-sent
 events (`/api/stream`), so a session asking for you shows at once; the page
-falls back to polling if the stream drops.
+falls back to polling if the stream drops. An idle list is re-read at most
+every 5 s (`Handler.STREAM_EVERY`; hook events still wake it at once, never
+more often than `STREAM_MIN_GAP`, 2 s), because each re-read runs
+`claude agents --json` and so starts a `claude.exe` and its `git` children.
+At 1 s that was a steady ~1 new process a second.
 
 **ctrl+F** (or the find box under the chat) searches the open conversation -
 all text, tool calls only, or failed results only - and steps between
@@ -363,7 +367,7 @@ python -m imperatorium.deeplink Y:/projects-software/gem-trip "fix it"
 |---|---|---|
 | GET | `/` | the window |
 | GET | `/api/conversation` | `?session=<id>&limit=N` - what a session said |
-| GET | `/api/sessions` | merged registry |
+| GET | `/api/sessions` | merged registry (a snapshot up to `STREAM_EVERY`, 5 s, old may be served) |
 | GET | `/api/stream` | server-sent events: the merged registry whenever it changes |
 | POST | `/api/mod/beat` | the mod's beat: state, usage, prompt acknowledgements; answers the prompts to submit and the status line (mod token) |
 | POST | `/api/mod/check` | the permission policy's verdict on one tool call (mod token) |
