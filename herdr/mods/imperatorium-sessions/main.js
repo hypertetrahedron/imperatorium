@@ -59,7 +59,11 @@ export default class ImperatoriumSessions extends View {
           .text_color(t.muted).hover((s) => s.bg(t.hover))
           .on_click(() => openOverlay({ mod: "imperatorium-matrix", kind: "window", key: "imperatorium-matrix",
             width: 1100, height: 720, keep: true }))
-          .child("Matrix")))
+          .child("Matrix"))
+        .child(div().id("imp-history").px(6).py(1).rounded(5).text_size(11).cursor_pointer()
+          .text_color(t.muted).hover((s) => s.bg(t.hover))
+          .on_click(() => openOverlay({ mod: "imperatorium-history", kind: "dialog", width: 780, height: 580 }))
+          .child("History")))
       .child(this.meters(t))
       .when(waiting > 0, (el) => el.child(div().px(14).py(2).text_size(11.5).text_color(t.blocked)
         .child(waiting + (waiting === 1 ? " request waiting" : " requests waiting"))))

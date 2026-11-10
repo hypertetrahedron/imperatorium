@@ -19,6 +19,7 @@ Plan: `docs/herdr-integration-plan.md`. Option A (Imperatorium as herdr-app mods
 | Chat mod: also Edit diffs (red/green) and a work line (context, cost, cache time, what it waits on) | `herdr/mods/imperatorium-chat` | Verified live (below) |
 | Sessions + meters sidebar mod, with a Matrix button | `herdr/mods/imperatorium-sessions` | Verified live |
 | Chat Matrix mod (floating window) | `herdr/mods/imperatorium-matrix` | Verified live |
+| History dialog: search past sessions, Resume or Fork | `herdr/mods/imperatorium-history` | Search verified live |
 | Layout "imperatorium" | `herdr/layouts/imperatorium.json` | Verified live |
 | Installer | `python setup_machine.py herdr install / status / uninstall` | Tested on temp homes and the test window |
 
