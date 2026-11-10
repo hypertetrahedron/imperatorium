@@ -60,6 +60,7 @@ SECTIONS = [
     ("notify", "Notifications"),
     ("budget", "Usage alerts"),
     ("voice", "Dictation"),
+    ("terminals", "Terminals"),
     ("remote", "Remote machines"),
     ("palette", "Palette"),
     ("streamdeck", "Stream Deck"),
@@ -104,6 +105,15 @@ FIELDS = [
          applies=LIVE,
          help="One per line, in the order the list shows them. The chosen one is put "
               "into the prompt box at the cursor."),
+    dict(key="terminal.host", section="terminals", label="Start sessions in",
+         type="choice", choices=("terminal", "hc"), default="terminal", applies=LIVE,
+         help="Where New, Fork and Resume start `claude`. terminal: a Windows Terminal "
+              "tab. hc: a herdr-core terminal, shown in herdr-app (one space per project), "
+              "which keeps running when its window closes and is resumed after a reboot."),
+    dict(key="terminal.hc_session", section="terminals", label="herdr-core session",
+         type="name", default="", applies=LIVE,
+         help="Which herdr-core to use (HC_SESSION). Blank: the default one, which "
+              "herdr-app shows."),
     dict(key="background.permission_mode", section="background", label="Permission mode",
          type="choice", choices=PERMISSION_MODES, default="", applies=LIVE,
          help="For sessions started with `claude --bg` (New in bg, Fork in bg, dispatch). "

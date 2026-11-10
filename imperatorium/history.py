@@ -186,21 +186,28 @@ def terminal_command(cwd, cmd, title=None):
 
 
 def resume(session_id, cwd, where="window", fork=False, prompt=None,
-           options=None, popen=None, bg_start=None):
+           options=None, popen=None, bg_start=None, opener=None):
     """Resume (or fork) a session in a new tab or in the background.
 
     Returns {ok, action, command, id?}. `popen` and `bg_start` replace the
-    real process calls in tests.
+    real process calls in tests. `opener(cwd, argv)`, when given, starts
+    the command in place of a Windows Terminal tab (a herdr-core terminal,
+    see hosting.py) and returns what to add to the answer.
     """
     if not session_id:
         raise ResumeError("session id is required")
     if not cwd or not os.path.isdir(cwd):
         raise ResumeError("its directory is gone: %s" % (cwd,))
     if where == "window":
-        cmd = terminal_command(cwd, resume_command(session_id, fork))
-        (popen or _popen)(cmd, cwd)
-        return {"ok": True, "action": "fork" if fork else "resume",
-                "where": "window", "command": " ".join(resume_command(session_id, fork))}
+        extra = {}
+        if opener:
+            extra = opener(cwd, resume_command(session_id, fork)) or {}
+        else:
+            cmd = terminal_command(cwd, resume_command(session_id, fork))
+            (popen or _popen)(cmd, cwd)
+        return dict({"ok": True, "action": "fork" if fork else "resume",
+                     "where": "window", "command": " ".join(resume_command(session_id, fork))},
+                    **extra)
     if where == "background":
         extra = ["--resume", session_id] + (["--fork-session"] if fork else [])
         opts = dict(options or {}, name="")
@@ -216,7 +223,7 @@ def resume(session_id, cwd, where="window", fork=False, prompt=None,
     raise ResumeError("where must be window or background")
 
 
-def new_session(cwd, popen=None, session_id=None):
+def new_session(cwd, popen=None, session_id=None, opener=None):
     """A fresh `claude` in a new tab, in `cwd`. Nothing carried over.
 
     It is given its session id up front so the window can select it as soon
@@ -226,9 +233,13 @@ def new_session(cwd, popen=None, session_id=None):
         raise ResumeError("its directory is gone: %s" % (cwd,))
     session_id = session_id or str(uuid.uuid4())
     cmd = ["claude", "--session-id", session_id]
-    (popen or _popen)(terminal_command(cwd, cmd), cwd)
-    return {"ok": True, "action": "new", "where": "window",
-            "command": " ".join(cmd), "session_id": session_id}
+    extra = {}
+    if opener:
+        extra = opener(cwd, cmd) or {}
+    else:
+        (popen or _popen)(terminal_command(cwd, cmd), cwd)
+    return dict({"ok": True, "action": "new", "where": "window",
+                 "command": " ".join(cmd), "session_id": session_id}, **extra)
 
 
 # Set by a running Claude Code session for its own child processes. `wt`

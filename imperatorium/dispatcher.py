@@ -19,6 +19,7 @@ import secrets
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -26,7 +27,7 @@ from . import (activity, background, changes, closing, conversation, convcache,
                deeplink, history, inbox, matrix, notify, pending, procs, projects,
                prs, registry, remote, sessionstat, slash, taskout, ui, usage, voice,
                winfocus)
-from . import hcore, modlink
+from . import hcore, hosting, modlink
 from . import policy as policymod
 from . import settings as settingsmod
 from .store import Store
@@ -170,6 +171,10 @@ class Control:
         # only this account can read (see write_herdr_token).
         self.herdr_token = secrets.token_urlsafe(24)
         self._hc_cores = {}
+        # Where New/Fork/Resume start `claude` (hosting.py).
+        self.terminal_host = settingsmod.value(config, settingsmod.BY_KEY["terminal.host"])
+        self.hc_session = settingsmod.value(config, settingsmod.BY_KEY["terminal.hc_session"])
+        self.hosting = hosting.Restorer(store, self.hc_core)
         # Which dispatcher this is: an open page that sees it change reloads,
         # so it does not keep running the code the last dispatcher served.
         self.boot_id = secrets.token_hex(8)
@@ -899,6 +904,10 @@ class Control:
         if "chat.cold_cache_tokens" in changes:
             self.cold_cache_tokens = settingsmod.value(
                 config, settingsmod.BY_KEY["chat.cold_cache_tokens"])
+        if "terminal.host" in changes:
+            self.terminal_host = changes["terminal.host"] or "terminal"
+        if "terminal.hc_session" in changes:
+            self.hc_session = changes["terminal.hc_session"] or ""
         if "chat.matrix_status" in changes:
             self.matrix_status = bool(changes["chat.matrix_status"])
         if any(k.startswith(settingsmod.LOOK_KEYS) for k in changes):
@@ -991,6 +1000,8 @@ class Control:
 
         if event == "SessionStart":
             meta["name"] = payload.get("session_name")
+            if meta.get("hc") and self.terminal_host == "hc":
+                self.hosting.remember(sid, meta.get("cwd"), meta["hc"])
             self.store.register(key, token=token, **meta)
             self.store.undismiss(key)
             self.invalidate()
@@ -1004,6 +1015,8 @@ class Control:
             # window can offer to resume what just closed.
             gone = self.store.sessions().get(key) or {}
             self.store.forget(key)
+            if not host:
+                self.hosting.forget(sid)
             self.live.forget(key)
             self.usage.forget(key)
             if not host:
@@ -1475,8 +1488,9 @@ class Control:
                     "it, or fork it to branch off"}
         try:
             got = history.resume(session_id, cwd, where=where, fork=fork,
-                                 prompt=prompt, options=self.background_options)
-        except history.ResumeError as exc:
+                                 prompt=prompt, options=self.background_options,
+                                 opener=self._hc_opener(session_id, fork))
+        except (history.ResumeError, hcore.HcError) as exc:
             return {"ok": False, "error": str(exc)}
         self.store.add_event({"kind": "resume" if not fork else "fork",
                               "session_id": session_id, "cwd": cwd,
@@ -1497,9 +1511,12 @@ class Control:
         if close and not (row and row.get("pid")):
             return {"ok": False, "error": NOT_RUNNING}
         cwd = cwd or (row or {}).get("cwd")
+        sid = str(uuid.uuid4())
+        opener = self._hc_opener(sid)
         try:
-            got = history.new_session(cwd)
-        except history.ResumeError as exc:
+            got = (history.new_session(cwd, session_id=sid, opener=opener) if opener
+                   else history.new_session(cwd))
+        except (history.ResumeError, hcore.HcError) as exc:
             return {"ok": False, "error": str(exc)}
         self.store.add_event({"kind": "new", "cwd": cwd, "summary": got["command"],
                               "session_id": got["session_id"]})
@@ -1903,6 +1920,43 @@ class Control:
                                           "summary": str(exc)[:280]})
                     return False
         return slash.type_command(row["pid"], text)
+
+    # After a reboot the kept terminals come back as the core starts; give
+    # them, and `claude agents`, a moment before deciding what is missing.
+    RESTORE_AFTER = 20.0
+
+    def restore_hosted(self, wait=None):
+        """Resume the hosted sessions a reboot (or a lost core) ended."""
+        time.sleep(self.RESTORE_AFTER if wait is None else wait)
+        if not self.hosting.hosted():
+            return []
+        running = [r["sessionId"] for r in self.sessions(max_age=0)["sessions"]
+                   if r.get("pid") and not r.get("remote")]
+        done = self.hosting.restore(running)
+        for d in done:
+            self.store.add_event({"kind": "restore", "session_id": d["session_id"],
+                                  "summary": d["result"] + (": " + d["error"] if d.get("error") else "")})
+        if done:
+            self.invalidate()
+        return done
+
+    def _hc_opener(self, session_id, fork=False):
+        """With `terminal.host` = hc, what starts a window session: a
+        herdr-core terminal labelled for herdr-app. None: a Windows Terminal
+        tab, as before."""
+        if self.terminal_host != "hc":
+            return None
+
+        def opener(cwd, argv):
+            core = self.hc_core(self.hc_session or None)
+            if core is None:
+                raise hcore.HcError("herdr-core (hc) is not installed")
+            t = hosting.launch(core, argv, cwd, session_id)
+            # A fork gets its own id from Claude Code; SessionStart pairs it.
+            if not fork:
+                self.hosting.remember(session_id, cwd, t)
+            return {"where": "hc", "hc": t}
+        return opener
 
     def hc_core(self, name=None):
         """The herdr-core called `name` ("default" or a test session), or None."""
@@ -2494,6 +2548,9 @@ def serve(host=HOST, port=PORT, state_path=None, roots=None):
                      daemon=True).start()
     threading.Thread(target=Handler.control.warm_spend, name="spend",
                      daemon=True).start()
+    if Handler.control.terminal_host == "hc":
+        threading.Thread(target=Handler.control.restore_hosted, name="restore",
+                         daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

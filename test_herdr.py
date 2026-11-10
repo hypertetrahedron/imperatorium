@@ -11,7 +11,7 @@ import os
 import subprocess
 import unittest
 
-from imperatorium import dispatcher, hcore, slash
+from imperatorium import dispatcher, hcore, hosting, slash
 import test_dispatcher as td
 
 SID = td.SID
@@ -222,6 +222,141 @@ class HerdrToken(td.Origins):
         dispatcher.write_herdr_token(self.control, state)
         with open(dispatcher.herdr_token_path(state), encoding="utf-8") as fh:
             self.assertEqual(fh.read(), self.control.herdr_token)
+
+
+class Labels(unittest.TestCase):
+    def test_one_space_per_folder_one_tab_per_session(self):
+        a = hosting.space_id("C:/src/My Project")
+        self.assertEqual(a, hosting.space_id("c:\\src\\my project\\"))
+        self.assertTrue(a.startswith("imp-my-project-"))
+        self.assertNotEqual(a, hosting.space_id("D:/src/My Project"))
+        got = hosting.labels(SID, "C:/src/x")
+        self.assertEqual(got["herdr.tab"], "imp-" + SID[:12])
+        self.assertEqual(got["imperatorium.session"], SID)
+
+    def test_what_counts_as_claude_running(self):
+        self.assertTrue(hosting.is_claude({"foreground": {"name": "claude.exe"}}))
+        self.assertFalse(hosting.is_claude({"foreground": {"name": "pwsh.EXE",
+                                                           "argv": ["pwsh"]}}))
+        self.assertTrue(hosting.is_claude({"foreground": {"name": "node.exe",
+                                                          "argv": ["node", "C:/x/claude"]}}))
+
+
+class HcFake:
+    """A core holding terminals in a dict; records what was done."""
+
+    def __init__(self, terms=None, session=None):
+        self.terms = terms or {}
+        self.session = session
+        self.did = []
+        self.n = 10
+
+    def ensure(self):
+        return {"pid": 1}
+
+    def get(self, addr):
+        if addr not in self.terms:
+            raise hcore.HcError("no terminal " + addr)
+        return self.terms[addr]
+
+    def send(self, addr, text, force=False, only_if=None):
+        self.did.append(("send", addr, text))
+
+    def keys(self, addr, *k):
+        self.did.append(("keys", addr) + k)
+
+    def run(self, argv, cwd, labels=None, keep=True, name=None):
+        self.n += 1
+        addr = "t%d" % self.n
+        self.did.append(("run", argv, cwd, labels))
+        self.terms[addr] = {"state": "live", "labels": labels,
+                            "foreground": {"name": "claude.exe"}}
+        return {"address": addr}
+
+
+class Restore(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from imperatorium.store import Store
+        self.dir = tempfile.mkdtemp()
+        self.store = Store(os.path.join(self.dir, "state.json"))
+        self.core = HcFake()
+        self.r = hosting.Restorer(self.store, lambda name: self.core, sleep=lambda s: None)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_a_running_session_is_left_alone(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        self.assertEqual(self.r.restore([SID]), [])
+        self.assertEqual(self.core.did, [])
+
+    def test_a_kept_terminal_back_as_a_shell_gets_the_resume_typed(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        self.core.terms["t1"] = {"state": "live", "labels": {"imperatorium.session": SID},
+                                 "foreground": {"name": "pwsh.EXE", "argv": ["pwsh"]}}
+        out = self.r.restore([])
+        self.assertEqual(out[0]["result"], "resumed in place")
+        self.assertEqual(self.core.did, [("send", "t1", "claude --resume " + SID)])
+
+    def test_a_lost_terminal_is_replaced(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        out = self.r.restore([])
+        self.assertEqual(out[0]["result"], "resumed in a new terminal")
+        kind, argv, cwd, labels = self.core.did[0]
+        self.assertEqual((kind, argv, cwd), ("run", ["claude", "--resume", SID], self.dir))
+        self.assertEqual(labels["imperatorium.session"], SID)
+        self.assertEqual(self.r.hosted()[SID]["address"], out[0]["address"])
+
+    def test_another_terminal_at_that_address_is_not_typed_into(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        self.core.terms["t1"] = {"state": "live", "labels": {"imperatorium.session": "other"},
+                                 "foreground": {"name": "pwsh.EXE", "argv": ["pwsh"]}}
+        self.r.restore([])
+        self.assertNotIn("send", [d[0] for d in self.core.did])
+
+    def test_a_folder_that_is_gone_is_reported(self):
+        self.r.remember(SID, os.path.join(self.dir, "gone"), {"address": "t1"})
+        self.assertEqual(self.r.restore([])[0]["result"], "folder gone")
+
+    def test_forget(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        self.r.forget(SID)
+        self.assertEqual(self.r.hosted(), {})
+
+
+class HostedLaunch(td.Base):
+    def setUp(self):
+        super().setUp()
+        self.core = HcFake()
+        self.control.hc_core = lambda name=None: self.core
+        self.control.terminal_host = "hc"
+
+    def test_new_starts_claude_in_a_labelled_terminal_and_remembers_it(self):
+        out = self.control.new_session(cwd=self.dir)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["where"], "hc")
+        kind, argv, cwd, labels = self.core.did[0]
+        self.assertEqual(argv, ["claude", "--session-id", out["session_id"]])
+        self.assertEqual(labels["herdr.space"], hosting.space_id(self.dir))
+        self.assertIn(out["session_id"], self.control.hosting.hosted())
+
+    def test_session_end_forgets_it(self):
+        out = self.control.new_session(cwd=self.dir)
+        sid = out["session_id"]
+        self.control.on_hook({"hook_event_name": "SessionEnd", "session_id": sid,
+                              "cwd": self.dir})
+        self.assertNotIn(sid, self.control.hosting.hosted())
+
+    def test_a_session_started_by_hand_in_hc_is_remembered(self):
+        self.control.on_hook({"hook_event_name": "SessionStart", "session_id": SID,
+                              "cwd": self.dir, "hc_terminal": "t3", "hc_session": "default"})
+        self.assertEqual(self.control.hosting.hosted()[SID]["address"], "t3")
+
+    def test_off_by_default(self):
+        self.control.terminal_host = "terminal"
+        self.assertIsNone(self.control._hc_opener(SID))
 
 
 if __name__ == "__main__":
