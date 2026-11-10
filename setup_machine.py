@@ -11,6 +11,7 @@
     python setup_machine.py remote check         # every configured host, step by step
     python setup_machine.py remote remove HOST   # its hooks and its config entry
     python setup_machine.py service status       # install | uninstall | restart | status
+    python setup_machine.py herdr install        # mods + layout into herdr-app (status | uninstall)
 
 What `install` does, in order, and each step is safe to repeat:
 
@@ -1064,13 +1065,48 @@ def cmd_uninstall(args):
     return 0
 
 
+def cmd_herdr(args):
+    """The Imperatorium mods and layout in herdr-app (imperatorium/herdrsetup.py)."""
+    sys.path.insert(0, HERE)
+    from imperatorium import herdrsetup
+    action = args.action or "status"
+    home = args.home or herdrsetup.default_home()
+    if action == "install":
+        step("herdr-app: Imperatorium mods and layout into " + home)
+        herdrsetup.install(HERE, home, url=args.url or herdrsetup.DEFAULT_URL,
+                           token_file=args.token_file, say=say)
+        say("Switch to it in herdr-app: Ctrl+Shift+P, then \"layout\" - or "
+            "herdr-app do layout.switch --name imperatorium")
+        if not shutil.which("hc"):
+            say("herdr-core (hc) is not on PATH: herdr-app's installer adds it.")
+        return 0
+    if action == "uninstall":
+        step("herdr-app: removing the Imperatorium mods and layout from " + home)
+        herdrsetup.uninstall(home, say=say)
+        return 0
+    if action == "status":
+        st = herdrsetup.status(HERE, home)
+        say("herdr-app home: %s%s" % (st["home"], "" if st["exists"] else " (missing)"))
+        for name, state in st["mods"].items():
+            say("  %-8s mods/%s" % (state, name))
+        say("  %-8s layouts/%s" % ("present" if st["layout"] else "missing", herdrsetup.LAYOUT))
+        say("  %-8s %s %s" % ("present" if st["config"] else "missing", herdrsetup.CONFIG,
+                              json.dumps(st["config"]) if st["config"] else ""))
+        say("  telemetry %s" % ("off" if st["telemetry_off"] else "ON (herdr-app's default)"))
+        ok = all(v == "current" for v in st["mods"].values()) and st["layout"] and st["config"]
+        return 0 if ok else 1
+    say("usage: setup_machine.py herdr install|uninstall|status [--home DIR] [--url URL]")
+    return 2
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="install",
-                    choices=("install", "check", "uninstall", "remote", "service"))
+                    choices=("install", "check", "uninstall", "remote", "service", "herdr"))
     ap.add_argument("action", nargs="?",
-                    help="remote: add | remove | check;  service: install | uninstall | restart | status")
+                    help="remote: add | remove | check;  service: install | uninstall | restart | status;"
+                         "  herdr: install | uninstall | status")
     ap.add_argument("host", nargs="?", help="remote: user@host or an ~/.ssh/config alias")
     ap.add_argument("--yes", "-y", action="store_true", help="accept every default")
     ap.add_argument("--root", action="append",
@@ -1089,6 +1125,10 @@ def main(argv=None):
                     help="leave out the Imperatorium mod (Claude Code 2.1.287+)")
     ap.add_argument("--no-tool-hooks", action="store_true")
     ap.add_argument("--no-service", action="store_true")
+    herdr = ap.add_argument_group("herdr")
+    herdr.add_argument("--home", help="herdr-app's home (default: HERDR_APP_HOME or ~/.config/herdr-app)")
+    herdr.add_argument("--url", help="the dispatcher the mods talk to (default http://127.0.0.1:8792)")
+    herdr.add_argument("--token-file", help="where that dispatcher writes its herdr token")
     remote = ap.add_argument_group("remote add / remove")
     remote.add_argument("--label", help="the name the window shows for the host")
     remote.add_argument("--no-tunnel", action="store_true",
@@ -1101,7 +1141,7 @@ def main(argv=None):
                         help="remove: also delete ~/.claude/imperatorium on the host")
     args = ap.parse_args(argv)
     return {"install": cmd_install, "check": cmd_check, "uninstall": cmd_uninstall,
-            "remote": cmd_remote, "service": cmd_service}[args.command](args)
+            "remote": cmd_remote, "service": cmd_service, "herdr": cmd_herdr}[args.command](args)
 
 
 if __name__ == "__main__":

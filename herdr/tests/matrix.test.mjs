@@ -1,0 +1,14 @@
+import { grid, money, lastReplies } from "../mods/imperatorium-matrix/matrix.js";
+import assert from "node:assert/strict";
+assert.deepEqual(grid(1), { cols: 1, rows: 1 });
+assert.deepEqual(grid(5), { cols: 3, rows: 2 });
+assert.deepEqual(grid(9), { cols: 3, rows: 3 });
+assert.deepEqual(grid(0), { cols: 1, rows: 0 });
+assert.equal(money(3.456), "$3.46"); assert.equal(money(158.2), "$158"); assert.equal(money(null), "");
+assert.deepEqual(lastReplies([{ text: "a" }, { text: "b" }, { text: "" }, { text: "c" }], 3), ["b", "c"]);
+console.log("matrix.js: all ok");
+import { stepLine } from "../mods/imperatorium-matrix/matrix.js";
+assert.equal(stepLine(null), "");
+assert.equal(stepLine({ kind: "tool", name: "Bash", summary: "git status", more: 2 }), "Bash git status  (+2 more)");
+assert.equal(stepLine({ kind: "thinking", text: "hmm" }), "thinking: hmm");
+console.log("stepLine: ok");

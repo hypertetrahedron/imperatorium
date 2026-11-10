@@ -7,7 +7,7 @@
 // <app home>/imperatorium.json, written by `setup_machine.py herdr install`.
 import { View, div, list } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea, Scrollbar } from "gpui-base";
-import { props, theme, focused, appHome, readTextFile, notify, nextCommand } from "herdr";
+import { props, theme, focused, appHome, readTextFile, notify, nextCommand, shared } from "herdr";
 import { loadConfig, api, post } from "./client.js";
 import { rowsOf, KINDS, MODES, nextMode, firstLine, toolLine, pendingFor, answerFor, hardBreaks } from "./rows.js";
 
@@ -61,30 +61,23 @@ export default class ImperatoriumChat extends View {
     });
   }
 
-  // The session this copy shows.
+  // The session this copy shows. A layout or split can pin one. Otherwise:
+  // when the focused terminal changes to a session's, follow it; a pick in
+  // the header or the sessions sidebar wins until focus moves again; with
+  // nothing focused (a click into this pane) stay where we were.
   current() {
     if (this.pinned) return this.sessions.find((s) => s.sessionId === this.pinned) ?? { sessionId: this.pinned };
-    // The focused terminal's session. Clicking into this pane (or any mod)
-    // leaves no terminal focused; the pane then stays on the last one it
-    // followed rather than jumping to whichever session needs attention.
-    const f = focused();
-    if (f?.terminal) {
-      const t = this.sessions.find((s) => s.hc && s.hc.address === f.terminal);
-      if (t) { this.followed = t.sessionId; this.picked = null; return t; }
+    const byId = (id) => id ? this.sessions.find((s) => s.sessionId === id) : null;
+    const pick = shared("imperatorium.pick");
+    if (pick && pick.at !== this.pickAt) { this.pickAt = pick.at; this.picked = pick.id; }
+    const term = focused()?.terminal ?? null;
+    if (term && term !== this.lastTerm && this.sessions.length) {
+      this.lastTerm = term;
+      const t = this.sessions.find((s) => s.hc && s.hc.address === term);
+      if (t) { this.followed = t.sessionId; this.picked = null; }
     }
-    if (this.picked) {
-      const p = this.sessions.find((s) => s.sessionId === this.picked);
-      if (p) return p;
-    }
-    if (this.followed) {
-      const p = this.sessions.find((s) => s.sessionId === this.followed);
-      if (p) return p;
-    }
-    if (this.picked) {
-      const p = this.sessions.find((s) => s.sessionId === this.picked);
-      if (p) return p;
-    }
-    return this.sessions.find((s) => s.attention) ?? this.sessions[0] ?? null;
+    return byId(this.picked) ?? byId(this.followed)
+      ?? this.sessions.find((s) => s.attention) ?? this.sessions[0] ?? null;
   }
 
   async tick(cx) {

@@ -527,7 +527,7 @@ class Control:
             tile = {k: row.get(k) for k in
                     ("key", "sessionId", "name", "cwd", "status", "state", "attention",
                      "attention_kind", "attention_reason", "waitingFor",
-                     "last_notification", "background_tasks", "remote", "host", "work")}
+                     "last_notification", "background_tasks", "remote", "host", "work", "hc")}
             mine = per.get(sid) or {}
             # The whole session's estimate; the statusline's figure only
             # covers Claude Code's current run, and is gone after a restart.
