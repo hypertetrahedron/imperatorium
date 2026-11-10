@@ -1592,7 +1592,18 @@ class Control:
         return {"ok": True, "how": "dismissed"}
 
     def _close_row(self, row):
-        got = closing.close(row["pid"])
+        hc = row.get("hc") or {}
+        core = self.hc_core(hc.get("core")) if hc.get("address") and not row.get("remote") \
+            else None
+        if core is not None:
+            # A herdr-core terminal has no console of its own to attach to;
+            # hc types into it. Forgotten here as well as at SessionEnd, which
+            # a killed session never sends - or restore would bring it back.
+            got = hosting.close(core, hc["address"])
+            if got.get("ok"):
+                self.hosting.forget(row["sessionId"])
+        else:
+            got = closing.close(row["pid"])
         self.store.add_event({"kind": "close", "cwd": row.get("cwd"),
                               "session_id": row["sessionId"],
                               "summary": got.get("how") or got.get("error")})

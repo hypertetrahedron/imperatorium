@@ -346,6 +346,9 @@ class HcFake:
     def keys(self, addr, *k):
         self.did.append(("keys", addr) + k)
 
+    def label(self, addr, **labels):
+        self.did.append(("label", addr, labels))
+
     def run(self, argv, cwd, labels=None, keep=True, name=None):
         self.n += 1
         addr = "t%d" % self.n
@@ -397,6 +400,23 @@ class Restore(unittest.TestCase):
         self.r.restore([])
         self.assertNotIn("send", [d[0] for d in self.core.did])
 
+    def test_a_shell_started_by_hand_in_the_same_folder_is_reused_and_labelled(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        self.core.terms["t1"] = {"state": "live", "labels": {"herdr.tab": "x"},
+                                 "cwd": self.dir.replace("\\", "/"),
+                                 "foreground": {"name": "pwsh.EXE", "argv": ["pwsh"]}}
+        out = self.r.restore([])
+        self.assertEqual(out[0]["result"], "resumed in place")
+        self.assertEqual(self.core.did[0], ("label", "t1", {"imperatorium.session": SID}))
+        self.assertEqual(self.core.did[1][0], "send")
+
+    def test_an_unlabelled_shell_in_another_folder_is_left_alone(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        self.core.terms["t1"] = {"state": "live", "labels": {}, "cwd": "C:/elsewhere",
+                                 "foreground": {"name": "pwsh.EXE", "argv": ["pwsh"]}}
+        self.assertEqual(self.r.restore([])[0]["result"], "resumed in a new terminal")
+        self.assertNotIn("send", [d[0] for d in self.core.did])
+
     def test_a_folder_that_is_gone_is_reported(self):
         self.r.remember(SID, os.path.join(self.dir, "gone"), {"address": "t1"})
         self.assertEqual(self.r.restore([])[0]["result"], "folder gone")
@@ -434,6 +454,26 @@ class HostedLaunch(td.Base):
         self.control.on_hook({"hook_event_name": "SessionStart", "session_id": SID,
                               "cwd": self.dir, "hc_terminal": "t3", "hc_session": "default"})
         self.assertEqual(self.control.hosting.hosted()[SID]["address"], "t3")
+
+    def test_close_goes_through_hc_and_forgets_it(self):
+        out = self.control.new_session(cwd=self.dir)
+        sid, addr = out["session_id"], out["hc"]["address"]
+        self.agent_rows = [{"sessionId": sid, "cwd": self.dir, "kind": "interactive",
+                            "name": "x", "status": "idle", "pid": 77}]
+        self.files = {sid: {"sessionId": sid, "cwd": self.dir, "kind": "interactive"}}
+        self.control.on_hook({"hook_event_name": "Stop", "session_id": sid, "cwd": self.dir,
+                              "hc_terminal": addr, "hc_session": "default"})
+
+        def gone(a):
+            self.core.terms[a]["state"] = "finished"
+        orig_send = self.core.send
+        self.core.send = lambda a, text, **k: (orig_send(a, text), gone(a))
+        self.control.invalidate()
+        got = self.control.close_session(sid)
+        self.assertEqual((got["ok"], got["how"], got["tab_closed"]), (True, "exit", True))
+        self.assertIn(("keys", addr, "ctrl+c"), self.core.did)
+        self.assertIn(("send", addr, "/exit"), self.core.did)
+        self.assertNotIn(sid, self.control.hosting.hosted())
 
     def test_off_by_default(self):
         self.control.terminal_host = "terminal"

@@ -63,6 +63,54 @@ def is_claude(facts):
         and not name.startswith(("pwsh", "powershell", "cmd", "bash", "zsh", "sh", "fish"))
 
 
+def close(core, address, wait=8.0, sleep=time.sleep):
+    """End the `claude` in an hc terminal the way a person would.
+
+    Ctrl+C (clears a draft or stops a turn), then `/exit`; a terminal
+    started for the session (its program was `claude`) then finishes, and
+    herdr-app closes its pane. Killed only if `claude` is still there after
+    `wait` seconds. A shell the person started it from is left open.
+    Returns closing.close's shape: {ok, how, tab_closed}.
+    """
+    try:
+        core.keys(address, "ctrl+c")
+        core.send(address, "/exit", force=True)
+    except hcore.HcError as exc:
+        return {"ok": False, "error": str(exc)[:280]}
+    facts = None
+    end = time.time() + wait
+    while time.time() < end:
+        try:
+            facts = core.get(address)
+        except hcore.HcError:
+            facts = None
+        if not facts or facts.get("state") != "live" or not is_claude(facts):
+            return {"ok": True, "how": "exit",
+                    "tab_closed": not facts or facts.get("state") != "live"}
+        sleep(0.5)
+    try:
+        core.kill(address)
+    except hcore.HcError as exc:
+        return {"ok": False, "error": "it would not exit: %s" % str(exc)[:200]}
+    return {"ok": True, "how": "killed", "tab_closed": True}
+
+
+def _same_terminal(facts, sid, rec):
+    """Is the terminal at the remembered address still this session's?
+
+    Ours carry the session label. One the person started by hand (in
+    herdr-app, say) has none; its address came from the session's own hook,
+    and hc keeps a kept terminal's address across a loss, so the same
+    folder is enough. A label naming another session never is.
+    """
+    label = (facts.get("labels") or {}).get(hcore.SESSION_LABEL)
+    if label:
+        return label == sid
+    a = os.path.normcase(os.path.normpath(str(facts.get("cwd") or "")))
+    b = os.path.normcase(os.path.normpath(str(rec.get("cwd") or "")))
+    return bool(a) and a == b
+
+
 class Restorer:
     """Remembers hosted sessions and brings them back after a reboot.
 
@@ -116,11 +164,12 @@ class Restorer:
                     facts = core.get(addr)
                 except hcore.HcError:
                     facts = None
-            if facts and facts.get("state") == "live" and \
-                    (facts.get("labels") or {}).get(hcore.SESSION_LABEL) == sid:
+            if facts and facts.get("state") == "live" and _same_terminal(facts, sid, rec):
                 if is_claude(facts):
                     return {"session_id": sid, "result": "running", "address": addr}
                 # A kept terminal, back as a shell: type the resume into it.
+                if (facts.get("labels") or {}).get(hcore.SESSION_LABEL) != sid:
+                    core.label(addr, **{hcore.SESSION_LABEL: sid})
                 core.send(addr, " ".join(cmd), force=False)
                 return {"session_id": sid, "result": "resumed in place", "address": addr}
             cwd = rec.get("cwd")
