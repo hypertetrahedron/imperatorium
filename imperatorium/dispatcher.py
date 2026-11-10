@@ -175,7 +175,9 @@ class Control:
         # Where New/Fork/Resume start `claude` (hosting.py).
         self.terminal_host = settingsmod.value(config, settingsmod.BY_KEY["terminal.host"])
         self.hc_session = settingsmod.value(config, settingsmod.BY_KEY["terminal.hc_session"])
-        self.hosting = hosting.Restorer(store, self.hc_core)
+        # Looked up on each call, not bound now, so a replaced hc_core (a
+        # test's) is the one restore uses.
+        self.hosting = hosting.Restorer(store, lambda name: self.hc_core(name))
         # Which dispatcher this is: an open page that sees it change reloads,
         # so it does not keep running the code the last dispatcher served.
         self.boot_id = secrets.token_hex(8)

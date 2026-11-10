@@ -82,6 +82,23 @@ Screenshots from these runs are in the session scratchpad, not in the repo: they
 
 > Any `hc` command auto-starts the core with the caller's environment. Run from inside a Claude Code session, the core inherits `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN`, `CLAUDE_CODE_CHILD_SESSION` and others, and every terminal it starts gets that session's inbox credentials (and transcripts stop being saved). herdr's TUI already strips these markers. Could the core drop `CLAUDE*` (and similar agent markers) from the environment it hands to terminals, or offer `--clean-env`? Also, `hc server status` starts a core too, so there's no side-effect-free way to ask whether one is running.
 
+## Incident during testing (fixed)
+
+A unit test reached the real herdr-core, which it shouldn't have. `Restorer` was bound to the real `hc_core` when the dispatcher was built, so a test's fake core never reached it. Each full test run therefore started your **default** hc core and one `claude --resume 11111111-…` (a made-up session id) in a temp folder, about six in all.
+- That core had a clean environment (no Claude Code variables).
+- The `claude`s were idle: no prompts were sent, so nothing was spent.
+- Their hooks went to your live dispatcher.
+
+Fixed at 23:00:
+- the six were killed and the default core stopped;
+- your live dispatcher's list was checked clean;
+- `Restorer` now looks up `hc_core` on each call;
+- `test_dispatcher.Base` makes hc "not installed" for every test unless the test supplies a fake.
+
+A full run afterwards started no `hc` or `claude` process.
+
+The test dispatcher (port 8811, polling `claude agents` every 5 s) ran from about 22:10 to 22:56. If your kernel-pool leak measurement covers that window, it had a second dispatcher's process churn in it.
+
 ## Test leftovers (scratchpad, safe to delete)
 
 - herdr-app test home: `%LOCALAPPDATA%\Temp\hapt`.

@@ -531,6 +531,18 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.r.hosted(), {})
 
 
+class NoRealHc(td.Base):
+    def test_restore_uses_the_replaced_core(self):
+        fake = HcFake()
+        self.control.hc_core = lambda name=None: fake
+        self.control.hosting.remember(SID, self.dir, {"address": "t1"})
+        self.control.hosting.restore([])
+        self.assertTrue(fake.did, "restore went to the test's core")
+
+    def test_without_a_fake_hc_is_not_installed(self):
+        self.assertIsNone(self.control.hc_core())
+
+
 class HostedLaunch(td.Base):
     def setUp(self):
         super().setUp()

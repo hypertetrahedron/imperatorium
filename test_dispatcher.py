@@ -13,7 +13,7 @@ import time
 import unittest
 
 from imperatorium import (background, closing, conversation, costs, deeplink, dispatcher,
-                      inbox, procs, projects, registry, remote, slash, winfocus)
+                      hcore, inbox, procs, projects, registry, remote, slash, winfocus)
 from imperatorium.store import Store
 
 SID = "11111111-1111-1111-1111-111111111111"
@@ -65,6 +65,11 @@ class Base(unittest.TestCase):
             projects.discover,
             background.start,
         )
+        # No test may reach a real herdr-core: an hc call starts a core and
+        # can start `claude` in it. hc counts as not installed unless a test
+        # hands the Control a fake core.
+        self._orig_find_hc = hcore.find_exe
+        hcore.find_exe = lambda: None
         registry.agents = lambda *a, **k: list(self.agent_rows)
         registry.session_files = lambda *a, **k: dict(self.files)
         inbox.send = lambda sock, tok, content, *a, **k: self.sent.append(
@@ -88,6 +93,7 @@ class Base(unittest.TestCase):
             projects.discover,
             background.start,
         ) = self._orig
+        hcore.find_exe = self._orig_find_hc
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def live(self, status="idle", sid=SID, cwd=CWD):
