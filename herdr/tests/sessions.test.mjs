@@ -14,3 +14,12 @@ assert.deepEqual(meterRows(null, 0), []);
 assert.equal(span(59), "1m"); assert.equal(span(90061), "1d1h");
 assert.equal(ago(null, 5), ""); assert.equal(ago(100, 130), "now"); assert.equal(ago(100, 400), "5m");
 console.log("sessions.js: all ok");
+import { tabNames } from "../mods/imperatorium-sessions/sessions.js";
+assert.deepEqual(tabNames([{ tabs: [
+  { id: "imp-a255c025-5fa", named: false },
+  { id: "imp-de8a36cc-a31", named: true },
+  { id: "tb123", named: false },
+  { id: "imp-ffffffffffff", named: false },
+] }], [{ sessionId: "a255c025-5faa-4227", display_name: "fix the parser" },
+       { sessionId: "de8a36cc-a31b-49a4", name: "x" }]), [["imp-a255c025-5fa", "fix the parser"]]);
+console.log("tabNames: ok");

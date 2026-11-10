@@ -43,3 +43,20 @@ export function ago(at, now) {
   if (s < 60) return "now";
   return span(s);
 }
+
+// [tab id, name] for each unnamed tab Imperatorium started (id "imp-" plus
+// the session id's first 12 characters) whose session is known.
+export function tabNames(spaces, sessions) {
+  const out = [];
+  for (const sp of spaces ?? []) {
+    for (const tab of sp.tabs ?? []) {
+      const id = String(tab.id ?? "");
+      const local = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+      if (tab.named || !local.startsWith("imp-")) continue;
+      const s = (sessions ?? []).find((r) => String(r.sessionId ?? "").slice(0, 12) === local.slice(4));
+      const name = s && (s.display_name || s.name);
+      if (name) out.push([id, String(name).slice(0, 32)]);
+    }
+  }
+  return out;
+}

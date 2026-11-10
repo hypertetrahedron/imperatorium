@@ -6,9 +6,9 @@
 // other: the chat column shows it (shared "imperatorium.pick").
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, appHome, readTextFile, run, setShared, openOverlay } from "herdr";
+import { theme, appHome, readTextFile, run, setShared, openOverlay, spaces } from "herdr";
 import { loadConfig, api } from "./client.js";
-import { order, meterRows, ago } from "./sessions.js";
+import { order, meterRows, ago, tabNames } from "./sessions.js";
 
 const POLL_MS = 3000;
 
@@ -35,6 +35,9 @@ export default class ImperatoriumSessions extends View {
       this.usage = u;
       this.pending = p.pending ?? [];
       this.error = null;
+      // Tabs Imperatorium started are called "1", "2"... until named: name
+      // each once after its session. A name the person gives is kept.
+      for (const [id, name] of tabNames(spaces(), this.rows)) run("tab.rename", { id, name });
     } catch (e) {
       this.error = "Imperatorium: " + String(e?.message ?? e);
     }
