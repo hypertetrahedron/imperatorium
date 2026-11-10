@@ -1051,6 +1051,12 @@ class Control:
             got = {"address": str(payload["hc_terminal"]),
                    "core": str(payload.get("hc_session") or "default")}
             meta["hc"] = got if self._hc_owned(sid, got, payload.get("claude_pid")) else {}
+            # Hosted from now on: remembered for restore and named on its
+            # terminal. Not only at SessionStart - a fork (claude --resume
+            # --fork-session, 2.1.322) never sends one.
+            if meta["hc"] and self.terminal_host == "hc" and event != "SessionEnd"                     and sid not in self.hosting.hosted():
+                self.hosting.remember(sid, payload.get("cwd"), meta["hc"])
+                self._label_terminal(sid, meta["hc"])
         elif event == "SessionStart" and not host:
             # Resumed outside herdr-core: an empty record, not None, so the
             # merge in Store.register replaces the old terminal's.
@@ -1058,9 +1064,6 @@ class Control:
 
         if event == "SessionStart":
             meta["name"] = payload.get("session_name")
-            if meta.get("hc") and self.terminal_host == "hc":
-                self.hosting.remember(sid, meta.get("cwd"), meta["hc"])
-                self._label_terminal(sid, meta["hc"])
             self.store.register(key, token=token, **meta)
             self.store.undismiss(key)
             self.invalidate()

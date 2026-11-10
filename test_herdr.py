@@ -555,6 +555,15 @@ class HostedLaunch(td.Base):
         self.assertNotEqual(labels["herdr.tab"], hosting.tab_id(SID))
         self.assertEqual(self.control.hosting.hosted(), {})
 
+    def test_a_fork_is_remembered_and_labelled_from_its_first_hook(self):
+        labelled = []
+        self.core.label = lambda a, **l: labelled.append((a, l))
+        self.core.terms["t9"] = {"state": "live", "labels": {}, "pid": 1}
+        self.control.on_hook({"hook_event_name": "Stop", "session_id": SID, "cwd": self.dir,
+                              "hc_terminal": "t9", "hc_session": "default"})
+        self.assertEqual(self.control.hosting.hosted()[SID]["address"], "t9")
+        self.assertEqual(labelled, [("t9", {"imperatorium.session": SID})])
+
     def test_session_end_from_shutdown_keeps_it_for_restore(self):
         out = self.control.new_session(cwd=self.dir)
         sid = out["session_id"]
