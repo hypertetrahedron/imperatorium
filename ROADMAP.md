@@ -1,7 +1,7 @@
 # Roadmap
 
 Status legend: Not Started · In Progress · Complete · Deferred
-Last updated: 2026-11-05
+Last updated: 2026-11-09
 
 Imperatorium (package `imperatorium`): a single input
 surface for dispatching prompts to, and tracking attention across, ~20
@@ -10,6 +10,7 @@ https://github.com/hypertetrahedron/imperatorium (MIT).
 
 | Feature | Status | Notes |
 |---|---|---|
+| herdr integration (herdr-app windowing + Imperatorium chat) | Not Started | 2026-11-09: plan in `docs/herdr-integration-plan.md`, awaiting approval. Phase 0 sessions hosted in `hc` (supervised core, terminal pairing, gated typed input, restore after reboot); Phase 1 2-3 day check of whether the chat works as a herdr-app mod (option A) or needs a Tauri+xterm.js shell (option B); forking herdr-app and porting the dispatcher to Rust not recommended. |
 | Slower session-list poll (process churn) | In Progress | 2026-11-05: `STREAM_EVERY` 1.0 -> 5.0 s, `STREAM_MIN_GAP` 0.5 -> 2.0 s, and `/api/sessions` accepts a snapshot up to `STREAM_EVERY` old (the Stream Deck polls it each second). Why: each re-read forks `claude agents --json` (+ git); measured ~1 new `claude.exe`/s from the dispatcher, ~4 processes/s machine-wide, while a kernel pool leak (`Toke`/`File` tags, ~28/21 MB/h) grew on this PC. Dispatcher restarted and 135 tests pass, but the spawn rate only fell from ~0.9 to ~0.6 `claude.exe`/s (measured 2026-11-05, two 30 s windows): `invalidate()` (hook events, ~25 call sites) empties the snapshot, so the next `sessions()` forks regardless of `max_age`, and other callers use the default 2 s. 2026-11-06: the pool leak did NOT change after the restart (`Toke` 29.3 -> 29.0 MB/h, `File` 21.3 -> 23.7 MB/h over 9 h), so process churn from the dispatcher is not the cause; the leak is elsewhere. The slower poll is still worthwhile for CPU/process load. Left (optional): a floor on rebuild frequency that does not delay hook news. |
 | Spike: herdr-core (`hc`) as terminal backend | Complete | 2026-11-04, hc 0.1.18 on Windows; results in `docs/hc-spike.md`, follows `docs/herdr-gap-analysis.md`. Claude Code inside `hc`: hooks, mod, parking and status all work; `hc send` is recorded as typed human input; send+wait, keys, interrupt, slash commands work; sessions survive viewer kill, core restart and core kill; a kept terminal returns after holder loss and `claude --resume` restores the conversation. Not tested: a real reboot (nothing starts `hc` at logon), remote machines, live terminal view. Must-dos before building: start `hc` only from a scrubbed environment (it passed this session's `CLAUDE_CODE_MESSAGING_*` to its terminals), and gate typed input like Send As Typed. No Imperatorium code changed. |
 | Release tag v0.1.0 (pre-mods) | Complete | Tagged 2026-11-03 at 8de6e51 and pushed: the last version that needs no Claude Code mods (2.1.234+ Windows, 2.1.224+ macOS/Linux). |
