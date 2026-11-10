@@ -103,4 +103,24 @@ export function answerFor(item, picks) {
   return out;
 }
 
+// The session's work at a glance, as the window's status line has it:
+// context in tokens, cost, prompt-cache time left, what it's waiting on.
+export function workLine(row, now) {
+  if (!row) return "";
+  const w = row.work ?? {};
+  const u = row.usage ?? {};
+  const parts = [];
+  if (typeof w.context_tokens === "number") parts.push(Math.round(w.context_tokens / 1000) + "k context");
+  if (typeof u.context_pct === "number") parts.push(Math.round(u.context_pct) + "%");
+  if (typeof u.cost_usd === "number") parts.push("$" + u.cost_usd.toFixed(2));
+  if (typeof w.cache_expires_at === "number") {
+    const left = w.cache_expires_at - now;
+    parts.push(left > 0 ? "cache " + Math.ceil(left / 60) + "m" : "cache cold");
+  }
+  const waits = [["agents", "subagent"], ["shells", "shell"], ["monitors", "monitor"]]
+    .filter(([k]) => w[k] > 0).map(([k, n]) => w[k] + " " + n + (w[k] > 1 ? "s" : ""));
+  if (waits.length) parts.push("waiting on " + waits.join(", "));
+  return parts.join(" · ");
+}
+
 export { hardBreaks } from "./text.js";

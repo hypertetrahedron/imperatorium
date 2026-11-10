@@ -25,3 +25,9 @@ assert.equal(answerFor(q, { "Colour?": ["Green"] }), null);
 assert.deepEqual(answerFor(q, { "Colour?": ["Green", "Blue"], "Size?": ["L"] }), { "Colour?": "Green, Blue", "Size?": "L" });
 assert.deepEqual(pendingFor([{ session_id: "a" }, { session_id: "b" }], "b"), [{ session_id: "b" }]);
 console.log("rows.js: all ok");
+import { workLine } from "../mods/imperatorium-chat/rows.js";
+assert.equal(workLine({ work: { context_tokens: 50014, cache_expires_at: 1000 + 125, shells: 2 }, usage: { cost_usd: 1.5 } }, 1000),
+  "50k context · $1.50 · cache 3m · waiting on 2 shells");
+assert.equal(workLine({ work: { cache_expires_at: 10 } }, 20), "cache cold");
+assert.equal(workLine(null, 0), "");
+console.log("workLine: ok");

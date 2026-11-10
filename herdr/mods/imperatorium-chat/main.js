@@ -9,7 +9,7 @@ import { View, div, list } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea, Scrollbar } from "gpui-base";
 import { props, theme, focused, appHome, readTextFile, notify, nextCommand, shared } from "herdr";
 import { loadConfig, api, post } from "./client.js";
-import { rowsOf, KINDS, MODES, nextMode, firstLine, toolLine, pendingFor, answerFor, hardBreaks } from "./rows.js";
+import { rowsOf, KINDS, MODES, nextMode, firstLine, toolLine, pendingFor, answerFor, hardBreaks, workLine } from "./rows.js";
 
 const POLL_MS = 1500;
 const DRAWN_TURNS = 60;
@@ -249,12 +249,14 @@ export default class ImperatoriumChat extends View {
         .on_click((_e, cx) => { this.picked = s.sessionId; this.tick(cx); })
         .child((s.short_name || s.project || s.sessionId.slice(0, 8)).slice(0, 22)));
     const doing = cur?.doing ? firstLine(cur.doing).slice(0, 160) : "";
+    const facts = workLine(cur, Date.now() / 1000);
     return v_flex().bg(t.chrome).border_b(1).border_color(t.border)
       .child(h_flex().h(34).px(12).gap(8).items_center()
         .child(div().w(8).h(8).rounded(4).bg(dot))
         .child(div().flex_1().truncate().text_size(13).font_semibold().child(name))
         .when(Boolean(cur?.hc), (el) => el.child(div().text_size(11).text_color(t.dim).child(cur.hc.address)))
         .child(div().text_size(11.5).text_color(cur?.attention ? t.blocked : t.dim).child(state)))
+      .when(Boolean(facts), (el) => el.child(div().px(12).pb(4).truncate().text_size(11).text_color(t.dim).child(facts)))
       .when(Boolean(doing) && cur?.status === "busy", (el) =>
         el.child(div().px(12).pb(4).truncate().text_size(11.5).text_color(t.muted).child(doing)))
       .when(!this.pinned && this.sessions.length > 1, (el) =>
