@@ -134,9 +134,11 @@ class Core:
 
     # -- the core ------------------------------------------------------------
     def status(self):
-        """The core's status, or None when it isn't running.
+        """The core's status, or None when hc can't give one.
 
-        `server status` does not start a core, unlike every other command.
+        Like every hc command, `server status` starts the core when it is
+        down (seen with hc 0.1.18), which is safe here only because every
+        call runs with `clean_env()`.
         """
         try:
             got = self.call(["server", "status"], timeout=10.0)

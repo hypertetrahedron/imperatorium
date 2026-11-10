@@ -164,6 +164,23 @@ class Recorder:
         return audio
 
 
+def to_wav(audio):
+    """Mono float32 samples at SAMPLE_RATE as a 16-bit PCM WAV file's bytes:
+    what `Worker.transcribe_bytes` (PyAV) reads, for audio recorded here
+    rather than in the browser."""
+    import io
+    import wave
+    import numpy as np
+    pcm = (np.clip(np.asarray(audio, dtype="float32"), -1.0, 1.0) * 32767.0).astype("<i2")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(CHANNELS)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
 class Transcriber:
     """Holds the model. Built on first use, then kept - loading dominates."""
 

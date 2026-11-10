@@ -226,6 +226,7 @@ class Control:
         # ~3.3 GB is given back when it is ended. Only a config that has a
         # `voice` block turns it on: a test's Control never starts one.
         self._voice = None
+        self._recorder = None  # voice.Recorder for /api/dictate, made on first use
         if isinstance(config.get("voice"), dict):
             settings = voice.settings_from(config["voice"])
             if settings.get("enabled") and voice.available():
@@ -572,6 +573,39 @@ class Control:
         except Exception as exc:
             return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
         return dict(self._voice.where or {}, ok=True, text=text)
+
+    def dictate(self, action, recorder_factory=None):
+        """Dictation recorded here, for the herdr-app mods, which cannot use
+        a microphone: `start` opens the mic (and warms the model while you
+        speak), `stop` closes it and answers the text, `cancel` drops it.
+        Handler lets only the window and the mods (their tokens) call it -
+        it opens the microphone."""
+        if self._voice is None:
+            return {"ok": False, "error": "dictation is not available"}
+        with self._lock:
+            rec = self._recorder
+            if rec is None:
+                factory = recorder_factory or voice.Recorder
+                rec = self._recorder = factory(self._voice.settings)
+        try:
+            if action == "start":
+                rec.start()
+                self._voice.warm()
+                return {"ok": True, "recording": True}
+            if action == "cancel":
+                rec.stop()
+                return {"ok": True, "recording": False}
+            if action == "stop":
+                audio = rec.stop()
+                if audio is None or not len(audio):
+                    return {"ok": True, "recording": False, "text": ""}
+                text = self._voice.transcribe_bytes(voice.to_wav(audio))
+                return dict(self._voice.where or {}, ok=True, recording=False, text=text)
+            if action == "status":
+                return {"ok": True, "recording": rec.recording}
+        except Exception as exc:
+            return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+        return {"ok": False, "error": "action must be start, stop, cancel or status"}
 
     def warm_voice(self):
         """The mic was pressed: build the model while the user speaks."""
@@ -2311,6 +2345,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/hook":
             self._send(200, c.on_hook(payload if isinstance(payload, dict) else {}))
+        elif path == "/api/dictate":
+            if not self._from_window():
+                self._send(403, {"ok": False, "error": "dictation opens the microphone: "
+                                 "only the Imperatorium window and its herdr mods"})
+                return
+            self._send(200, c.dictate((payload or {}).get("action")
+                                      if isinstance(payload, dict) else None))
         elif path == "/api/voice/warm":
             self._send(200, c.warm_voice())
         elif path == "/api/focus":

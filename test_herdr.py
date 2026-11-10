@@ -224,6 +224,87 @@ class HerdrToken(td.Origins):
             self.assertEqual(fh.read(), self.control.herdr_token)
 
 
+class Dictate(td.Base):
+    """Recorded by the dispatcher for the herdr mods, which have no mic."""
+
+    class Rec:
+        def __init__(self, settings):
+            self.recording = False
+            self.audio = None
+
+        def start(self):
+            self.recording = True
+
+        def stop(self):
+            self.recording = False
+            return self.audio
+
+    class Voice:
+        settings = {}
+        where = {"device": "cpu"}
+
+        def __init__(self):
+            self.got = []
+
+        def warm(self):
+            pass
+
+        def transcribe_bytes(self, data, hint=None):
+            self.got.append(data)
+            return "hello there"
+
+    def test_start_then_stop_gives_the_text(self):
+        import numpy as np
+        self.control._voice = v = self.Voice()
+        made = []
+
+        def factory(settings):
+            made.append(self.Rec(settings))
+            return made[-1]
+        self.assertTrue(self.control.dictate("start", factory)["recording"])
+        made[0].audio = np.zeros(16000, dtype="float32")
+        out = self.control.dictate("stop")
+        self.assertEqual(out["text"], "hello there")
+        self.assertTrue(v.got[0].startswith(b"RIFF"), "sent as WAV")
+
+    def test_nothing_recorded_is_empty_text(self):
+        self.control._voice = self.Voice()
+        self.control.dictate("start", self.Rec)
+        self.assertEqual(self.control.dictate("stop")["text"], "")
+
+    def test_off_without_a_voice_block(self):
+        self.assertFalse(self.control.dictate("start")["ok"])
+
+    def test_wav(self):
+        import numpy as np
+        import io
+        import wave
+        from imperatorium import voice
+        data = voice.to_wav(np.array([0.0, 0.5, -1.0, 2.0], dtype="float32"))
+        with wave.open(io.BytesIO(data)) as w:
+            self.assertEqual((w.getnchannels(), w.getframerate(), w.getnframes()),
+                             (1, 16000, 4))
+
+
+class DictateRoute(HerdrToken):
+    def test_only_the_window_or_mods_open_the_mic(self):
+        import urllib.error
+        import urllib.request
+
+        def call(headers):
+            h = {"Content-Type": "application/json"}
+            h.update(headers)
+            req = urllib.request.Request("http://127.0.0.1:%d/api/dictate" % self.port,
+                                         data=b'{"action":"status"}', headers=h)
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return resp.status
+            except urllib.error.HTTPError as exc:
+                return exc.code
+        self.assertEqual(call({}), 403)
+        self.assertEqual(call({"X-Imperatorium-Herdr": self.control.herdr_token}), 200)
+
+
 class Labels(unittest.TestCase):
     def test_one_space_per_folder_one_tab_per_session(self):
         a = hosting.space_id("C:/src/My Project")

@@ -84,3 +84,40 @@ function modeFor(kind, speaker, it, modes) {
 function textOf(it) {
   return (it.blocks ?? []).filter((b) => b.kind === "text").map((b) => b.text).join("\n");
 }
+
+// Parked requests (/api/pending) for one session, oldest first.
+export function pendingFor(pending, sessionId) {
+  return (pending ?? []).filter((p) => p.session_id === sessionId);
+}
+
+// {question: answer} for /api/decide from the labels picked per question,
+// or null while a question has none. A multi-select answer is its labels
+// joined with ", ", as the terminal sends it.
+export function answerFor(item, picks) {
+  const out = {};
+  for (const q of item.questions ?? []) {
+    const got = (picks[q.question] ?? []).filter(Boolean);
+    if (!got.length) return null;
+    out[q.question] = got.join(", ");
+  }
+  return out;
+}
+
+// Claude's line breaks are meant: markdown would join single newlines into
+// one paragraph ("1\n2\n3" as "1 2 3"). Outside fenced code, a line that is
+// followed by another non-blank line gets a hard break.
+export function hardBreaks(text) {
+  const lines = String(text ?? "").split("\n");
+  let fenced = false;
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    const next = lines[i + 1];
+    const breakable = !fenced && next !== undefined && line.trim() !== "" && next.trim() !== ""
+      && !/^\s*(```|~~~)/.test(next) && !/^\s*(```|~~~)/.test(line)
+      && !/\s{2}$/.test(line) && !/\$/.test(line) && !/^\s*\|/.test(line);
+    out.push(breakable ? line + "  " : line);
+  }
+  return out.join("\n");
+}
