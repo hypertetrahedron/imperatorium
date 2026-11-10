@@ -85,7 +85,23 @@ class Calls(unittest.TestCase):
         c = self.core(send={"ok": True})
         c.send("t1", "hello", only_if="idle")
         argv = self.run.calls[0][0]
-        self.assertEqual(argv[-4:], ["--if", "idle", "t1", "hello"])
+        self.assertEqual(argv[-5:], ["--if", "idle", "--", "t1", "hello"])
+
+    def test_text_that_looks_like_an_option_stays_text(self):
+        c = self.core(send={"ok": True})
+        c.send("t1", "--force approve")
+        argv = self.run.calls[0][0]
+        self.assertEqual(argv[-3:], ["--", "t1", "--force approve"])
+        self.assertNotIn("--force", argv[:-1])
+
+    def test_an_address_from_a_hook_is_checked(self):
+        c = self.core(get={})
+        for bad in ("-x", "--force", "t1 t2", "", "a/b/c", "t1;rm"):
+            with self.assertRaises(hcore.HcError, msg=bad):
+                c.get(bad)
+        self.assertEqual(self.run.calls, [])
+        for good in ("t7", "t1b", "vps/t7", "review-2"):
+            self.assertEqual(hcore.address(good), good)
 
     def test_not_installed(self):
         c = hcore.Core(exe=None, runner=FakeRun())
@@ -155,6 +171,33 @@ class Pairing(td.SlashCommands):
         self.hc_hook(event="Stop")
         self.assertEqual(self.row()["hc"]["address"], "t4")
 
+    def test_a_claude_started_inside_the_terminal_is_not_paired_with_it(self):
+        from imperatorium import procs
+        self.live()
+
+        class Core:
+            def get(self, a):
+                return {"pid": 20}
+        self.control.hc_core = lambda name=None: Core()
+        orig = procs.process_table
+        procs.process_table = lambda: Ownership.TABLE
+        try:
+            self.control.on_hook({"hook_event_name": "SessionStart", "session_id": SID,
+                                  "cwd": "C:/w", "hc_terminal": "t4", "hc_session": "imptest",
+                                  "claude_pid": "50"})
+            self.assertFalse(self.row().get("hc"))
+            self.control.on_hook({"hook_event_name": "Stop", "session_id": SID,
+                                  "cwd": "C:/w", "hc_terminal": "t4", "hc_session": "imptest",
+                                  "claude_pid": "30"})
+            self.assertEqual(self.row()["hc"]["address"], "t4")
+        finally:
+            procs.process_table = orig
+
+    def test_a_bad_address_in_a_hook_is_dropped(self):
+        self.live()
+        self.hc_hook(terminal="--force")
+        self.assertFalse(self.row().get("hc"))
+
     def test_resumed_outside_hc_it_is_forgotten(self):
         self.live()
         self.hc_hook()
@@ -212,6 +255,20 @@ class HerdrToken(td.Origins):
                   {"X-Imperatorium-Herdr": self.control.window_token}):
             self.assertEqual(self.call(h)[0], 403, h)
 
+    def test_a_non_ascii_token_is_a_refusal_not_an_error(self):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.putrequest("POST", "/api/typed")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("X-Imperatorium-Herdr", "tést".encode("latin-1"))
+        body = json.dumps({"session_id": SID, "prompt": "hi"}).encode()
+        conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body)
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 403)
+
     def test_a_browser_page_cannot_use_it(self):
         code, _ = self.call({"X-Imperatorium-Herdr": self.control.herdr_token,
                              "Origin": "http://127.0.0.1:%d" % self.port})
@@ -267,6 +324,23 @@ class Dictate(td.Base):
         self.assertEqual(out["text"], "hello there")
         self.assertTrue(v.got[0].startswith(b"RIFF"), "sent as WAV")
 
+    def test_a_mic_left_open_is_closed(self):
+        self.control._voice = self.Voice()
+        self.control.dictate("start", self.Rec)
+        delay, fn = self.scheduled[-1]
+        self.assertGreater(delay, 100)
+        fn()
+        self.assertFalse(self.control._recorder.recording)
+
+    def test_an_expiry_from_an_earlier_start_does_nothing(self):
+        self.control._voice = self.Voice()
+        self.control.dictate("start", self.Rec)
+        _, old = self.scheduled[-1]
+        self.control.dictate("stop")
+        self.control.dictate("start")
+        old()
+        self.assertTrue(self.control._recorder.recording)
+
     def test_nothing_recorded_is_empty_text(self):
         self.control._voice = self.Voice()
         self.control.dictate("start", self.Rec)
@@ -303,6 +377,29 @@ class DictateRoute(HerdrToken):
                 return exc.code
         self.assertEqual(call({}), 403)
         self.assertEqual(call({"X-Imperatorium-Herdr": self.control.herdr_token}), 200)
+
+
+class Ownership(unittest.TestCase):
+    # (pid, ppid, exe, started)
+    TABLE = [(10, 1, "hc", None), (20, 10, "pwsh", None), (30, 20, "claude", None),
+             (40, 30, "bash", None), (50, 40, "claude", None), (60, 10, "claude", None)]
+
+    def test_claude_as_the_terminals_program_or_under_its_shell(self):
+        self.assertTrue(hosting.owns_terminal(self.TABLE, 60, 60))
+        self.assertTrue(hosting.owns_terminal(self.TABLE, 30, 20))
+
+    def test_a_claude_started_inside_another_does_not_own_it(self):
+        self.assertFalse(hosting.owns_terminal(self.TABLE, 50, 20))
+
+    def test_unknown_or_unrelated(self):
+        self.assertFalse(hosting.owns_terminal(self.TABLE, 99, 20))
+        self.assertFalse(hosting.owns_terminal(self.TABLE, 60, 20))
+        self.assertFalse(hosting.owns_terminal(self.TABLE, None, 20))
+
+    def test_shells(self):
+        self.assertTrue(hosting.is_shell({"foreground": {"name": "pwsh.EXE"}}))
+        self.assertFalse(hosting.is_shell({"foreground": {"name": "vim.exe"}}))
+        self.assertFalse(hosting.is_shell({"foreground": {"name": "python.exe"}}))
 
 
 class Labels(unittest.TestCase):
@@ -393,6 +490,13 @@ class Restore(unittest.TestCase):
         self.assertEqual(labels["imperatorium.session"], SID)
         self.assertEqual(self.r.hosted()[SID]["address"], out[0]["address"])
 
+    def test_never_typed_into_a_program_other_than_a_shell(self):
+        self.r.remember(SID, self.dir, {"address": "t1"})
+        self.core.terms["t1"] = {"state": "live", "labels": {"imperatorium.session": SID},
+                                 "foreground": {"name": "vim.exe", "argv": ["vim"]}}
+        self.assertEqual(self.r.restore([])[0]["result"], "terminal busy")
+        self.assertEqual(self.core.did, [])
+
     def test_another_terminal_at_that_address_is_not_typed_into(self):
         self.r.remember(SID, self.dir, {"address": "t1"})
         self.core.terms["t1"] = {"state": "live", "labels": {"imperatorium.session": "other"},
@@ -443,6 +547,21 @@ class HostedLaunch(td.Base):
         self.assertEqual(labels["herdr.space"], hosting.space_id(self.dir))
         self.assertIn(out["session_id"], self.control.hosting.hosted())
 
+    def test_a_fork_gets_its_own_tab_and_no_session_label(self):
+        self.control.resume(SID, cwd=self.dir, fork=True)
+        kind, argv, cwd, labels = self.core.did[0]
+        self.assertIn("--fork-session", argv)
+        self.assertNotIn("imperatorium.session", labels)
+        self.assertNotEqual(labels["herdr.tab"], hosting.tab_id(SID))
+        self.assertEqual(self.control.hosting.hosted(), {})
+
+    def test_session_end_from_shutdown_keeps_it_for_restore(self):
+        out = self.control.new_session(cwd=self.dir)
+        sid = out["session_id"]
+        self.control.on_hook({"hook_event_name": "SessionEnd", "session_id": sid,
+                              "cwd": self.dir, "reason": "other"})
+        self.assertIn(sid, self.control.hosting.hosted())
+
     def test_session_end_forgets_it(self):
         out = self.control.new_session(cwd=self.dir)
         sid = out["session_id"]
@@ -474,6 +593,23 @@ class HostedLaunch(td.Base):
         self.assertIn(("keys", addr, "ctrl+c"), self.core.did)
         self.assertIn(("send", addr, "/exit"), self.core.did)
         self.assertNotIn(sid, self.control.hosting.hosted())
+
+    def test_start_up_ensures_the_core_and_restores(self):
+        ensured = []
+        self.core.ensure = lambda: ensured.append(1) or {"pid": 1}
+        self.control.hosting.remember(SID, self.dir, {"address": "t1"})
+        done = self.control.restore_hosted(wait=0)
+        self.assertTrue(ensured)
+        self.assertEqual(done[0]["result"], "resumed in a new terminal")
+        kinds = [e["kind"] for e in self.control.store.events(10)]
+        self.assertIn("restore", kinds)
+
+    def test_a_tainted_core_is_reported_not_raised(self):
+        def bad():
+            raise hcore.HcError("leaks CLAUDE_CODE_MESSAGING_TOKEN")
+        self.core.ensure = bad
+        self.assertEqual(self.control.restore_hosted(wait=0), [])
+        self.assertEqual(self.control.store.events(1)[0]["kind"], "hc_error")
 
     def test_off_by_default(self):
         self.control.terminal_host = "terminal"

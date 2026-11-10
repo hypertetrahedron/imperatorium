@@ -16,7 +16,9 @@ shell (or starts a new terminal if it didn't come back at all).
 import hashlib
 import os
 import re
+import threading
 import time
+import uuid
 
 from . import hcore
 
@@ -37,18 +39,65 @@ def tab_id(session_id):
     return "imp-" + (session_id or "")[:12]
 
 
-def labels(session_id, cwd):
+def labels(session_id, cwd, fork=False):
+    """A fork gets its own id from Claude Code only when it starts, so its
+    terminal is labelled then (SessionStart); until then it has a tab of
+    its own rather than its parent's."""
+    if fork:
+        return {hcore.SPACE_LABEL: space_id(cwd), hcore.TAB_LABEL: "imp-" + uuid.uuid4().hex[:12]}
     return {hcore.SESSION_LABEL: session_id,
             hcore.SPACE_LABEL: space_id(cwd),
             hcore.TAB_LABEL: tab_id(session_id)}
 
 
-def launch(core, argv, cwd, session_id):
+def launch(core, argv, cwd, session_id, fork=False):
     """Start `argv` (a `claude ...` command) for `session_id`; its terminal."""
     core.ensure()
-    got = core.run(list(argv), cwd=cwd, labels=labels(session_id, cwd), keep=True)
+    got = core.run(list(argv), cwd=cwd, labels=labels(session_id, cwd, fork), keep=True)
     return {"address": got["address"],
             "core": core.session or "default"}
+
+
+# What a kept terminal comes back as after a loss, and what a person starts
+# `claude` from. Restore types only into one of these: never into an editor,
+# a REPL or any other program that happens to hold the terminal.
+SHELLS = {"pwsh", "powershell", "cmd", "bash", "sh", "zsh", "fish", "nu", "dash"}
+
+
+def _exe_name(name):
+    base = os.path.basename(str(name or "")).lower()
+    return base[:-4] if base.endswith(".exe") else base
+
+
+def is_shell(facts):
+    fg = (facts or {}).get("foreground") or {}
+    name = fg.get("name") or ((fg.get("argv") or (facts or {}).get("argv") or [""])[0])
+    return _exe_name(name) in SHELLS
+
+
+def owns_terminal(table, claude_pid, terminal_pid):
+    """Does the `claude` with `claude_pid` run in the terminal whose program
+    is `terminal_pid` - as that program, or under it with no other `claude`
+    in between? A `claude -p` run from a Bash call inside a hosted session
+    inherits the terminal's HC_TERMINAL_ID but sits under the outer claude.
+    `table`: procs.process_table() rows (pid, ppid, exe, started)."""
+    try:
+        claude_pid, terminal_pid = int(claude_pid), int(terminal_pid)
+    except (TypeError, ValueError):
+        return False
+    if claude_pid == terminal_pid:
+        return True
+    parent = {row[0]: (row[1], row[2]) for row in table or ()}
+    pid, seen = claude_pid, set()
+    while pid in parent and pid not in seen:
+        seen.add(pid)
+        ppid, _ = parent[pid]
+        if ppid == terminal_pid:
+            return True
+        if ppid not in parent or _exe_name(parent[ppid][1]).startswith("claude"):
+            return False
+        pid = ppid
+    return False
 
 
 def is_claude(facts):
@@ -122,20 +171,25 @@ class Restorer:
         self.store = store
         self.core_for = core_for  # name -> hcore.Core or None
         self.sleep = sleep
+        # remember/forget read, change and write the whole record; the hook
+        # thread and the opener can do so at once.
+        self._lock = threading.Lock()
 
     def hosted(self):
         return dict(self.store.prefs().get("hosted") or {})
 
     def remember(self, session_id, cwd, terminal):
-        got = self.hosted()
-        got[session_id] = {"cwd": cwd, "address": terminal["address"],
-                           "core": terminal.get("core") or "default", "at": time.time()}
-        self.store.set_prefs(hosted=got)
+        with self._lock:
+            got = self.hosted()
+            got[session_id] = {"cwd": cwd, "address": terminal["address"],
+                               "core": terminal.get("core") or "default", "at": time.time()}
+            self.store.set_prefs(hosted=got)
 
     def forget(self, session_id):
-        got = self.hosted()
-        if got.pop(session_id, None) is not None:
-            self.store.set_prefs(hosted=got)
+        with self._lock:
+            got = self.hosted()
+            if got.pop(session_id, None) is not None:
+                self.store.set_prefs(hosted=got)
 
     def restore(self, running_ids=()):
         """Resume every remembered session that isn't running. A list of
@@ -167,6 +221,9 @@ class Restorer:
             if facts and facts.get("state") == "live" and _same_terminal(facts, sid, rec):
                 if is_claude(facts):
                     return {"session_id": sid, "result": "running", "address": addr}
+                if not is_shell(facts):
+                    return {"session_id": sid, "result": "terminal busy",
+                            "address": addr, "error": "something other than a shell runs there"}
                 # A kept terminal, back as a shell: type the resume into it.
                 if (facts.get("labels") or {}).get(hcore.SESSION_LABEL) != sid:
                     core.label(addr, **{hcore.SESSION_LABEL: sid})

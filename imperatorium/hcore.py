@@ -24,6 +24,7 @@ what the spike exercised, and an argv list needs no client of our own.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,19 @@ OTHER_AGENT_VARS = ("AI_AGENT",)
 
 class HcError(RuntimeError):
     pass
+
+
+# t7, t1b, a name, or machine/t7. Never anything hc could read as an option.
+_ADDRESS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(/[A-Za-z0-9][A-Za-z0-9_.-]{0,63})?$")
+
+
+def address(a):
+    """`a` if it is a terminal address, else HcError. Addresses reach hc's
+    argv, and one that came from a hook payload is not to be trusted."""
+    a = str(a or "")
+    if not _ADDRESS.match(a):
+        raise HcError("not a terminal address: %r" % a[:40])
+    return a
 
 
 def tainted_names(env):
@@ -191,8 +205,8 @@ class Core:
         got = self.call("ls", *(["--all"] if all_ else []))
         return list((got or {}).get("terminals") or [])
 
-    def get(self, address):
-        return self.call("get", address)
+    def get(self, addr):
+        return self.call("get", address(addr))
 
     def run(self, argv, cwd, labels=None, keep=True, name=None):
         """Start `argv` in a new terminal and return its facts (`address`).
@@ -212,29 +226,31 @@ class Core:
             raise HcError("hc run gave no terminal: %r" % (got,))
         return got
 
-    def label(self, address, **labels):
-        args = [address] + ["%s=%s" % kv for kv in sorted(labels.items())]
+    def label(self, addr, **labels):
+        args = ["--", address(addr)] + ["%s=%s" % kv for kv in sorted(labels.items())]
         return self.call("label", *args)
 
-    def read(self, address, lines=50):
-        return self.call("read", address, "--lines", str(int(lines)), json_out=False)
+    def read(self, addr, lines=50):
+        return self.call("read", "--lines", str(int(lines)), "--", address(addr), json_out=False)
 
-    def send(self, address, text, force=False, only_if=None):
-        args = [address, text]
+    def send(self, addr, text, force=False, only_if=None):
+        """Paste `text` and press Enter. `--` keeps text that starts with a
+        dash from being read as one of hc's own options (`--force`)."""
+        opts = []
         if force:
-            args.insert(0, "--force")
+            opts.append("--force")
         if only_if:
-            args = ["--if", only_if] + args
-        return self.call("send", *args, timeout=30.0)
+            opts += ["--if", only_if]
+        return self.call("send", *opts, "--", address(addr), str(text).strip(), timeout=30.0)
 
-    def keys(self, address, *names):
-        return self.call("keys", address, *names, timeout=15.0)
+    def keys(self, addr, *names):
+        return self.call("keys", "--", address(addr), *names, timeout=15.0)
 
-    def interrupt(self, address):
-        return self.call("interrupt", address, timeout=15.0)
+    def interrupt(self, addr):
+        return self.call("interrupt", "--", address(addr), timeout=15.0)
 
-    def kill(self, address):
-        return self.call("kill", address, timeout=30.0)
+    def kill(self, addr):
+        return self.call("kill", "--", address(addr), timeout=30.0)
 
 
 def _b64(s):

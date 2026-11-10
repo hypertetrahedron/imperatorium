@@ -48,6 +48,10 @@ def main():
     # which core, so the dispatcher can type into it and show it in herdr.
     payload["hc_terminal"] = os.environ.get("HC_TERMINAL_ID")
     payload["hc_session"] = os.environ.get("HC_SESSION")
+    # Which `claude` is reporting: a `claude` started inside another one's
+    # terminal (claude -p from a Bash call) inherits HC_TERMINAL_ID, and the
+    # dispatcher uses this to tell them apart.
+    payload["claude_pid"] = os.environ.get("CLAUDE_PID")
 
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(

@@ -64,7 +64,7 @@ export function rowsOf(items, modes, drawn) {
         const mode = modeFor(b.kind, speaker, it, modes);
         if (b.kind === "text") rows.push({ key, kind: "text", text: b.text ?? "", mode });
         else if (b.kind === "thinking") rows.push({ key, kind: "thinking", text: b.text ?? "", mode });
-        else if (b.kind === "tool") rows.push({ key, kind: "tool", name: b.name ?? "tool", summary: b.summary ?? "", mode });
+        else if (b.kind === "tool") rows.push({ key, kind: "tool", name: b.name ?? "tool", summary: b.summary ?? "", diff: b.diff ?? "", mode });
         else if (b.kind === "result") {
           const text = String(b.text ?? "");
           rows.push({ key, kind: "result", text, is_error: Boolean(b.is_error), lines: text.split("\n").length, mode });

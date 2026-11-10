@@ -15,6 +15,7 @@ const POLL_MS = 1500;
 const DRAWN_TURNS = 60;
 const TAIL_ROWS = 40;      // drawn while following; more than a screen's worth
 const HISTORY_STEP = 30;   // rows a scroll-back starts with, and each "earlier" adds
+const DIFF_LINES = 60;     // of an Edit's diff, before "… N more lines"
 
 export default class ImperatoriumChat extends View {
   init(_props, cx) {
@@ -298,9 +299,23 @@ export default class ImperatoriumChat extends View {
       return div().px(14).py(2).text_size(this.fontSize() - 1).italic().text_color(t.dim).child(body);
     }
     if (r.kind === "tool") {
-      return h_flex().px(14).py(1).gap(6).text_size(12).font_family(this.mono())
-        .child(div().text_color(t.ansi4).child("▸ " + r.name))
+      const line = h_flex().px(14).py(1).gap(6).text_size(12).font_family(this.mono())
+        .child(div().text_color(t.ansi4).child((r.diff && !compact ? "▾ " : "▸ ") + r.name))
         .child(div().flex_1().truncate().text_color(t.muted).child(toolLine(r)));
+      // An Edit's change, as the window shows it; Compact folds it away.
+      if (!r.diff || compact) return line;
+      // herdr's markdown view doesn't colour a diff block, so the lines are
+      // drawn here: removed red, added green, hunk breaks dim.
+      const lines = String(r.diff).split("\n");
+      const shown = lines.slice(0, DIFF_LINES);
+      return v_flex().child(line)
+        .child(v_flex().ml(26).mr(14).my(2).px(8).py(4).rounded(6).bg(t.raised)
+          .text_size(12).font_family(this.mono())
+          .children(shown.map((l) => div().whitespace_nowrap().truncate()
+            .text_color(l.startsWith("+") ? t.ansi2 : l.startsWith("-") ? t.ansi1 : t.dim)
+            .child(l === "@@" ? "⋯" : (l || " "))))
+          .when(lines.length > shown.length, (el) => el.child(div().text_color(t.dim)
+            .child("… " + (lines.length - shown.length) + " more lines"))));
     }
     if (r.kind === "result") {
       const color = r.is_error ? t.blocked : t.dim;
@@ -381,8 +396,8 @@ export default class ImperatoriumChat extends View {
   mono() { return this.cfg?.mono ?? "Cascadia Mono"; }
 }
 
-function fence(text) {
-  return "```\n" + String(text).replace(/```/g, "``​`") + "\n```";
+function fence(text, lang = "") {
+  return "```" + lang + "\n" + String(text).replace(/```/g, "``​`") + "\n```";
 }
 
 function loadModes() {

@@ -171,6 +171,7 @@ class Control:
         # only this account can read (see write_herdr_token).
         self.herdr_token = secrets.token_urlsafe(24)
         self._hc_cores = {}
+        self._hc_checked = {}  # (session, address, core, claude pid) -> owned
         # Where New/Fork/Resume start `claude` (hosting.py).
         self.terminal_host = settingsmod.value(config, settingsmod.BY_KEY["terminal.host"])
         self.hc_session = settingsmod.value(config, settingsmod.BY_KEY["terminal.hc_session"])
@@ -227,6 +228,8 @@ class Control:
         # `voice` block turns it on: a test's Control never starts one.
         self._voice = None
         self._recorder = None  # voice.Recorder for /api/dictate, made on first use
+        self._dictate_lock = threading.Lock()
+        self._dictate_n = 0    # which start a pending expiry belongs to
         if isinstance(config.get("voice"), dict):
             settings = voice.settings_from(config["voice"])
             if settings.get("enabled") and voice.available():
@@ -587,10 +590,24 @@ class Control:
             if rec is None:
                 factory = recorder_factory or voice.Recorder
                 rec = self._recorder = factory(self._voice.settings)
+        # One press at a time: a double click must not interleave a start
+        # with a stop.
+        with self._dictate_lock:
+            return self._dictate(rec, action)
+
+    # A mic left open (the mod crashed, the window closed) is closed after
+    # this long past the longest dictation kept (voice `max_seconds`).
+    DICTATE_GRACE = 15.0
+
+    def _dictate(self, rec, action):
         try:
             if action == "start":
                 rec.start()
                 self._voice.warm()
+                self._dictate_n += 1
+                n = self._dictate_n
+                limit = float(self._voice.settings.get("max_seconds") or 120) + self.DICTATE_GRACE
+                self.schedule(limit, lambda: self._dictate_expire(n))
                 return {"ok": True, "recording": True}
             if action == "cancel":
                 rec.stop()
@@ -606,6 +623,11 @@ class Control:
         except Exception as exc:
             return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
         return {"ok": False, "error": "action must be start, stop, cancel or status"}
+
+    def _dictate_expire(self, n):
+        with self._dictate_lock:
+            if n == self._dictate_n and self._recorder is not None and self._recorder.recording:
+                self._recorder.stop()
 
     def warm_voice(self):
         """The mic was pressed: build the model while the user speaks."""
@@ -1023,10 +1045,12 @@ class Control:
         token = payload.get("messaging_token")
         if socket:
             meta["socket"] = socket
-        # The herdr-core terminal the session runs in, when it runs in one.
+        # The herdr-core terminal the session runs in, when it runs in one,
+        # and only once it is known to be this session's own (_hc_owned).
         if payload.get("hc_terminal") and not host:
-            meta["hc"] = {"address": payload["hc_terminal"],
-                          "core": payload.get("hc_session") or "default"}
+            got = {"address": str(payload["hc_terminal"]),
+                   "core": str(payload.get("hc_session") or "default")}
+            meta["hc"] = got if self._hc_owned(sid, got, payload.get("claude_pid")) else {}
         elif event == "SessionStart" and not host:
             # Resumed outside herdr-core: an empty record, not None, so the
             # merge in Store.register replaces the old terminal's.
@@ -1036,6 +1060,7 @@ class Control:
             meta["name"] = payload.get("session_name")
             if meta.get("hc") and self.terminal_host == "hc":
                 self.hosting.remember(sid, meta.get("cwd"), meta["hc"])
+                self._label_terminal(sid, meta["hc"])
             self.store.register(key, token=token, **meta)
             self.store.undismiss(key)
             self.invalidate()
@@ -1049,7 +1074,10 @@ class Control:
             # window can offer to resume what just closed.
             gone = self.store.sessions().get(key) or {}
             self.store.forget(key)
-            if not host:
+            # A session that was ended is not restored. One that ended with
+            # the machine (reason "other": logout, shutdown, a killed
+            # terminal) is exactly what restore is for.
+            if not host and payload.get("reason") != "other":
                 self.hosting.forget(sid)
             self.live.forget(key)
             self.usage.forget(key)
@@ -1973,6 +2001,16 @@ class Control:
     def restore_hosted(self, wait=None):
         """Resume the hosted sessions a reboot (or a lost core) ended."""
         time.sleep(self.RESTORE_AFTER if wait is None else wait)
+        # The dispatcher starts at logon, so this is what starts herdr-core
+        # at logon too - from here, with Claude Code's variables stripped,
+        # rather than from whichever `hc` call or herdr-app happens first.
+        # Kept terminals come back as the core starts.
+        core = self.hc_core(self.hc_session or None)
+        if core is not None:
+            try:
+                core.ensure()
+            except hcore.HcError as exc:
+                self.store.add_event({"kind": "hc_error", "summary": str(exc)[:280]})
         if not self.hosting.hosted():
             return []
         running = [r["sessionId"] for r in self.sessions(max_age=0)["sessions"]
@@ -1996,12 +2034,57 @@ class Control:
             core = self.hc_core(self.hc_session or None)
             if core is None:
                 raise hcore.HcError("herdr-core (hc) is not installed")
-            t = hosting.launch(core, argv, cwd, session_id)
+            t = hosting.launch(core, argv, cwd, session_id, fork=fork)
             # A fork gets its own id from Claude Code; SessionStart pairs it.
             if not fork:
                 self.hosting.remember(session_id, cwd, t)
             return {"where": "hc", "hc": t}
         return opener
+
+    def _hc_owned(self, sid, hc, claude_pid):
+        """Is `hc` the terminal session `sid` runs in? The hook reports the
+        HC_TERMINAL_ID it inherited, which a `claude` started inside another
+        session's terminal inherits too. Checked once per (session, address,
+        pid): the reporting claude must be the terminal's program or under
+        it with no other claude between (hosting.owns_terminal). Without a
+        pid (an older Claude Code) the address is taken as given."""
+        try:
+            hcore.address(hc["address"])
+        except hcore.HcError:
+            return False
+        if not claude_pid:
+            return True
+        key = (sid, hc["address"], hc["core"], str(claude_pid))
+        with self._lock:
+            known = self._hc_checked.get(key)
+        if known is not None:
+            return known
+        core = self.hc_core(hc["core"])
+        ok = False
+        if core is not None:
+            try:
+                facts = core.get(hc["address"])
+                ok = hosting.owns_terminal(procs.process_table(), claude_pid, facts.get("pid"))
+            except hcore.HcError:
+                ok = False
+        with self._lock:
+            if len(self._hc_checked) > 512:
+                self._hc_checked.clear()
+            self._hc_checked[key] = ok
+        return ok
+
+    def _label_terminal(self, sid, hc):
+        """Name the session on its terminal (a fork, or one started by hand
+        in herdr, has no label yet), so restore can recognise it."""
+        core = self.hc_core(hc.get("core"))
+        if core is None:
+            return
+        try:
+            facts = core.get(hc["address"])
+            if not (facts.get("labels") or {}).get(hcore.SESSION_LABEL):
+                core.label(hc["address"], **{hcore.SESSION_LABEL: sid})
+        except hcore.HcError:
+            pass
 
     def hc_core(self, name=None):
         """The herdr-core called `name` ("default" or a test session), or None."""
@@ -2108,7 +2191,8 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         token = self.headers.get("X-Imperatorium-Window") or ""
         if (origin is not None and self._same_origin()
-                and hmac.compare_digest(token, self.control.window_token)):
+                and hmac.compare_digest(token.encode("utf-8", "replace"),
+                                        self.control.window_token.encode("utf-8"))):
             return True
         return self._from_herdr()
 
@@ -2119,7 +2203,8 @@ class Handler(BaseHTTPRequestHandler):
         token = self.headers.get("X-Imperatorium-Herdr") or ""
         mine = getattr(self.control, "herdr_token", None)
         return bool(token and mine and self.headers.get("Origin") is None
-                    and hmac.compare_digest(token, mine))
+                    and hmac.compare_digest(token.encode("utf-8", "replace"),
+                                            mine.encode("utf-8")))
 
     def _same_origin(self):
         """No Origin (curl, hooks, the palette), or this server's own page.
