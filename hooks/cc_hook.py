@@ -44,6 +44,10 @@ def main():
     payload["messaging_socket"] = os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
     payload["messaging_token"] = os.environ.get("CLAUDE_CODE_MESSAGING_TOKEN")
     payload["bridge_session_id"] = os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID")
+    # Set when the session runs in a herdr-core terminal: which one, and
+    # which core, so the dispatcher can type into it and show it in herdr.
+    payload["hc_terminal"] = os.environ.get("HC_TERMINAL_ID")
+    payload["hc_session"] = os.environ.get("HC_SESSION")
 
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(

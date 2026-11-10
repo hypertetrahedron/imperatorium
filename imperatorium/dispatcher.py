@@ -26,7 +26,7 @@ from . import (activity, background, changes, closing, conversation, convcache,
                deeplink, history, inbox, matrix, notify, pending, procs, projects,
                prs, registry, remote, sessionstat, slash, taskout, ui, usage, voice,
                winfocus)
-from . import modlink
+from . import hcore, modlink
 from . import policy as policymod
 from . import settings as settingsmod
 from .store import Store
@@ -165,6 +165,11 @@ class Control:
         # Handed to the window's pages when they load and never written down:
         # what Send As Typed, and turning it on, ask for (see send_typed).
         self.window_token = secrets.token_urlsafe(24)
+        # The same, for the Imperatorium mods in herdr-app, which cannot be
+        # handed a page: serve() writes it to a file beside the state that
+        # only this account can read (see write_herdr_token).
+        self.herdr_token = secrets.token_urlsafe(24)
+        self._hc_cores = {}
         # Which dispatcher this is: an open page that sees it change reloads,
         # so it does not keep running the code the last dispatcher served.
         self.boot_id = secrets.token_hex(8)
@@ -382,7 +387,7 @@ class Control:
         # Hooks know things `claude agents --json` does not carry.
         for field in ("socket", "name", "cwd", "last_notification", "last_event",
                       "last_event_at", "last_failure", "last_failure_detail",
-                      "window_title"):
+                      "window_title", "hc"):
             if extra.get(field) and not row.get(field):
                 row[field] = extra[field]
         # Hook-recorded attention is sticky by design - it has to survive the
@@ -975,6 +980,14 @@ class Control:
         token = payload.get("messaging_token")
         if socket:
             meta["socket"] = socket
+        # The herdr-core terminal the session runs in, when it runs in one.
+        if payload.get("hc_terminal") and not host:
+            meta["hc"] = {"address": payload["hc_terminal"],
+                          "core": payload.get("hc_session") or "default"}
+        elif event == "SessionStart" and not host:
+            # Resumed outside herdr-core: an empty record, not None, so the
+            # merge in Store.register replaces the old terminal's.
+            meta["hc"] = {}
 
         if event == "SessionStart":
             meta["name"] = payload.get("session_name")
@@ -1822,7 +1835,7 @@ class Control:
         why = slash.blocked(row, self.pending.waiting())
         if why:
             return {"ok": False, "error": why}
-        if not slash.type_command(row["pid"], text):
+        if not self._type_into(row, text):
             return {"ok": False, "error": "could not type into its terminal"}
         self.store.add_event({"kind": "command", "session_id": row["sessionId"],
                               "cwd": row.get("cwd"), "summary": text.strip()[:280]})
@@ -1860,13 +1873,48 @@ class Control:
         why = slash.blocked(row, self.pending.waiting())
         if why:
             return {"ok": False, "error": why}
-        if not slash.type_command(row["pid"], clean):
+        if not self._type_into(row, clean):
             return {"ok": False, "error": "could not type into its terminal"}
         self.store.add_event({"kind": "typed", "session_id": row["sessionId"],
                               "cwd": row.get("cwd"), "summary": clean[:280]})
         self.invalidate()
         return {"ok": True, "action": "typed", "cleaned": changed,
                 "session": row["sessionId"], "session_name": row.get("name")}
+
+    def _type_into(self, row, text):
+        """Type one line and Enter at `row`'s prompt. True on success.
+
+        A session in a herdr-core terminal is typed into through `hc`, which
+        works on any platform and needs no console; Ctrl+C first clears a
+        draft (an interrupted prompt comes back into the box, and `hc send`
+        would append to it - docs/hc-spike.md, finding 4), and `--if idle`
+        refuses a turn that started in between. Elsewhere, the console.
+        """
+        hc = row.get("hc") or {}
+        if hc.get("address") and not row.get("remote"):
+            core = self.hc_core(hc.get("core"))
+            if core is not None:
+                try:
+                    core.keys(hc["address"], "ctrl+c")
+                    core.send(hc["address"], text, only_if="idle")
+                    return True
+                except hcore.HcError as exc:
+                    self.store.add_event({"kind": "hc_error", "session_id": row["sessionId"],
+                                          "summary": str(exc)[:280]})
+                    return False
+        return slash.type_command(row["pid"], text)
+
+    def hc_core(self, name=None):
+        """The herdr-core called `name` ("default" or a test session), or None."""
+        if not hcore.find_exe():
+            return None
+        name = name or "default"
+        with self._lock:
+            core = self._hc_cores.get(name)
+            if core is None:
+                core = self._hc_cores[name] = hcore.Core(
+                    session=None if name == "default" else name)
+        return core
 
     def _deliver(self, row, prompt, as_user=False):
         """Put `prompt` in `row`'s inbox, wherever it is. None, or the error.
@@ -1960,8 +2008,19 @@ class Handler(BaseHTTPRequestHandler):
         """
         origin = self.headers.get("Origin")
         token = self.headers.get("X-Imperatorium-Window") or ""
-        return (origin is not None and self._same_origin()
-                and hmac.compare_digest(token, self.control.window_token))
+        if (origin is not None and self._same_origin()
+                and hmac.compare_digest(token, self.control.window_token)):
+            return True
+        return self._from_herdr()
+
+    def _from_herdr(self):
+        """The Imperatorium mods in herdr-app: no Origin (not a browser), and
+        the token the dispatcher wrote for them at start. The same strength
+        as the window's token, which any local client can read off `/`."""
+        token = self.headers.get("X-Imperatorium-Herdr") or ""
+        mine = getattr(self.control, "herdr_token", None)
+        return bool(token and mine and self.headers.get("Origin") is None
+                    and hmac.compare_digest(token, mine))
 
     def _same_origin(self):
         """No Origin (curl, hooks, the palette), or this server's own page.
@@ -2364,6 +2423,25 @@ def load_config():
         return {}
 
 
+def herdr_token_path(state_path):
+    return os.path.join(os.path.dirname(os.path.abspath(state_path)), "herdr-token")
+
+
+def write_herdr_token(control, state_path):
+    """Where the herdr-app mods read this start's token. The state folder is
+    under the account's own profile, which other accounts cannot read."""
+    path = herdr_token_path(state_path)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(control.herdr_token)
+        if not WINDOWS:
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError as exc:
+        print("herdr token: cannot write %s: %s" % (path, exc))
+
+
 def start_tunnels(control):
     """A hook-only listener and a reverse tunnel for each host that asks.
 
@@ -2406,6 +2484,7 @@ def serve(host=HOST, port=PORT, state_path=None, roots=None):
         config=config,
     )
     Handler.control.config_path = os.path.join(PROJECT_DIR, "config.json")
+    write_herdr_token(Handler.control, state_path)
     print("imperatorium listening on http://%s:%d" % (host, port))
     start_tunnels(Handler.control)
     # Started only once the port is ours, so a second dispatcher that fails
