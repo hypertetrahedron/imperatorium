@@ -191,6 +191,15 @@ class Folding(unittest.TestCase):
             fold = sessionstat.Fold().feed(e[:cut]).feed(e[cut:])
             self.assertEqual(fold.summary(AT0 + 100), whole, cut)
 
+    def test_a_line_separator_inside_a_string_does_not_split_the_record(self):
+        # JSON leaves U+2028/U+2029 and form feed raw; only "\n" ends a line.
+        text = "\n".join(json.dumps(x, ensure_ascii=False) for x in
+                         [call("c1", "Bash", {"command": "grep"}),
+                          result("c1", text="a b c\x0cd\x85e")]) + "\n"
+        entries = sessionstat.parse(text)
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(sessionstat.summarise(entries, AT0 + 5)["shells"], [])
+
     def test_answered_calls_are_not_kept(self):
         fold = sessionstat.Fold().feed([call("c1", "Read", {}), result("c1")])
         self.assertEqual(fold.calls, {})

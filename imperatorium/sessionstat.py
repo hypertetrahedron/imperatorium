@@ -276,7 +276,11 @@ def transcript_path(session_id):
 
 def parse(text):
     out = []
-    for line in text.splitlines():
+    # Only a newline ends a record: splitlines() also breaks on U+2028,
+    # U+2029, form feed and the like, which JSON leaves raw inside strings -
+    # and a record cut in two is dropped, so a tool result went unseen and
+    # its call counted as running for good.
+    for line in text.split("\n"):
         line = line.strip()
         if not line:
             continue

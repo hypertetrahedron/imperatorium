@@ -157,7 +157,7 @@ def agents(host, timeout=CALL_TIMEOUT):
         return []
     rows = [r for r in rows if isinstance(r, dict)]
     files = {}
-    for line in tail.splitlines():
+    for line in tail.split("\n"):    # not splitlines(): see sessionstat.parse
         line = line.strip()
         if not line:
             continue
