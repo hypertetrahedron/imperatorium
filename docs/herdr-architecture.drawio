@@ -1,0 +1,197 @@
+<mxfile host="app.diagrams.net" agent="Claude Code" version="24.7.0">
+  <diagram id="herdr-arch" name="Imperatorium + herdr">
+    <mxGraphModel dx="1800" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1150" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="&lt;b&gt;Imperatorium ↔ herdr&lt;/b&gt; (branch herdr, option A: herdr-app mods)" style="text;html=1;fontSize=20;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="900" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ================= herdr-app ================= -->
+        <mxCell id="app" value="herdr-app (GPU desktop window, JS mods)" style="swimlane;html=1;startSize=30;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="520" height="640" as="geometry" />
+        </mxCell>
+        <mxCell id="app_term" value="&lt;b&gt;Terminal panes&lt;/b&gt;&lt;br&gt;spaces / tabs / terminals&lt;br&gt;rendered from herdr-core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="app">
+          <mxGeometry x="20" y="50" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_chat" value="&lt;b&gt;imperatorium-chat&lt;/b&gt;&lt;br&gt;follows focused hc terminal or sidebar pick&lt;br&gt;markdown, coloured Edit diffs, work line&lt;br&gt;Allow / Deny / answers for parked requests&lt;br&gt;Send · Queue · As typed · Dictate (F9)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;align=left;spacingLeft=8;" vertex="1" parent="app">
+          <mxGeometry x="260" y="50" width="240" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_sessions" value="&lt;b&gt;imperatorium-sessions&lt;/b&gt; (sidebar)&lt;br&gt;all sessions, waiting first, 5h/7d meters&lt;br&gt;click: focus hc terminal / point chat&lt;br&gt;renames imp- tabs; Matrix, History buttons" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;align=left;spacingLeft=8;" vertex="1" parent="app">
+          <mxGeometry x="20" y="200" width="240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_matrix" value="&lt;b&gt;imperatorium-matrix&lt;/b&gt;&lt;br&gt;floating window: chat matrix tiles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;align=left;spacingLeft=8;" vertex="1" parent="app">
+          <mxGeometry x="280" y="210" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_history" value="&lt;b&gt;imperatorium-history&lt;/b&gt;&lt;br&gt;search dialog: Resume / Fork" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;align=left;spacingLeft=8;" vertex="1" parent="app">
+          <mxGeometry x="280" y="290" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="mod_shared" value="shared: client.js (loadConfig, api, post) · text.js" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;" vertex="1" parent="app">
+          <mxGeometry x="20" y="380" width="480" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="app_cfg" value="&lt;b&gt;HERDR_APP_HOME&lt;/b&gt;&lt;br&gt;mods/imperatorium-*&lt;br&gt;layouts/imperatorium.json&lt;br&gt;imperatorium.json {url, token_file}&lt;br&gt;telemetry: false" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;align=left;spacingLeft=8;" vertex="1" parent="app">
+          <mxGeometry x="20" y="450" width="230" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="app_pick" value="shared state&lt;br&gt;&lt;i&gt;imperatorium.pick&lt;/i&gt;&lt;br&gt;(sidebar → chat)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;" vertex="1" parent="app">
+          <mxGeometry x="300" y="450" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- ================= herdr-core ================= -->
+        <mxCell id="core" value="herdr-core (hc server, per HC_SESSION)" style="swimlane;html=1;startSize=30;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="640" y="80" width="400" height="460" as="geometry" />
+        </mxCell>
+        <mxCell id="core_space" value="&lt;b&gt;space&lt;/b&gt; imp-&amp;lt;folder&amp;gt;-&amp;lt;sha6&amp;gt;  (one per project)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;verticalAlign=top;" vertex="1" parent="core">
+          <mxGeometry x="20" y="45" width="360" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="core_tab" value="&lt;b&gt;tab&lt;/b&gt; imp-&amp;lt;sid12&amp;gt; → labelled with session title" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f8ee;strokeColor=#82b366;verticalAlign=top;" vertex="1" parent="core">
+          <mxGeometry x="40" y="80" width="320" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="core_term" value="&lt;b&gt;terminal&lt;/b&gt; (shell)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;verticalAlign=top;" vertex="1" parent="core">
+          <mxGeometry x="60" y="115" width="280" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="cc" value="&lt;b&gt;claude&lt;/b&gt; (Claude Code session)&lt;br&gt;env: CLAUDE_PID, HC_TERMINAL_ID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="core">
+          <mxGeometry x="80" y="150" width="240" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="hook" value="&lt;b&gt;hooks/cc_hook.py&lt;/b&gt;&lt;br&gt;+ hc_terminal, hc_session, claude_pid" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="80" y="225" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="core_cli" value="hc CLI (--json): new / send / keys / label / kill / read / exec" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#82b366;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="20" y="350" width="360" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="core_note" value="any hc command auto-starts a core with the caller's env → hcore.clean_env strips CLAUDE*" style="text;html=1;whiteSpace=wrap;fontSize=10;fontColor=#666666;" vertex="1" parent="core">
+          <mxGeometry x="20" y="400" width="360" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="hook_flow" value="" style="endArrow=classic;html=1;strokeColor=#9673a6;" edge="1" parent="core" source="cc" target="hook">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ================= dispatcher ================= -->
+        <mxCell id="disp" value="Imperatorium dispatcher (dispatcher.py, 127.0.0.1:8792)" style="swimlane;html=1;startSize=30;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="80" width="540" height="780" as="geometry" />
+        </mxCell>
+        <mxCell id="d_api" value="&lt;b&gt;HTTP API&lt;/b&gt; (mods send X-Imperatorium-Herdr token, no Origin)&lt;br&gt;/api/sessions · /api/usage · /api/pending · /api/conversation&lt;br&gt;/api/dispatch · /api/queue · /api/typed · /api/decide&lt;br&gt;/api/matrix · /api/history · /api/resume · /api/dictate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;align=left;spacingLeft=8;" vertex="1" parent="disp">
+          <mxGeometry x="20" y="45" width="500" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="d_hook" value="&lt;b&gt;/hook&lt;/b&gt; + park endpoint&lt;br&gt;_hc_owned: verify hook came from an hc terminal (CLAUDE_PID + process table)&lt;br&gt;first verified hook → remember + label tab (forks send no SessionStart)&lt;br&gt;SessionEnd → forget (unless reason &quot;other&quot;)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;align=left;spacingLeft=8;" vertex="1" parent="disp">
+          <mxGeometry x="20" y="150" width="500" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="d_hcore" value="&lt;b&gt;imperatorium/hcore.py&lt;/b&gt;&lt;br&gt;Core: wraps hc CLI, clean_env,&lt;br&gt;ensure() / leaked() checks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;align=left;spacingLeft=8;" vertex="1" parent="disp">
+          <mxGeometry x="20" y="250" width="240" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="d_hosting" value="&lt;b&gt;imperatorium/hosting.py&lt;/b&gt;&lt;br&gt;space_id / tab_id / labels, launch,&lt;br&gt;owns_terminal, close, &lt;b&gt;Restorer&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;align=left;spacingLeft=8;" vertex="1" parent="disp">
+          <mxGeometry x="280" y="250" width="240" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="d_ops" value="&lt;b&gt;session ops&lt;/b&gt; (when terminal.host = hc)&lt;br&gt;_hc_opener: New / Resume / Fork → hc tab&lt;br&gt;_type_into: ctrl+c, send --if idle&lt;br&gt;_close_row: hosting.close + forget&lt;br&gt;restore_hosted thread at serve start" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;align=left;spacingLeft=8;" vertex="1" parent="disp">
+          <mxGeometry x="20" y="345" width="500" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="d_voice" value="&lt;b&gt;voice.py&lt;/b&gt;&lt;br&gt;records mic, Whisper (GPU) → text&lt;br&gt;start / stop / cancel, auto-expire" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;align=left;spacingLeft=8;" vertex="1" parent="disp">
+          <mxGeometry x="20" y="460" width="240" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="d_hist" value="&lt;b&gt;history.py&lt;/b&gt;&lt;br&gt;search past sessions,&lt;br&gt;resume via opener" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;align=left;spacingLeft=8;" vertex="1" parent="disp">
+          <mxGeometry x="280" y="460" width="240" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="d_store" value="&lt;b&gt;store&lt;/b&gt;&lt;br&gt;prefs[&quot;hosted&quot;] (sessions to restore)&lt;br&gt;settings terminal.host, terminal.hc_session" style="shape=cylinder3;whiteSpace=wrap;html=1;size=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="disp">
+          <mxGeometry x="20" y="565" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d_token" value="&lt;b&gt;&amp;lt;state dir&amp;gt;/herdr-token&lt;/b&gt;&lt;br&gt;written at start&lt;br&gt;(compare_digest)" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="disp">
+          <mxGeometry x="280" y="565" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d_inner1" value="" style="endArrow=classic;html=1;strokeColor=#d79b00;" edge="1" parent="disp" source="d_hosting" target="d_hcore">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="d_inner2" value="" style="endArrow=classic;html=1;strokeColor=#d79b00;" edge="1" parent="disp" source="d_ops" target="d_hosting">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="d_inner3" value="" style="endArrow=classic;html=1;strokeColor=#d79b00;" edge="1" parent="disp" source="d_hosting" target="d_store">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="530" y="290" /><mxPoint x="530" y="550" /><mxPoint x="140" y="550" /></Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ================= outside ================= -->
+        <mxCell id="transcripts" value="&lt;b&gt;~/.claude/projects/*.jsonl&lt;/b&gt;&lt;br&gt;session transcripts" style="shape=cylinder3;whiteSpace=wrap;html=1;size=10;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="740" y="620" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="mic" value="microphone" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="920" width="120" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="win" value="&lt;b&gt;Imperatorium window&lt;/b&gt;&lt;br&gt;(existing chat window, still works)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="910" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="wt" value="&lt;b&gt;Windows Terminal&lt;/b&gt;&lt;br&gt;terminal.host = terminal (default)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="740" y="760" width="220" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="setup" value="&lt;b&gt;setup_machine.py herdr install | status | uninstall&lt;/b&gt;&lt;br&gt;imperatorium/herdrsetup.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="800" width="320" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ================= cross edges ================= -->
+        <mxCell id="e_app_core" value="renders terminals, focus,&lt;br&gt;keystrokes (herdr protocol)" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=2;strokeColor=#82b366;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="app_term" target="core_space">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="600" y="170" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_chat_focus" value="focused terminal" style="endArrow=classic;html=1;dashed=1;strokeColor=#6c8ebf;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="app_term" target="mod_chat">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_pick1" value="" style="endArrow=classic;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1" source="mod_sessions" target="app_pick">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="180" y="410" /><mxPoint x="420" y="410" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_cfg" value="reads url + token_file" style="endArrow=classic;html=1;dashed=1;strokeColor=#d6b656;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="app_cfg" target="mod_shared">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mods_api" value="HTTP JSON + token&lt;br&gt;(poll sessions, conversation; send prompts;&lt;br&gt;Allow/Deny; dictate; matrix; history)" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=2;strokeColor=#d79b00;fontSize=11;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="mod_shared" target="d_api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="580" y="480" /><mxPoint x="580" y="60" /><mxPoint x="1090" y="60" /><mxPoint x="1090" y="167" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_token" value="token_file points here" style="endArrow=classic;html=1;dashed=1;strokeColor=#d6b656;fontSize=10;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="app_cfg" target="d_token">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="155" y="760" /><mxPoint x="1520" y="760" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_hook" value="hook events (HTTP POST /hook)&lt;br&gt;PermissionRequest parks" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#9673a6;fontSize=11;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="hook" target="d_hook">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1080" y="355" /><mxPoint x="1080" y="270" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_hc" value="hc CLI calls (clean env)&lt;br&gt;new tab, type prompt, label, kill, exec" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#82b366;fontSize=11;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="d_hcore" target="core_cli">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1100" y="367" /><mxPoint x="1100" y="450" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_trans" value="writes" style="endArrow=classic;html=1;dashed=1;strokeColor=#9673a6;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="core" target="transcripts">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_trans_read" value="reads conversation,&lt;br&gt;history search" style="endArrow=classic;html=1;dashed=1;strokeColor=#d79b00;fontSize=10;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="d_hist" target="transcripts">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1520" y="640" /><mxPoint x="1080" y="640" /><mxPoint x="1080" y="660" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_mic" value="" style="endArrow=classic;html=1;strokeColor=#666666;" edge="1" parent="1" source="mic" target="d_voice">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_win" value="same API (Origin-checked)" style="endArrow=classic;startArrow=classic;html=1;strokeColor=#666666;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="win" target="disp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_wt" value="opens sessions when host = terminal" style="endArrow=classic;html=1;dashed=1;strokeColor=#666666;fontSize=10;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="d_ops" target="wt">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1105" y="472" /><mxPoint x="1105" y="795" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_setup" value="copies mods, layout,&lt;br&gt;writes imperatorium.json" style="endArrow=classic;html=1;dashed=1;strokeColor=#666666;fontSize=10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="setup" target="app">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ================= legend ================= -->
+        <mxCell id="legend" value="&lt;b&gt;Flows&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#d79b00&quot;&gt;━━&lt;/font&gt; mods ↔ dispatcher HTTP&lt;br&gt;&lt;font color=&quot;#9673a6&quot;&gt;━━&lt;/font&gt; Claude Code hooks → dispatcher&lt;br&gt;&lt;font color=&quot;#82b366&quot;&gt;━━&lt;/font&gt; herdr-core control (app, hc CLI)&lt;br&gt;┄┄ files, config, local state&lt;br&gt;&lt;br&gt;&lt;b&gt;Restore at logon&lt;/b&gt;: restore_hosted → hcore.ensure() (clean core) → Restorer types &lt;i&gt;claude --resume&lt;/i&gt; into the kept shell, else a new terminal" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;fillColor=#ffffff;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="400" y="880" width="560" height="140" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

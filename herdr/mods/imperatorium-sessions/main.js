@@ -2,13 +2,17 @@
 // in herdr-core terminals or not, on this machine or a remote one - with
 // the ones waiting on you first, and the account's usage meters.
 //
-// Click a session in an hc terminal: herdr shows that terminal. Click any
-// other: the chat column shows it (shared "imperatorium.pick").
+// Click a session: its chat opens as an ordinary herdr pane. In an hc
+// terminal here, beside that terminal in its tab; anywhere else, as a tab of
+// its own. Either splits, zooms, moves and closes like any pane. A chat copy
+// a layout places without a session follows the pick (shared
+// "imperatorium.pick"). Matrix opens Imperatorium's chat matrix in a window
+// of its own, outside herdr's, so it can sit on another screen.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, appHome, readTextFile, run, setShared, openOverlay, spaces } from "herdr";
-import { loadConfig, api } from "./client.js";
-import { order, meterRows, ago, tabNames } from "./sessions.js";
+import { theme, appHome, readTextFile, run, setShared, openOverlay, spaces, panes, notify } from "herdr";
+import { loadConfig, api, post } from "./client.js";
+import { order, meterRows, ago, tabNames, chatCommands } from "./sessions.js";
 
 const POLL_MS = 3000;
 
@@ -45,20 +49,36 @@ export default class ImperatoriumSessions extends View {
   }
 
   open(s) {
-    if (s.hc?.address && !s.remote) run("pane.focus", { terminal: s.hc.address });
     setShared("imperatorium.pick", { id: s.sessionId, at: Date.now() });
+    try {
+      const cmds = chatCommands(s, panes(), spaces());
+      if (!cmds.length) notify({ title: "No space yet", body: "Make a space first; the chat opens as a tab in it.", level: "info" });
+      for (const [name, args] of cmds) run(name, args);
+    } catch (e) {
+      notify({ title: "Chat not opened", body: String(e?.message ?? e), level: "error" });
+    }
+  }
+
+  async matrix() {
+    try {
+      const r = await post(this.cfg, "/api/open_window", { page: "matrix" });
+      if (r.ok === false) notify({ title: "Matrix not opened", body: r.error ?? "", level: "error" });
+    } catch (e) {
+      notify({ title: "Matrix not opened", body: String(e?.message ?? e), level: "error" });
+    }
   }
 
   render() {
     const t = theme();
     const waiting = this.pending.length;
+    // The section's own heading, like herdr's "Spaces" above it; the layout
+    // draws the divider between the two.
     return v_flex().size_full().text_color(t.foreground)
-      .child(h_flex().px(14).pt(10).pb(4).items_center()
-        .child(div().flex_1().text_size(11.5).text_color(t.muted).child("Imperatorium"))
+      .child(h_flex().h(31).flex_none().pl(16).pr(10).items_center().gap(2)
+        .child(div().flex_1().text_size(11.5).text_color(t.dim).child("Imperatorium"))
         .child(div().id("imp-matrix").px(6).py(1).rounded(5).text_size(11).cursor_pointer()
           .text_color(t.muted).hover((s) => s.bg(t.hover))
-          .on_click(() => openOverlay({ mod: "imperatorium-matrix", kind: "window", key: "imperatorium-matrix",
-            width: 1100, height: 720, keep: true }))
+          .on_click(() => this.matrix())
           .child("Matrix"))
         .child(div().id("imp-history").px(6).py(1).rounded(5).text_size(11).cursor_pointer()
           .text_color(t.muted).hover((s) => s.bg(t.hover))

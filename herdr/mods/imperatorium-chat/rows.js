@@ -33,21 +33,27 @@ const LABELS = { you: "You", claude: "Claude", tool: "Tools", system: "System" }
 
 // A turn starts at each prompt. Returns the rows for the last `drawn` turns,
 // with `earlier` (turns not drawn) as a property on the array.
-export function rowsOf(items, modes, drawn) {
+// `base`: where `items` start in the whole conversation when the dispatcher
+// sent only its tail (`start`: the first item's index, `first_block`: blocks
+// left off that item's front), so a row keeps its key as the tail moves.
+export function rowsOf(items, modes, drawn, base = null) {
+  const start = base?.start ?? 0;
+  const firstBlock = base?.first_block ?? 0;
   const turns = [];
-  for (const it of items ?? []) {
+  (items ?? []).forEach((it, i) => {
     const isPrompt = it.speaker === "you" && !it.note;
     if (isPrompt || turns.length === 0) turns.push([]);
-    turns[turns.length - 1].push(it);
-  }
+    turns[turns.length - 1].push([it, i]);
+  });
   const from = Math.max(0, turns.length - (drawn || turns.length));
   const rows = [];
   let last = null;
   for (let ti = from; ti < turns.length; ti++) {
-    for (const it of turns[ti]) {
-      const idx = items.indexOf(it);
+    for (const [it, i] of turns[ti]) {
+      const idx = start + i;
+      const skip = i === 0 ? firstBlock : 0;
       const speaker = it.note ? "system" : (it.speaker ?? it.role);
-      const blocks = (it.blocks ?? []).map((b, bi) => ({ b, bi }))
+      const blocks = (it.blocks ?? []).map((b, bi) => ({ b, bi: bi + skip }))
         .filter(({ b }) => modeFor(b.kind, speaker, it, modes) !== "hidden");
       if (it.note && modes.note !== "hidden") {
         rows.push({ key: idx + ":n", kind: "note", label: it.note, text: textOf(it), mode: modes.note });
@@ -73,6 +79,8 @@ export function rowsOf(items, modes, drawn) {
     }
   }
   rows.earlier = from;
+  // Turns the dispatcher has and didn't send: a "load earlier" asks for them.
+  rows.unloaded = start > 0 || firstBlock > 0;
   return rows;
 }
 

@@ -31,3 +31,17 @@ assert.equal(workLine({ work: { context_tokens: 50014, cache_expires_at: 1000 + 
 assert.equal(workLine({ work: { cache_expires_at: 10 } }, 20), "cache cold");
 assert.equal(workLine(null, 0), "");
 console.log("workLine: ok");
+
+// A tail keeps the whole conversation's keys, so open rows and drawn
+// markdown stay put as the tail moves on.
+{
+  const whole = rowsOf(items, modes, 0);
+  const tail = [{ speaker: "claude", blocks: [items[1].blocks[1]] }, items[2], items[3]];
+  const part = rowsOf(tail, modes, 0, { start: 1, first_block: 1 });
+  const keyOf = (rs, kind) => rs.find((r) => r.kind === kind).key;
+  assert.equal(keyOf(part, "tool"), keyOf(whole, "tool"));
+  assert.equal(keyOf(part, "result"), keyOf(whole, "result"));
+  assert.equal(part.unloaded, true);
+  assert.equal(whole.unloaded, false);
+}
+console.log("rows.js tail keys: ok");

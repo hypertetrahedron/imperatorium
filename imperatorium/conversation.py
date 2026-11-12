@@ -306,6 +306,30 @@ def tidy_system(note, block):
     return dict(block, text=text)
 
 
+def tail_blocks(items, blocks):
+    """The newest `blocks` blocks of merged items, without copying the rest.
+
+    Returns (items, start, first_block): `start` is the index of the first
+    returned item in `items`, and `first_block` how many of that item's
+    blocks were left off its front (it is a shallow copy then; the cached
+    lists are never changed).
+    """
+    if blocks <= 0:
+        return list(items), 0, 0
+    left = blocks
+    i = len(items)
+    while i > 0 and left > 0:
+        i -= 1
+        left -= max(1, len(items[i].get("blocks") or []))
+    out = list(items[i:])
+    first = 0
+    if out and left < 0:
+        bl = out[0].get("blocks") or []
+        first = -left
+        out[0] = dict(out[0], blocks=bl[first:])
+    return out, i, first
+
+
 def merge_turns(items):
     """One item per turn, so the window prints one name per turn.
 

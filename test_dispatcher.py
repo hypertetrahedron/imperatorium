@@ -1355,6 +1355,30 @@ class ConversationRoute(Base):
         self.assertNotEqual(again["sig"], first["sig"])
 
 
+    def test_blocks_sends_only_the_newest_blocks(self):
+        self.items = [{"speaker": "you", "role": "user", "blocks": [{"kind": "text", "text": "a"}]},
+                      {"speaker": "claude", "role": "assistant",
+                       "blocks": [{"kind": "text", "text": str(i)} for i in range(5)]}]
+        whole = self.get("session=" + SID)
+        out = self.get("session=%s&blocks=3" % SID)
+        self.assertEqual([b["text"] for b in out["items"][0]["blocks"]], ["2", "3", "4"])
+        self.assertEqual((out["start"], out["first_block"], out["total"]), (1, 2, 2))
+        # The signature is the whole conversation's, so `known` still works.
+        self.assertEqual(out["sig"], whole["sig"])
+        self.assertTrue(self.get("session=%s&blocks=3&known=%s" % (SID, out["sig"]))["unchanged"])
+
+
+class TailBlocks(unittest.TestCase):
+    def test_tail_never_changes_the_cached_items(self):
+        items = [{"blocks": [1, 2]}, {"blocks": [3, 4, 5]}]
+        out, start, first = conversation.tail_blocks(items, 4)
+        self.assertEqual((out, start, first), ([{"blocks": [2]}, {"blocks": [3, 4, 5]}], 0, 1))
+        self.assertEqual(items[0]["blocks"], [1, 2])
+
+    def test_more_than_there_is_returns_everything(self):
+        items = [{"blocks": [1]}, {"note": "x"}]
+        self.assertEqual(conversation.tail_blocks(items, 50), (items, 0, 0))
+
 class RemoteConversation(RemoteBase):
     def setUp(self):
         super().setUp()

@@ -579,6 +579,15 @@ class Control:
             return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
         return dict(self._voice.where or {}, ok=True, text=text)
 
+    def open_page(self, url, size):
+        """Opens one of the dispatcher's pages in its own browser window."""
+        from . import window
+        try:
+            used = window.open_window(url, size=size)
+        except OSError as exc:
+            return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+        return {"ok": True, "url": url, "browser": os.path.basename(used) if used else None}
+
     def dictate(self, action, recorder_factory=None):
         """Dictation recorded here, for the herdr-app mods, which cannot use
         a microphone: `start` opens the mic (and warms the model while you
@@ -2378,6 +2387,19 @@ class Handler(BaseHTTPRequestHandler):
             sig = body.get("sig") or convcache.signature(body.get("items") or [])
             if (args.get("known") or [""])[0] == sig:
                 body = {"session": body.get("session"), "unchanged": True}
+            else:
+                # The herdr chat asks for the newest `blocks` blocks only: a
+                # long session is a megabyte its JS engine is slow to parse.
+                # The signature stays the whole conversation's.
+                try:
+                    blocks = max(0, int((args.get("blocks") or ["0"])[0]))
+                except ValueError:
+                    blocks = 0
+                if blocks and body.get("items") is not None:
+                    body = dict(body)
+                    body["total"] = len(body["items"])
+                    (body["items"], body["start"],
+                     body["first_block"]) = conversation.tail_blocks(body["items"], blocks)
             body["sig"] = sig
             self._send(200, body)
         elif path == "/api/changes":
@@ -2422,6 +2444,9 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "no such path"})
 
+    # Pages /api/open_window opens: path, window size.
+    PAGES = {"matrix": ("/matrix", "1100,720"), "window": ("/", "1280,820")}
+
     def do_POST(self):
         path = self.path.split("?")[0].rstrip("/") or "/"
         if path == "/api/transcribe":
@@ -2453,6 +2478,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, c.dictate((payload or {}).get("action")
                                       if isinstance(payload, dict) else None))
+        elif path == "/api/open_window":
+            # herdr-app mods can't open a window of their own (everything
+            # they show is drawn inside herdr's one window), so the herdr
+            # sidebar asks for the chat matrix here: a browser app window,
+            # like the Imperatorium window, that can sit on another screen.
+            page = (payload or {}).get("page") if isinstance(payload, dict) else None
+            if page not in self.PAGES:
+                self._send(400, {"ok": False, "error": "page is one of " + ", ".join(sorted(self.PAGES))})
+                return
+            if not self._from_window():
+                self._send(403, {"ok": False, "error": "only the Imperatorium window and its herdr mods"})
+                return
+            url = "http://127.0.0.1:%d%s" % (self.server.server_address[1], self.PAGES[page][0])
+            self._send(200, c.open_page(url, self.PAGES[page][1]))
         elif path == "/api/voice/warm":
             self._send(200, c.warm_voice())
         elif path == "/api/focus":

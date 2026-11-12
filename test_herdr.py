@@ -379,6 +379,45 @@ class DictateRoute(HerdrToken):
         self.assertEqual(call({"X-Imperatorium-Herdr": self.control.herdr_token}), 200)
 
 
+
+class OpenWindowRoute(HerdrToken):
+    def setUp(self):
+        super().setUp()
+        from imperatorium import window
+        self.opened = []
+        self._orig_open = window.open_window
+        window.open_window = lambda url, size="": self.opened.append((url, size)) or "msedge.exe"
+
+    def tearDown(self):
+        from imperatorium import window
+        window.open_window = self._orig_open
+        super().tearDown()
+
+    def open_page(self, body, headers):
+        import urllib.error
+        import urllib.request
+        h = {"Content-Type": "application/json"}
+        h.update(headers)
+        req = urllib.request.Request("http://127.0.0.1:%d/api/open_window" % self.port,
+                                     data=json.dumps(body).encode(), headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_the_sidebar_opens_the_matrix_in_its_own_window(self):
+        code, out = self.open_page({"page": "matrix"}, {"X-Imperatorium-Herdr": self.control.herdr_token})
+        self.assertEqual(code, 200)
+        self.assertTrue(out["ok"])
+        self.assertEqual(self.opened, [("http://127.0.0.1:%d/matrix" % self.port, "1100,720")])
+
+    def test_only_known_pages_and_only_with_the_token(self):
+        tok = {"X-Imperatorium-Herdr": self.control.herdr_token}
+        self.assertEqual(self.open_page({"page": "file:///c:/x"}, tok)[0], 400)
+        self.assertEqual(self.open_page({"page": "matrix"}, {})[0], 403)
+        self.assertEqual(self.opened, [])
+
 class Ownership(unittest.TestCase):
     # (pid, ppid, exe, started)
     TABLE = [(10, 1, "hc", None), (20, 10, "pwsh", None), (30, 20, "claude", None),

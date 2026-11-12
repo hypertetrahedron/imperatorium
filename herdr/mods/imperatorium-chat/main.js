@@ -1,10 +1,12 @@
 // Imperatorium chat: one Claude Code session's conversation, read from the
 // Imperatorium dispatcher, with a prompt box that sends through it.
 //
-// Which session: props().session if a layout or pane.split gave one, else
-// the session whose hc terminal is the focused one, else the one picked in
-// the header. The dispatcher's address and token come from
-// <app home>/imperatorium.json, written by `setup_machine.py herdr install`.
+// Which session: props().session when the sessions sidebar opened this copy
+// as a pane (beside the session's terminal, or as a tab of its own), so it
+// splits, zooms, moves and closes like any herdr pane. A copy placed in a
+// layout without one follows the focused hc terminal, or the sidebar's pick.
+// The dispatcher's address and token come from <app home>/imperatorium.json,
+// written by `setup_machine.py herdr install`.
 import { View, div, list } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea, Scrollbar } from "gpui-base";
 import { props, theme, focused, appHome, readTextFile, notify, nextCommand, shared } from "herdr";
@@ -12,6 +14,28 @@ import { loadConfig, api, post } from "./client.js";
 import { rowsOf, KINDS, MODES, nextMode, firstLine, toolLine, pendingFor, answerFor, hardBreaks, workLine } from "./rows.js";
 
 const POLL_MS = 1500;
+const WATCH_MS = 120;      // how soon a change of session is noticed (no network)
+const BLOCKS = 400;        // newest blocks asked for; "load earlier" adds more
+
+// Every chat copy runs in herdr's one JS engine. They share one poll of the
+// session list and one cache of conversations, so a copy that opens on a
+// session another copy has shown draws at once, and twenty panes cost one
+// /api/sessions a tick rather than twenty.
+const hub = (globalThis.__imperatoriumChat ??= { at: 0, data: null, inflight: null, convs: new Map() });
+
+async function sessionsNow(cfg) {
+  if (hub.data && Date.now() - hub.at < POLL_MS - 200) return hub.data;
+  if (!hub.inflight) {
+    hub.inflight = Promise.all([api(cfg, "/api/sessions"), api(cfg, "/api/pending")])
+      .then(([s, p]) => {
+        hub.data = { sessions: s.sessions ?? [], pending: p.pending ?? [] };
+        hub.at = Date.now();
+        return hub.data;
+      })
+      .finally(() => { hub.inflight = null; });
+  }
+  return hub.inflight;
+}
 const DRAWN_TURNS = 60;
 const TAIL_ROWS = 40;      // drawn while following; more than a screen's worth
 const HISTORY_STEP = 30;   // rows a scroll-back starts with, and each "earlier" adds
@@ -22,9 +46,11 @@ export default class ImperatoriumChat extends View {
     this.cfg = null;
     this.sessions = [];
     this.pending = [];
-    this.pinned = props()?.session ?? null;  // given by the layout or split
-    this.picked = null;                        // chosen in the header
+    this.pinned = props()?.session ?? null;  // given by the sidebar's split or tab
+    this.picked = null;                        // the sidebar's pick, when not pinned
     this.items = [];
+    this.base = null;                          // {start, first_block} of a tail
+    this.blocks = BLOCKS;
     this.sig = null;
     this.error = null;
     this.open = {};                            // row key -> opened from Compact
@@ -51,6 +77,11 @@ export default class ImperatoriumChat extends View {
       this.cfg = await loadConfig(appHome, readTextFile);
       await this.tick(cx);
       cx.timer.every(POLL_MS, (cx) => this.tick(cx));
+      // A new focus or pick is fetched now, not at the next poll.
+      cx.timer.every(WATCH_MS, (cx) => {
+        const cur = this.current();
+        if (cur && cur.sessionId !== this.shownId) this.tick(cx);
+      });
     });
     cx.spawn(async (cx) => {
       for (;;) {
@@ -78,34 +109,56 @@ export default class ImperatoriumChat extends View {
       if (t) { this.followed = t.sessionId; this.picked = null; }
     }
     return byId(this.picked) ?? byId(this.followed)
-      ?? this.sessions.find((s) => s.attention) ?? this.sessions[0] ?? null;
+      ?? this.sessions.find((s) => s.attention && (s.pid || s.status))
+      ?? this.sessions.find((s) => s.pid || s.status) ?? null;
   }
 
   async tick(cx) {
-    if (!this.cfg) return;
+    if (!this.cfg || this.ticking) return;
+    this.ticking = true;
     try {
-      const [s, p] = await Promise.all([api(this.cfg, "/api/sessions"), api(this.cfg, "/api/pending")]);
-      this.sessions = (s.sessions ?? []).filter((r) => r.pid || r.status);
-      this.pending = p.pending ?? [];
+      const d = await sessionsNow(this.cfg);
+      this.sessions = d.sessions;
+      this.pending = d.pending;
       const cur = this.current();
-      if (!cur) { this.items = []; this.error = null; cx.notify(); return; }
-      if (cur.sessionId !== this.shownId) {
-        this.swapDraft(cur.sessionId);
-        this.sig = null; this.items = []; this.open = {}; this.drawn = DRAWN_TURNS;
-        this.follow = true;
+      if (!cur) { this.items = []; this.error = null; return; }
+      const id = cur.sessionId;
+      if (id !== this.shownId) {
+        // Switched: draw what any copy last had for it, then ask what changed.
+        this.swapDraft(id);
+        this.shownId = id;
+        this.open = {}; this.drawn = DRAWN_TURNS; this.blocks = BLOCKS;
+        this.follow = true; this.gen++;
+        const had = hub.convs.get(id);
+        this.items = had?.items ?? []; this.base = had?.base ?? null; this.sig = had?.sig ?? null;
+        if (had) this.blocks = Math.max(BLOCKS, had.blocks);
+        cx.notify();
       }
-      const q = "/api/conversation?session=" + encodeURIComponent(cur.sessionId) + (this.sig ? "&known=" + this.sig : "");
+      const q = "/api/conversation?session=" + encodeURIComponent(id) + "&blocks=" + this.blocks
+        + (this.sig ? "&known=" + this.sig : "");
       const c = await api(this.cfg, q);
-      this.shownId = cur.sessionId;
+      if (id !== this.shownId) return;            // switched again meanwhile
       this.error = c.error ?? null;
       if (!c.unchanged) {
         this.items = c.items ?? []; this.sig = c.sig;
+        this.base = { start: c.start ?? 0, first_block: c.first_block ?? 0 };
+        hub.convs.set(id, { items: this.items, base: this.base, sig: this.sig, blocks: this.blocks });
+        if (hub.convs.size > 40) hub.convs.delete(hub.convs.keys().next().value);
         if (this.follow) this.gen++;
       }
     } catch (e) {
       this.error = String(e?.message ?? e);
+    } finally {
+      this.ticking = false;
+      cx.notify();
     }
-    cx.notify();
+  }
+
+  // More of the conversation than the tail the dispatcher sent.
+  loadEarlier(cx) {
+    this.blocks += BLOCKS;
+    this.sig = null;                           // the signature is the whole one's: ask again
+    this.tick(cx);
   }
 
   swapDraft(id) {
@@ -169,16 +222,20 @@ export default class ImperatoriumChat extends View {
   history(el, t, rows, logId) {
     const from = Math.min(this.histFrom, rows.length);
     const shown = rows.slice(from);
-    const more = from > 0 ? 1 : 0;
+    const more = from > 0 || rows.unloaded ? 1 : 0;
     return el
       .child(list(logId, shown.length + more,
         (i) => (more && i === 0) ? "earlier" : shown[i - more].key,
         (i) => (more && i === 0)
-          ? div().px(14).py(6).text_size(11.5).text_color(t.accent).child("Show earlier (" + from + " more rows)")
+          ? div().px(14).py(6).text_size(11.5).text_color(t.accent)
+              .child(from > 0 ? "Show earlier (" + from + " more rows)" : "Load earlier")
           : this.row(t, shown[i - more]))
         .size_full()
         .on_item_click((key, cx) => {
-          if (key === "earlier") { this.histFrom = Math.max(0, this.histFrom - HISTORY_STEP); }
+          if (key === "earlier") {
+            if (from > 0) this.histFrom = Math.max(0, this.histFrom - HISTORY_STEP);
+            else this.loadEarlier(cx);
+          }
           else this.open[key] = !this.open[key];
           cx.notify();
         }))
@@ -201,7 +258,7 @@ export default class ImperatoriumChat extends View {
   render() {
     const t = theme();
     const cur = this.current();
-    const rows = rowsOf(this.items, this.modes, this.drawn);
+    const rows = rowsOf(this.items, this.modes, this.drawn, this.base);
     const asks = cur ? pendingFor(this.pending, cur.sessionId) : [];
     const logId = "imp-log-" + this.gen;
     return v_flex().size_full().bg(t.background).text_color(t.foreground)
@@ -241,13 +298,6 @@ export default class ImperatoriumChat extends View {
     const name = cur ? (cur.display_name || cur.name || cur.project || cur.sessionId.slice(0, 8)) : "No sessions";
     const state = cur?.attention ? (cur.attention_reason || "needs you") : (cur?.status ?? "");
     const dot = cur?.attention ? t.blocked : cur?.status === "busy" ? t.working : t.idle;
-    const pick = this.sessions.slice(0, 16).map((s, i) =>
-      div().id("imp-pick-" + i).px(8).py(2).rounded(6).text_size(11.5).cursor_pointer()
-        .bg(cur && s.sessionId === cur.sessionId ? t.selected : t.chrome)
-        .text_color(s.attention ? t.blocked : t.muted)
-        .hover((st) => st.bg(t.hover))
-        .on_click((_e, cx) => { this.picked = s.sessionId; this.tick(cx); })
-        .child((s.short_name || s.project || s.sessionId.slice(0, 8)).slice(0, 22)));
     const doing = cur?.doing ? firstLine(cur.doing).slice(0, 160) : "";
     const facts = workLine(cur, Date.now() / 1000);
     return v_flex().bg(t.chrome).border_b(1).border_color(t.border)
@@ -258,9 +308,7 @@ export default class ImperatoriumChat extends View {
         .child(div().text_size(11.5).text_color(cur?.attention ? t.blocked : t.dim).child(state)))
       .when(Boolean(facts), (el) => el.child(div().px(12).pb(4).truncate().text_size(11).text_color(t.dim).child(facts)))
       .when(Boolean(doing) && cur?.status === "busy", (el) =>
-        el.child(div().px(12).pb(4).truncate().text_size(11.5).text_color(t.muted).child(doing)))
-      .when(!this.pinned && this.sessions.length > 1, (el) =>
-        el.child(h_flex().px(10).pb(6).gap(4).flex_wrap().children(pick)));
+        el.child(div().px(12).pb(4).truncate().text_size(11.5).text_color(t.muted).child(doing)));
   }
 
   strip(t, rows) {
@@ -275,6 +323,10 @@ export default class ImperatoriumChat extends View {
       ? [div().id("imp-earlier").px(7).py(1).rounded(5).text_size(11).cursor_pointer().text_color(t.accent)
           .on_click((_e, cx) => { this.drawn += DRAWN_TURNS; cx.notify(); })
           .child("show " + Math.min(rows.earlier, DRAWN_TURNS) + " earlier")]
+      : rows.unloaded
+      ? [div().id("imp-load").px(7).py(1).rounded(5).text_size(11).cursor_pointer().text_color(t.accent)
+          .on_click((_e, cx) => this.loadEarlier(cx))
+          .child("load earlier")]
       : [];
     return h_flex().px(10).py(4).gap(4).flex_wrap().border_b(1).border_color(t.border)
       .children(more.concat(chips));

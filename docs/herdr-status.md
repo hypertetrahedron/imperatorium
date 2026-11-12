@@ -27,6 +27,15 @@ Tests: 77 in `test_herdr.py`, 8 in `test_herdrsetup.py`, node tests for the mods
 
 An independent review (a separate agent reading `git diff mods..herdr`) found nothing that lets a browser page or a no-token client reach typed input, the mic or as-user prompts. It did find ten correctness issues, and the fixes are in commit `bc16802` and the next: pairing could be claimed by a nested `claude`; prompt text starting with `-` could become an hc option; restore could type into a non-shell; a fork took its parent's tab; shutdown would have cancelled restore; and an unlocked read-modify-write, a token compare that raised on non-ASCII input, and a mic that could stay open. Left as is: a hook can still claim any terminal address, as it already could claim any inbox socket. Hooks are unauthenticated local POSTs, and the PID check now limits what that can do.
 
+## 2026-11-11: corrections after the first try
+
+The user's six points and what changed (rows in ROADMAP.md):
+- **Matrix in its own window:** herdr-app mods can't open OS windows, so the sidebar's Matrix button asks the dispatcher (`POST /api/open_window`) to open the existing `/matrix` page in an Edge app window.
+- **Switching speed:** the chat fetches as soon as the session changes, asks for the newest 400 blocks only (`/api/conversation?blocks=`), and all chat copies share one session poll and one conversation cache.
+- **Header session list:** removed.
+- **Sidebar divider:** a divider and a "Spaces"-style heading.
+- **Chat as native panes:** the layout has no chat column. Clicking a session opens its chat as a herdr pane: beside its hc terminal, or as a tab of its own. Panes zoom, split, move and close like any other, which also removes the forced terminal area.
+
 ## Verified in the window (herdr-app 0.1.14, test home, test dispatcher on port 8811)
 
 - The chat follows the focused terminal, and stays put when you click into it.

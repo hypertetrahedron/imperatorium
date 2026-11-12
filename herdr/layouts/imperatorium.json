@@ -20,6 +20,7 @@
         {
           "id": "sidebar-lists",
           "type": "column",
+          "divider": { "width": 1, "color": "border" },
           "children": [
             { "id": "spaces", "type": "block", "size": { "weight": 2 }, "min": 90,
               "content": { "mod": "spaces" } },
@@ -59,14 +60,6 @@
                   "header": { "content": { "mod": "pane" }, "height": 30, "position": "top", "reveal": "always" }
                 }
               }
-            },
-            {
-              "id": "chat",
-              "type": "block",
-              "size": { "px": 560 },
-              "min": 320,
-              "max": 1200,
-              "content": { "mod": "imperatorium-chat" }
             },
             {
               "id": "panel",
