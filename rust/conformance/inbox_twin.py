@@ -39,6 +39,7 @@ BUSY = "bbbbbbbb-2222-4222-8222-222222222222"
 GONE = "cccccccc-3333-4333-8333-333333333333"
 WAITS = "dddddddd-4444-4444-8444-444444444444"
 LATE = "eeeeeeee-5555-4555-8555-555555555555"
+BG = "ffffffff-6666-4666-8666-666666666666"
 
 
 class Pipe:
@@ -115,13 +116,13 @@ def start(root):
     return procs
 
 
-def record(root, sid, status, socket, name):
+def record(root, sid, status, socket, name, kind="interactive"):
     """A session record as Claude Code writes it under sessions/; the pid is
     this script's, so it is alive for as long as the test runs."""
     folder = os.path.join(root, "claude", "sessions")
     os.makedirs(folder, exist_ok=True)
     rec = {"pid": os.getpid(), "sessionId": sid, "cwd": os.path.join(root, "work"),
-           "name": name, "kind": "interactive", "status": status,
+           "name": name, "kind": kind, "status": status,
            "messagingSocketPath": socket, "startedAt": int(time.time() * 1000)}
     with open(os.path.join(folder, "%s.json" % sid), "w", encoding="utf-8") as fh:
         json.dump(rec, fh)
@@ -159,6 +160,77 @@ def scrub(value):
     return value
 
 
+def parks(port):
+    """Parked permission requests against one twin: what each step answered."""
+    out = []
+
+    def park(body):
+        box = {}
+        t = threading.Thread(target=lambda: box.update(r=post(port, "/permission/park", body)))
+        t.start()
+        return t, box
+
+    def waiting(n):
+        end = time.time() + 10
+        while time.time() < end:
+            got = get(port, "/api/pending")["pending"]
+            if len(got) >= n:
+                return got
+            time.sleep(0.05)
+        return get(port, "/api/pending")["pending"]
+
+    def decide(body):
+        out.append(("decide", body.get("verdict"), post(port, "/api/decide", body)))
+
+    bash = {"session_id": IDLE, "cwd": "C:\w", "tool_name": "Bash", "_reason": "not on the list",
+            "tool_input": {"command": "rm -rf build", "description": "clean"}, "wait": 10}
+    t, box = park(bash)
+    item = waiting(1)[0]
+    out.append(("pending", scrub(item)))
+    decide({"id": item["id"], "verdict": "maybe"})
+    decide({"id": "nope", "verdict": "allow"})
+    decide({"id": item["id"], "verdict": "allow", "who": "deck"})
+    decide({"id": item["id"], "verdict": "deny"})
+    t.join()
+    out.append(("park", box["r"]))
+
+    question = {"session_id": IDLE, "tool_name": "AskUserQuestion", "wait": 1, "wait_question": 10,
+                "tool_input": {"questions": [
+                    {"question": "Which database?", "header": "DB", "multiSelect": False,
+                     "options": [{"label": "Postgres", "description": "relational"}, {"label": ""}, "x"]},
+                    {"question": "Also?", "multiSelect": True, "options": [{"label": "Cache"}]}]}}
+    t, box = park(question)
+    item = waiting(1)[0]
+    out.append(("pending", scrub(item)))
+    decide({"id": item["id"], "verdict": "allow"})
+    decide({"id": item["id"], "verdict": "allow", "answers": {"Which database?": "Postgres"}})
+    time.sleep(1.5)  # past `wait`: wait_question holds it
+    decide({"id": item["id"], "verdict": "allow",
+            "answers": {"Which database?": " Postgres ", "Also?": "Cache", "extra": "x"}})
+    t.join()
+    out.append(("park", box["r"]))
+
+    # Nobody answers: a silent ask, and it leaves the list.
+    out.append(("expired", post(port, "/permission/park", {"session_id": IDLE, "tool_name": "Edit",
+                                                          "tool_input": {"file_path": "a.py"}, "wait": 0.3})))
+    out.append(("after", get(port, "/api/pending")))
+    # Pass: released without a decision.
+    t, box = park({"session_id": IDLE, "tool_name": "WebFetch", "tool_input": {"url": "https://x"}, "wait": 10})
+    item = waiting(1)[0]
+    decide({"id": item["id"], "verdict": "pass"})
+    t.join()
+    out.append(("pass", box["r"], get(port, "/api/pending")))
+    # A background session has no terminal: wait_background, not wait.
+    t, box = park({"session_id": BG, "tool_name": "Bash", "tool_input": {"command": "make"},
+                   "wait": 0.2, "wait_background": 10})
+    item = waiting(1)[0]
+    time.sleep(1)
+    decide({"id": item["id"], "verdict": "deny"})
+    t.join()
+    out.append(("background", box["r"]))
+    return out
+
+
 def main():
     if os.name != "nt":
         print("inbox_twin: named pipes only (Windows); skipped")
@@ -173,6 +245,7 @@ def main():
     record(root, WAITS, "idle", pipes[WAITS].path, "twin-waits")
     record(root, GONE, "idle", gone, "twin-gone")
     record(root, LATE, "idle", pipes[LATE].path, "twin-late")
+    record(root, BG, "busy", gone, "twin-bg", kind="background")
     procs = start(root)
     failures, sent = [], 0
 
@@ -207,8 +280,8 @@ def main():
         rows = get(PY_PORT, "/api/sessions")["sessions"]
         seen = {r["sessionId"]: (r.get("status"), r.get("dispatchable"), r.get("attention")) for r in rows}
         print("sessions: %r" % seen)
-        if len(seen) != 5:
-            failures.append(("sessions", "expected the 5 made-up sessions, got %r" % seen))
+        if len(seen) != 6:
+            failures.append(("sessions", "expected the 6 made-up sessions, got %r" % seen))
 
         # Idle and reachable: delivered in the request.
         out = both("/api/queue", {"session_id": IDLE, "prompt": "run the tests é \"quoted\"\nline two"})
@@ -252,6 +325,24 @@ def main():
         if len(swept) != 2 or swept[0] != swept[1]:
             failures.append(("sweep", "expected the same prompt from each twin, got %r" % swept))
         time.sleep(1)
+
+        # Parked permission requests.
+        got = [parks(port) for port in (PY_PORT, RS_PORT)]
+        print("parks: %d steps; %s" % (len(got[0]), [s[0] + ("=" + str(s[1]) if s[0] == "decide" else "")
+                                                    for s in got[0]]))
+        steps = {step[0]: step for step in got[0]}
+        want = {"park": (200, {"verdict": "allow", "decided_by": "window",
+                               "answers": {"Which database?": "Postgres", "Also?": "Cache"}}),
+                "expired": (200, {"verdict": None, "decided_by": None}),
+                "background": (200, {"verdict": "deny", "decided_by": "window"})}
+        for name, expect in want.items():
+            if steps[name][1] != expect:
+                failures.append(("parks: " + name, "%r, expected %r" % (steps[name][1], expect)))
+        if got[0][5][1] != (200, {"verdict": "allow", "decided_by": "deck"}):
+            failures.append(("parks: bash", repr(got[0][5])))
+        diff = first_difference(scrub(got[0]), scrub(got[1]), "parks")
+        if diff:
+            failures.append(("parks", diff))
 
         # What both kept: the queues (the gone session's prompt, the busy
         # session's second, the waiting session's) and the events.

@@ -28,6 +28,8 @@ use crate::{
 };
 
 pub struct Shared {
+    /// Permission requests parked by the hook, waiting for the window.
+    pending: crate::pending::Pending,
     /// Statusline readings and the account's windows (usage.Usage).
     usage: crate::usage::Usage,
     /// The state this dispatcher writes, when it was given one (`--state`);
@@ -175,6 +177,7 @@ impl Shared {
         };
         Shared {
             window_token: token_urlsafe(24),
+            pending: Default::default(),
             usage: {
                 let cfg = load_config(home);
                 let thresholds: Vec<f64> = cfg
@@ -740,6 +743,41 @@ impl Shared {
         }
     }
 
+    /// Control.park_wait: how long a parked request is held. A background
+    /// session has no terminal, so it gets `wait_background`; a question
+    /// takes longer to answer than an Allow.
+    fn park_wait(&self, p: &Map<String, Value>) -> f64 {
+        let num = |k: &str| {
+            p.get(k)
+                .filter(|v| truthy(Some(v)))
+                .and_then(crate::pyish::py_float)
+                .unwrap_or(0.0)
+        };
+        let mut wait = num("wait");
+        if p.get("tool_name").and_then(Value::as_str) == Some(crate::pending::QUESTION_TOOL)
+            && p.get("wait_question").is_some_and(|v| !v.is_null())
+        {
+            wait = wait.max(
+                p.get("wait_question")
+                    .and_then(crate::pyish::py_float)
+                    .unwrap_or(0.0),
+            );
+        }
+        let Some(bg) = p.get("wait_background").filter(|v| !v.is_null()) else {
+            return wait;
+        };
+        let sid = p.get("session_id").and_then(Value::as_str);
+        let background = self
+            .sessions(2.0)
+            .iter()
+            .find(|r| r.get("sessionId").and_then(Value::as_str) == sid && sid.is_some())
+            .is_some_and(|r| r.get("kind").and_then(Value::as_str) == Some("background"));
+        if background {
+            return crate::pyish::py_float(bg).unwrap_or(0.0);
+        }
+        wait
+    }
+
     /// Control.enqueue: hold `prompt` until the session's turn ends; one
     /// that is idle and reachable gets it at once.
     fn enqueue(
@@ -951,6 +989,34 @@ impl Shared {
         let p = object.unwrap_or(&empty);
         let from_window = origin.is_some()
             && window.is_some_and(|w| w.as_bytes() == self.window_token.as_bytes());
+        match path {
+            "/permission/park" => {
+                // The hook blocks here until a human answers or the wait
+                // runs out; running out is a silent "ask".
+                let wait = self.park_wait(p);
+                let (verdict, who, answers) = self.pending.park(p, wait);
+                let mut reply = json!({"verdict": verdict, "decided_by": who});
+                if truthy(Some(&answers)) {
+                    reply["answers"] = answers;
+                }
+                return (200, Body::Json(reply));
+            }
+            "/api/decide" => {
+                let who = p
+                    .get("who")
+                    .filter(|v| truthy(Some(v)))
+                    .cloned()
+                    .unwrap_or(json!("window"));
+                let ok = self.pending.decide(
+                    p.get("id").unwrap_or(&Value::Null),
+                    p.get("verdict").unwrap_or(&Value::Null),
+                    who,
+                    p.get("answers"),
+                );
+                return (if ok { 200 } else { 409 }, Body::Json(json!({"ok": ok})));
+            }
+            _ => {}
+        }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p))),
             "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/queue" => {
@@ -1931,6 +1997,9 @@ impl Shared {
                 (200, Body::Json(json!({"prefs": prefs})))
             }
             ("GET", "/api/usage") => (200, Body::Json(self.api_usage())),
+            ("GET", "/api/pending") => {
+                (200, Body::Json(json!({"pending": self.pending.waiting()})))
+            }
             ("GET", "/api/matrix") => (200, Body::Json(self.api_matrix())),
             ("GET", "/api/decisions") => (
                 200,
