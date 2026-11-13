@@ -41,6 +41,7 @@ mod server;
 mod sessions;
 mod sessionstat;
 mod settings;
+mod taskout;
 mod ui;
 
 use std::io::{BufRead, Write};

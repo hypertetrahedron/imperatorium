@@ -638,7 +638,8 @@ impl History {
             .iter()
             .map(|d| json!({"date": d, "cost": per_day[d].0, "tokens": per_day[d].1}))
             .collect();
-        let total_cost = per_day.values().fold(0.0, |s, v| s + v.0);
+        // sum(): compensated in Python 3.12+, so it is here.
+        let total_cost = crate::pyish::py_fsum_builtin(per_day.values().map(|v| v.0));
         let total_tokens: i64 = per_day.values().map(|v| v.1).sum();
         json!({
             "ok": true, "estimated": true, "days": day_rows, "projects": projects, "models": models,

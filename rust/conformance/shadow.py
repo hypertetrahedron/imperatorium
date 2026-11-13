@@ -36,7 +36,8 @@ IGNORE = {"/api/health": ("pid", "boot"),
           # How many transcripts the ledger holds open: which sessions were
           # asked about before (pinned) differs by process.
           "/api/costs": ("files",),
-          "/api/session_status": ("now",)}
+          "/api/session_status": ("now",),
+          "/api/awaited": ("now",)}
 
 
 def get(base, path):
@@ -47,9 +48,19 @@ def get(base, path):
         return exc.code, json.loads(exc.read().decode("utf-8") or "null")
 
 
+CACHED_APART = []
+
+
 def compare(path):
     a, b = get(PY, path), get(RS, path)
     route = path.split("?")[0].rstrip("/") or "/"
+    if route == "/api/errors":
+        # Each side caches this for 5 minutes; answers worked out minutes
+        # apart differ by whatever live sessions did meanwhile.
+        at = [x[1].get("at") for x in (a, b)]
+        if all(isinstance(t, (int, float)) for t in at) and abs(at[0] - at[1]) > 30:
+            CACHED_APART.append(path)
+            return None
     for key in IGNORE.get(route, ()):
         for code, body in (a, b):
             if isinstance(body, dict):
@@ -253,6 +264,7 @@ def main():
     paths += ["/api/costs", "/api/costs?days=7", "/api/costs?days=1", "/api/costs?days=bad"]
     for sid in ids + ["nope"]:
         paths.append("/api/session_status?session=" + urllib.parse.quote(sid))
+        paths.append("/api/awaited?session=" + urllib.parse.quote(sid))
     # Changes and worktrees: plain git, read-only, in every project here.
     for sid in [r["sessionId"] for r in snap.get("sessions", []) if not r.get("remote")] + ["nope"]:
         paths.append("/api/changes?session=" + urllib.parse.quote(sid))
@@ -308,6 +320,8 @@ def main():
     print("history: %d rows of sessions not running compared exactly" % HISTORY_COUNTS["rows"])
     print("activity: %(conversation)d compared from the conversation, %(hooks)d answered "
           "from tool hooks by Python (POST-fed, left out)" % ACTIVITY_COUNTS)
+    if CACHED_APART:
+        print("not compared, cached minutes apart on the two sides: %s" % ", ".join(CACHED_APART))
     print("shadow: %d requests over %d sessions, %d settled on retry, %.1fs"
           % (paths_done, len(ids), live, time.time() - t0))
     for path, diff in failures[:25]:

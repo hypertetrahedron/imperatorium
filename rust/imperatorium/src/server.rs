@@ -836,6 +836,43 @@ impl Shared {
         Value::Object(out)
     }
 
+    /// Control.awaited: the end of what each shell and monitor the session
+    /// is waiting on has printed, and what each subagent has said and done.
+    /// Empty once the session's process has gone.
+    fn api_awaited(&self, session: &str) -> Value {
+        let hit = |rows: &[Row]| {
+            rows.iter()
+                .find(|r| {
+                    r.get("sessionId").and_then(Value::as_str) == Some(session)
+                        || r.get("key").and_then(Value::as_str) == Some(session)
+                })
+                .cloned()
+        };
+        let Some(row) = hit(&self.sessions(15.0)).or_else(|| hit(&self.sessions(2.0))) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let now = Self::now();
+        let alive =
+            row.get("pid").is_some_and(|p| p.is_u64() || p.is_i64()) && truthy(row.get("status"));
+        if !alive {
+            return json!({"ok": true, "now": now, "tasks": []});
+        }
+        let sid = row
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let stat = self.stats.read(&sid, now).unwrap_or_else(|| json!({}));
+        let folder = crate::taskout::tasks_dir(&sid);
+        let agents = if truthy(stat.get("agents")) {
+            crate::taskout::subagents_dir(sessionstat::transcript_path(&sid).as_deref())
+        } else {
+            None
+        };
+        let tasks = crate::taskout::awaited(&stat, folder.as_deref(), agents.as_deref());
+        json!({"ok": true, "now": now, "tasks": tasks})
+    }
+
     /// Control.errors: tool failures across recent sessions.
     fn api_errors(&self, days: f64) -> Value {
         let now = Self::now();
@@ -1087,6 +1124,7 @@ impl Shared {
             ("GET", "/api/session_status") => {
                 (200, Body::Json(self.api_session_status(&arg("session"))))
             }
+            ("GET", "/api/awaited") => (200, Body::Json(self.api_awaited(&arg("session")))),
             ("GET", "/api/errors") => {
                 let raw = arg("days");
                 let raw = if raw.is_empty() { "7".to_string() } else { raw };
