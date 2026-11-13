@@ -85,9 +85,28 @@ def ordered(value):
     return value
 
 
-def compare_sessions(counts):
-    _, a = get(PY, "/api/sessions")
-    _, b = get(RS, "/api/sessions")
+def first_event(base):
+    """The first `sessions` event of /api/stream, and its Content-Type."""
+    with urllib.request.urlopen(base + "/api/stream", timeout=30) as fh:
+        ctype = fh.headers.get("Content-Type")
+        lines = []
+        while not any(l.startswith(b"data:") for l in lines):
+            lines.append(fh.readline())
+    data = next(l for l in lines if l.startswith(b"data:"))[len(b"data:"):]
+    if b'"token"' in data:
+        raise AssertionError("%s's stream sent a token" % base)
+    return ctype, json.loads(data)
+
+
+def compare_sessions(counts, stream=False):
+    if stream:
+        ta, a = first_event(PY)
+        tb, b = first_event(RS)
+        if ta != tb:
+            return "stream Content-Type %r vs %r" % (ta, tb)
+    else:
+        _, a = get(PY, "/api/sessions")
+        _, b = get(RS, "/api/sessions")
     py = [r for r in a.get("sessions", []) if not r.get("remote")]
     rs = b.get("sessions", [])
     if [r["sessionId"] for r in py] != [r["sessionId"] for r in rs]:
@@ -140,7 +159,46 @@ def compare_history(query):
         _, b = get(RS, path)
         if a.get("complete") and b.get("complete"):
             break
-    return first_difference(ordered(a), ordered(b))
+    return history_difference(a, b)
+
+
+STABLE = ("session_id", "cwd", "created", "where", "live")
+
+
+def history_difference(a, b):
+    """History answers taken at different moments (each side caches its list
+    for 30 s) differ where sessions are still being written: their size,
+    modified time and title move, and with them the newest-first order. So:
+    rows are matched by id; a session not running is compared exactly, and
+    their relative order must agree; a live one on its stable fields; a row
+    on one side only is allowed only for a live session or at the cut-off."""
+    if a.get("ok") != b.get("ok") or a.get("complete") != b.get("complete"):
+        return "ok/complete %r vs %r" % ((a.get("ok"), a.get("complete")), (b.get("ok"), b.get("complete")))
+    ra, rb = a.get("results", []), b.get("results", [])
+    ia = {r["session_id"]: (i, r) for i, r in enumerate(ra)}
+    ib = {r["session_id"]: (i, r) for i, r in enumerate(rb)}
+    edge = max(len(ra), len(rb)) - 3
+    for sid in set(ia) ^ set(ib):
+        i, r = ia.get(sid) or ib.get(sid)
+        if not r.get("live") and i < edge:
+            return "%s is on one side only (row %d)" % (sid, i)
+    still = [sid for sid in ia if sid in ib and not ia[sid][1].get("live")]
+    if still != [sid for sid in ib if sid in ia and not ib[sid][1].get("live")]:
+        return "the order of sessions not running differs"
+    for sid in ia:
+        if sid not in ib:
+            continue
+        x, y = ia[sid][1], ib[sid][1]
+        if x.get("live"):
+            x, y = {k: x.get(k) for k in STABLE}, {k: y.get(k) for k in STABLE}
+        diff = first_difference(ordered(x), ordered(y), "$[%s]" % sid)
+        if diff:
+            return diff
+    HISTORY_COUNTS["rows"] += len(still)
+    return None
+
+
+HISTORY_COUNTS = {"rows": 0}
 
 
 def main():
@@ -199,7 +257,15 @@ def main():
         diff = compare_sessions(counts)
     if diff:
         failures.append(("/api/sessions", diff))
+    for _ in range(5):
+        diff = compare_sessions({"compared": 0, "skipped": 0}, stream=True)
+        if not diff:
+            break
+        time.sleep(1.5)
+    if diff:
+        failures.append(("/api/stream", diff))
     print("sessions: %d fields compared, %d left out as POST-fed" % (counts["compared"], counts["skipped"]))
+    print("history: %d rows of sessions not running compared exactly" % HISTORY_COUNTS["rows"])
     print("shadow: %d requests over %d sessions, %d settled on retry, %.1fs"
           % (paths_done, len(ids), live, time.time() - t0))
     for path, diff in failures[:25]:

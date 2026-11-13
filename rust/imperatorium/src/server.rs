@@ -330,15 +330,21 @@ impl Shared {
 
     /// Control.sessions(max_age): the rows, cached briefly.
     pub fn sessions(&self, max_age: f64) -> Vec<Row> {
+        self.snapshot(max_age).1
+    }
+
+    /// (when the snapshot was taken, its rows). As registry.snapshot,
+    /// `at` is read before `claude agents` runs.
+    pub fn snapshot(&self, max_age: f64) -> (f64, Vec<Row>) {
         let now = Self::now();
         if let Some((at, rows)) = self.snap.lock().unwrap().as_ref() {
             if now - at < max_age {
-                return rows.clone();
+                return (*at, rows.clone());
             }
         }
         let rows = self.build_snapshot();
-        *self.snap.lock().unwrap() = Some((Self::now(), rows.clone()));
-        rows
+        *self.snap.lock().unwrap() = Some((now, rows.clone()));
+        (now, rows)
     }
 
     fn build_snapshot(&self) -> Vec<Row> {
@@ -552,9 +558,58 @@ impl Shared {
 
     /// GET /api/sessions: the snapshot as it may leave the process.
     fn api_sessions(&self) -> Value {
-        // The Stream Deck polls once a second; STREAM_EVERY is 1.0 there.
-        let rows = self.sessions(1.0);
-        json!({"at": Self::now(), "sessions": public(rows)})
+        // The Stream Deck polls once a second; a snapshot STREAM_EVERY old
+        // is as good for a key colour and saves a fork.
+        let (at, rows) = self.snapshot(STREAM_EVERY);
+        json!({"at": at, "sessions": public(rows)})
+    }
+
+    /// GET /api/stream: server-sent events, the session list whenever it
+    /// changes - looked at every STREAM_EVERY seconds, never more often
+    /// than STREAM_MIN_GAP, a keepalive after STREAM_KEEPALIVE of quiet,
+    /// and closed after STREAM_SECONDS (the page reconnects). HTTP/1.0 and
+    /// no length, as the Python handler answers.
+    ///
+    /// Python is also woken early by a hook event (Control.invalidate);
+    /// this shadow receives no hooks, so it only looks on its clock.
+    pub fn stream(&self, out: &mut dyn std::io::Write) {
+        let head = "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
+                    Cache-Control: no-store\r\n\r\n";
+        if out
+            .write_all(head.as_bytes())
+            .and_then(|_| out.flush())
+            .is_err()
+        {
+            return;
+        }
+        let start = Self::now();
+        let (mut last, mut quiet, mut looked) = (String::new(), start, 0.0);
+        while Self::now() < start + STREAM_SECONDS {
+            let gap = STREAM_MIN_GAP - (Self::now() - looked);
+            if gap > 0.0 {
+                std::thread::sleep(std::time::Duration::from_secs_f64(gap));
+            }
+            looked = Self::now();
+            let (at, rows) = self.snapshot(STREAM_EVERY);
+            let rows = public(rows);
+            let same = json_dumps_sorted(&json!({"sessions": rows}));
+            let sent = if same != last {
+                let body = json!({"at": at, "sessions": rows});
+                let r = write!(out, "event: sessions\ndata: {body}\n\n").and_then(|_| out.flush());
+                last = same;
+                quiet = Self::now();
+                r
+            } else if Self::now() - quiet >= STREAM_KEEPALIVE {
+                quiet = Self::now();
+                out.write_all(b": keepalive\n\n").and_then(|_| out.flush())
+            } else {
+                Ok(())
+            };
+            if sent.is_err() {
+                return; // the page went away
+            }
+            std::thread::sleep(std::time::Duration::from_secs_f64(STREAM_EVERY));
+        }
     }
 
     /// Control.search: History, with which of its sessions are live.
@@ -634,6 +689,11 @@ impl Shared {
         }
     }
 }
+
+const STREAM_SECONDS: f64 = 600.0;
+const STREAM_EVERY: f64 = 5.0;
+const STREAM_MIN_GAP: f64 = 2.0;
+const STREAM_KEEPALIVE: f64 = 15.0;
 
 /// Row fields that never leave the process (dispatcher.PRIVATE_ROW_FIELDS).
 const PRIVATE_ROW_FIELDS: &[&str] = &["token"];
@@ -816,6 +876,18 @@ pub fn serve(host: &str, port: u16, home: Option<&str>) -> i32 {
         let shared = Arc::clone(&shared);
         std::thread::spawn(move || {
             let method = request.method().as_str().to_string();
+            let path = request
+                .url()
+                .split('?')
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('/')
+                .to_string();
+            if method == "GET" && path == "/api/stream" {
+                let mut writer = request.into_writer();
+                shared.stream(&mut *writer);
+                return;
+            }
             let (code, body) = shared.handle(&method, request.url());
             let (bytes, ctype, cache) = body.into_parts();
             // Content-Length, as the Python dispatcher sends: tiny_http goes
