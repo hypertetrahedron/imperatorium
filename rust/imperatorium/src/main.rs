@@ -32,6 +32,7 @@ mod history;
 mod hooks;
 mod http;
 mod live;
+mod matrix;
 mod paths;
 mod policy;
 mod procs;

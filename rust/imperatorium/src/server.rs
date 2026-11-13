@@ -560,6 +560,106 @@ impl Shared {
         })
     }
 
+    /// GET /api/matrix: Control.matrix - each running session's replies and
+    /// the step it is on, plus what they have cost between them.
+    fn api_matrix(&self) -> Value {
+        let mut rows: Vec<Row> = self
+            .sessions(2.0)
+            .into_iter()
+            .filter(matrix_active)
+            .collect();
+        rows.sort_by(|a, b| {
+            let k = |r: &Row| {
+                (
+                    r.get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_lowercase(),
+                    r.get("key")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                )
+            };
+            k(a).cmp(&k(b))
+        });
+        let now = Self::now();
+        let account = self.usage.summary(now);
+        let limits = account["limits"].clone();
+        let spent = self.spend(now, 1.0, &limits);
+        let per: HashMap<String, Value> = spent["current"]["each"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|e| (e["sessionId"].as_str().unwrap_or("").to_string(), e.clone()))
+            .collect();
+        let mut tiles: Vec<Map<String, Value>> = Vec::new();
+        for row in &rows {
+            let sid = row
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let mut tile = Map::new();
+            for k in [
+                "key",
+                "sessionId",
+                "name",
+                "cwd",
+                "status",
+                "state",
+                "attention",
+                "attention_kind",
+                "attention_reason",
+                "waitingFor",
+                "last_notification",
+                "background_tasks",
+                "remote",
+                "host",
+                "work",
+                "hc",
+            ] {
+                tile.insert(k.into(), row.get(k).cloned().unwrap_or(Value::Null));
+            }
+            let mine = per.get(&sid).cloned().unwrap_or(json!({}));
+            tile.insert(
+                "cost_usd".into(),
+                mine.get("cost_usd").cloned().unwrap_or(Value::Null),
+            );
+            tile.insert(
+                "context_pct".into(),
+                row.get("usage")
+                    .and_then(|u| u.get("context_pct"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            let (items, error) = match self.conversation(&sid) {
+                Ok(c) => (c.merged.clone(), None),
+                Err(e) => (vec![], Some(format!("RuntimeError: {e}"))),
+            };
+            tile.insert(
+                "tokens".into(),
+                mine.get("tokens").cloned().unwrap_or(Value::Null),
+            );
+            let live = crate::matrix::working(row) || truthy(row.get("attention"));
+            tile.extend(crate::matrix::focus(&items, live));
+            if let Some(e) = error {
+                tile.insert("error".into(), json!(e));
+            }
+            tiles.push(tile);
+        }
+        let mut spend = crate::matrix::spend(&tiles, &limits);
+        spend.insert("plan".into(), account["plan"].clone());
+        spend.insert("global".into(), spent["global"].clone());
+        spend.insert("models".into(), spent["current"]["models"].clone());
+        spend.insert(
+            "complete".into(),
+            spent.get("complete").cloned().unwrap_or(json!(true)),
+        );
+        let always = truthy(Some(&settings::value(&self.config, "chat.matrix_status")));
+        json!({"tiles": tiles, "now": now, "spend": spend, "status_always": always})
+    }
+
     /// GET /api/usage: Control.usage_summary - the meters and the spend.
     fn api_usage(&self) -> Value {
         let now = Self::now();
@@ -1587,6 +1687,7 @@ impl Shared {
                 (200, Body::Json(json!({"prefs": prefs})))
             }
             ("GET", "/api/usage") => (200, Body::Json(self.api_usage())),
+            ("GET", "/api/matrix") => (200, Body::Json(self.api_matrix())),
             ("GET", "/api/decisions") => (
                 200,
                 Body::Json(json!({"decisions": decisions(&self.state_dir(), 60)})),

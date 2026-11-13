@@ -197,6 +197,17 @@ def main():
                  len(ua["spend"]["global"]["windows"]), ua["spend"]["current"]["sessions"]))
         if diff:
             failures.append(("/api/usage", diff))
+        for _ in range(3):
+            ma, mb = masked(get(PY_PORT, "/api/matrix")), masked(get(RS_PORT, "/api/matrix"))
+            diff = first_difference(ma, mb, "$")
+            if not diff:
+                break
+            time.sleep(2)
+        print("matrix: %d tiles, %d replies, %d with a step in flight"
+              % (len(ma["tiles"]), sum(len(t.get("replies") or []) for t in ma["tiles"]),
+                 sum(1 for t in ma["tiles"] if t.get("current"))))
+        if diff:
+            failures.append(("/api/matrix", diff))
         for path in ("/api/events", "/api/queue", "/api/prefs",
                      "/api/activity?session=" + A, "/api/activity?session=" + B,
                      "/api/activity?session=" + C):
