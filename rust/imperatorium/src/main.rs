@@ -34,6 +34,7 @@ mod http;
 mod inbox;
 mod live;
 mod matrix;
+mod modlink;
 mod paths;
 mod pending;
 mod policy;

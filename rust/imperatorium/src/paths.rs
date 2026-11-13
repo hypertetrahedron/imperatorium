@@ -448,6 +448,11 @@ pub fn ymd(d: (i64, u32, u32)) -> String {
 /// microsecond=0).timestamp()`: local midnight on the 1st of this month.
 pub fn local_month_start(now: f64) -> f64 {
     let (y, m, _) = local_date(now);
+    local_to_epoch(y, m, 1, 0, 0, 0)
+}
+
+/// `datetime(y, m, d, h, mi, s).timestamp()` for a naive (local) time.
+pub fn local_to_epoch(y: i64, m: u32, d: u32, h: u32, mi: u32, sec: u32) -> f64 {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
@@ -458,10 +463,10 @@ pub fn local_month_start(now: f64) -> f64 {
             wYear: y as u16,
             wMonth: m as u16,
             wDayOfWeek: 0,
-            wDay: 1,
-            wHour: 0,
-            wMinute: 0,
-            wSecond: 0,
+            wDay: d as u16,
+            wHour: h as u16,
+            wMinute: mi as u16,
+            wSecond: sec as u16,
             wMilliseconds: 0,
         };
         unsafe {
@@ -474,14 +479,17 @@ pub fn local_month_start(now: f64) -> f64 {
                 return ticks as f64 / 1e7 - 11_644_473_600.0;
             }
         }
-        days_from_civil(y, m, 1) as f64 * 86400.0
+        (days_from_civil(y, m, d) * 86400 + (h * 3600 + mi * 60 + sec) as i64) as f64
     }
     #[cfg(unix)]
     {
         let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
         tm.tm_year = (y - 1900) as i32;
         tm.tm_mon = m as i32 - 1;
-        tm.tm_mday = 1;
+        tm.tm_mday = d as i32;
+        tm.tm_hour = h as i32;
+        tm.tm_min = mi as i32;
+        tm.tm_sec = sec as i32;
         tm.tm_isdst = -1;
         unsafe { libc::mktime(&mut tm) as f64 }
     }

@@ -28,6 +28,10 @@ use crate::{
 };
 
 pub struct Shared {
+    /// The Imperatorium mod in each session: its beats and the prompts
+    /// waiting for it. Only with a store of our own: the token lives beside
+    /// the state, and the live dispatcher's is not ours to answer for.
+    modlink: Option<crate::modlink::ModLink>,
     /// Permission requests parked by the hook, waiting for the window.
     pending: crate::pending::Pending,
     /// Statusline readings and the account's windows (usage.Usage).
@@ -178,6 +182,20 @@ impl Shared {
         Shared {
             window_token: token_urlsafe(24),
             pending: Default::default(),
+            modlink: store.as_ref().and_then(|s| {
+                let dir = s
+                    .path
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."));
+                match crate::modlink::load_token(&dir) {
+                    Ok(t) => Some(crate::modlink::ModLink::new(t)),
+                    Err(e) => {
+                        eprintln!("imperatorium: no mod token: {e}");
+                        None
+                    }
+                }
+            }),
             usage: {
                 let cfg = load_config(home);
                 let thresholds: Vec<f64> = cfg
@@ -321,6 +339,9 @@ impl Shared {
                 store.forget(&key);
                 self.live.forget(&key);
                 self.usage.forget(&key);
+                if let Some(link) = &self.modlink {
+                    link.forget(&key);
+                }
                 self.invalidate();
                 let cwd = if truthy(Some(&cwd)) {
                     cwd.clone()
@@ -743,6 +764,169 @@ impl Shared {
         }
     }
 
+    /// Control.mod_beat: what the session's mod says it is doing, its usage
+    /// and what became of its prompts; answers the prompts to submit now and
+    /// the line to show under the prompt.
+    fn mod_beat(&self, link: &crate::modlink::ModLink, beat: &Map<String, Value>) -> Value {
+        let sid = beat
+            .get("session_id")
+            .filter(|v| truthy(Some(v)))
+            .map(crate::pyish::py_str)
+            .unwrap_or_default();
+        if sid.is_empty() {
+            return json!({"ok": false, "error": "no session_id"});
+        }
+        let now = Self::now();
+        let was = link.state(&sid, now);
+        let give = link.beat(beat, now);
+        let acks = beat
+            .get("acks")
+            .filter(|v| truthy(Some(v)))
+            .and_then(Value::as_array);
+        if let Some(store) = &self.store {
+            for ack in acks.into_iter().flatten() {
+                if ack.get("outcome").and_then(Value::as_str) == Some("dropped") {
+                    let reason = ack
+                        .get("reason")
+                        .filter(|v| truthy(Some(v)))
+                        .map(crate::pyish::py_str)
+                        .unwrap_or_default();
+                    let e = json!({"kind": "dispatch_dropped", "session_id": sid,
+                                   "cwd": beat.get("cwd").cloned().unwrap_or(Value::Null),
+                                   "summary": crate::pyish::take(&reason, 280)});
+                    store.add_event(e.as_object().unwrap().clone());
+                }
+            }
+        }
+        if let Some(u) = beat.get("usage").filter(|u| u.is_object()) {
+            let reading = crate::modlink::statusline_payload(u);
+            if let Some(crossing) = self.usage.ingest(&sid, reading.as_object().unwrap(), now) {
+                self.budget_crossed(&crossing);
+            }
+        }
+        let busy = truthy(beat.get("busy"));
+        if was.as_ref().is_none_or(|w| truthy(w.get("busy")) != busy)
+            || !give.is_empty()
+            || truthy(beat.get("acks"))
+        {
+            self.invalidate();
+        }
+        json!({"ok": true, "deliver": give, "status": self.mod_status_line(link, &sid)})
+    }
+
+    /// Control.mod_status_line: who else is waiting on you, and what is
+    /// queued here. None: nothing to say.
+    fn mod_status_line(&self, link: &crate::modlink::ModLink, sid: &str) -> Value {
+        // Any snapshot from the last 15 s will do: a beat comes every two
+        // seconds from every session.
+        let rows = self.sessions(15.0);
+        let waiting: Vec<&Row> = rows
+            .iter()
+            .filter(|r| {
+                truthy(r.get("attention"))
+                    && r.get("sessionId").and_then(Value::as_str) != Some(sid)
+            })
+            .collect();
+        let mut parts = vec![];
+        if !waiting.is_empty() {
+            let names: Vec<String> = waiting
+                .iter()
+                .take(3)
+                .map(|r| {
+                    let name = r
+                        .get("name")
+                        .filter(|v| truthy(Some(v)))
+                        .map(crate::pyish::py_str)
+                        .unwrap_or_else(|| {
+                            let cwd = r
+                                .get("cwd")
+                                .filter(|v| truthy(Some(v)))
+                                .map(crate::pyish::py_str)
+                                .unwrap_or_default();
+                            let trimmed = cwd.trim_end_matches(['/', '\\']);
+                            let base = trimmed.rsplit(['/', '\\']).next().unwrap_or("");
+                            let base = if cfg!(windows) && base.len() == 2 && base.ends_with(':') {
+                                ""
+                            } else {
+                                base
+                            };
+                            if base.is_empty() {
+                                "?".to_string()
+                            } else {
+                                base.to_string()
+                            }
+                        });
+                    crate::pyish::take(&name, 24)
+                })
+                .collect();
+            let more = if waiting.len() > 3 {
+                format!(" +{}", waiting.len() - 3)
+            } else {
+                String::new()
+            };
+            parts.push(format!(
+                "{} waiting on you: {}{}",
+                waiting.len(),
+                names.join(", "),
+                more
+            ));
+        }
+        let queued = self
+            .store
+            .as_ref()
+            .map(|s| s.queued(sid).len())
+            .unwrap_or(0);
+        let here = queued + link.pending(sid).len();
+        if here > 0 {
+            parts.push(format!("{here} queued here"));
+        }
+        if parts.is_empty() {
+            Value::Null
+        } else {
+            json!(parts.join(" \u{b7} "))
+        }
+    }
+
+    /// Control.mod_check: the permission policy's verdict on a tool call the
+    /// session's mod asks about - the same policy.decide the hook runs, and
+    /// only once auto-approval is on (`decision_format: "object"`).
+    fn mod_check(&self, request: &Map<String, Value>) -> Value {
+        let policy = std::fs::read_to_string(paths::policy_path(self.home.as_deref()))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        if policy.get("decision_format").and_then(Value::as_str) != Some("object") {
+            return json!({"verdict": "ask", "reason": "auto-approval is off"});
+        }
+        let get = |k: &str| request.get(k).cloned().unwrap_or(Value::Null);
+        let req = json!({"tool_name": get("tool_name"), "tool_input": get("tool_input"),
+                         "cwd": get("cwd"), "session_id": get("session_id")});
+        let got = crate::policy::decide(&req, &policy);
+        let empty = Map::new();
+        let input = req["tool_input"].as_object().unwrap_or(&empty);
+        let detail = ["command", "file_path", "pattern"]
+            .iter()
+            .find_map(|k| input.get(*k).filter(|v| truthy(Some(v))))
+            .map(crate::pyish::py_str)
+            .unwrap_or_default();
+        let record = json!({"at": Self::now(), "verdict": got.verdict, "reason": got.reason, "tier": got.tier,
+                            "tool": req["tool_name"], "via": "mod", "detail": crate::pyish::take(&detail, 200),
+                            "cwd": req["cwd"], "session_id": req["session_id"], "agent_id": get("agent_id")});
+        // decisions.jsonl beside the state, as the hook writes its own.
+        let path = self.state_dir().join("decisions.jsonl");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+        {
+            use std::io::Write;
+            let _ =
+                f.write_all(format!("{}\n", crate::pyish::json_dumps(&record, false)).as_bytes());
+        }
+        json!({"verdict": got.verdict, "reason": got.reason, "tier": got.tier})
+    }
+
     /// Control.park_wait: how long a parked request is held. A background
     /// session has no terminal, so it gets `wait_background`; a question
     /// takes longer to answer than an Allow.
@@ -830,7 +1014,7 @@ impl Shared {
         let error = if crate::slash::is_command(prompt) {
             Some("slash commands are not ported yet".to_string())
         } else {
-            self.deliver(store, &row, prompt)
+            self.deliver(store, &row, prompt, truthy(item.get("as_user")))
         };
         if let Some(e) = error {
             store.requeue_front(key, &item, Some(&e));
@@ -875,7 +1059,34 @@ impl Shared {
     /// Control._deliver: put the prompt in the session's inbox. None, or the
     /// error. (The mod's path, for sessions whose mod is live, comes with the
     /// mod link; remote hosts with phase 4.)
-    fn deliver(&self, store: &crate::store::Store, row: &Row, prompt: &str) -> Option<String> {
+    fn deliver(
+        &self,
+        store: &crate::store::Store,
+        row: &Row,
+        prompt: &str,
+        as_user: bool,
+    ) -> Option<String> {
+        let sid = row.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        if let Some(link) = self
+            .modlink
+            .as_ref()
+            .filter(|l| !truthy(row.get("remote")) && l.live(sid, Self::now()))
+        {
+            // The mod submits it once the session is idle: as the person's
+            // own words only when they sent it from the window.
+            let text = if as_user {
+                prompt.to_string()
+            } else {
+                crate::conversation::with_origin(prompt)
+            };
+            let id = link.offer(sid, &text, as_user, Self::now());
+            let e = json!({"kind": "dispatch_mod", "session_id": sid,
+                           "cwd": row.get("cwd").cloned().unwrap_or(Value::Null), "as_user": as_user,
+                           "mod_prompt": id, "summary": crate::pyish::take(prompt, 280)});
+            store.add_event(e.as_object().unwrap().clone());
+            self.invalidate();
+            return None;
+        }
         if truthy(row.get("remote")) {
             return Some("remote hosts are not ported yet".into());
         }
@@ -931,6 +1142,8 @@ impl Shared {
 
     /// A POST, with the dispatcher's checks: no foreign Origin, a JSON body
     /// of 1..MAX_BODY bytes.
+    // The request's parts, as Handler reads them off the request.
+    #[allow(clippy::too_many_arguments)]
     pub fn post(
         &self,
         path: &str,
@@ -939,6 +1152,7 @@ impl Shared {
         body: &[u8],
         port: u16,
         window: Option<&str>,
+        mod_token: Option<&str>,
     ) -> (u16, Body) {
         const MAX_BODY: usize = 4 * 1024 * 1024;
         if let Some(o) = origin {
@@ -989,6 +1203,23 @@ impl Shared {
         let p = object.unwrap_or(&empty);
         let from_window = origin.is_some()
             && window.is_some_and(|w| w.as_bytes() == self.window_token.as_bytes());
+        if path == "/api/mod/beat" || path == "/api/mod/check" {
+            if object.is_none() {
+                return (400, Body::Json(json!({"error": "expected an object"})));
+            }
+            let Some(link) = self.modlink.as_ref().filter(|l| l.authentic(mod_token)) else {
+                return (
+                    403,
+                    Body::Json(json!({"ok": false, "error": "not the Imperatorium mod"})),
+                );
+            };
+            let out = if path == "/api/mod/beat" {
+                self.mod_beat(link, p)
+            } else {
+                self.mod_check(p)
+            };
+            return (200, Body::Json(out));
+        }
         match path {
             "/permission/park" => {
                 // The hook blocks here until a human answers or the wait
@@ -1348,6 +1579,32 @@ impl Shared {
         if let Some(Value::Array(q)) = queue.get(&sid) {
             if !q.is_empty() {
                 row.insert("queued".into(), json!(q.len()));
+            }
+        }
+        if !truthy(row.get("remote")) {
+            if let Some(link) = &self.modlink {
+                if let Some(m) = link.state(&sid, Self::now()) {
+                    // The mod reaches the session without its socket, and
+                    // knows the moment a turn starts or ends.
+                    let pick = |k: &str| m.get(k).cloned().unwrap_or(Value::Null);
+                    row.insert("mod".into(), json!({"busy": pick("busy"), "since": pick("since"),
+                                                    "version": pick("version"), "mod_version": pick("mod_version")}));
+                    row.insert("dispatchable".into(), json!(true));
+                    let status = match row.get("status") {
+                        None | Some(Value::Null) => Some(""),
+                        Some(v) => v.as_str(),
+                    };
+                    if matches!(status, Some("") | Some("idle") | Some("busy"))
+                        && !truthy(row.get("attention"))
+                    {
+                        let busy = truthy(m.get("busy"));
+                        row.insert("status".into(), json!(if busy { "busy" } else { "idle" }));
+                    }
+                }
+                let n = link.pending(&sid).len();
+                if n > 0 {
+                    row.insert("mod_pending".into(), json!(n));
+                }
             }
         }
         let bg_idle = row.get("kind").and_then(Value::as_str) == Some("background")
@@ -2323,6 +2580,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
                 };
                 let (origin, ctype) = (header("Origin"), header("Content-Type"));
                 let window = header("X-Imperatorium-Window");
+                let mod_token = header("X-Imperatorium-Mod");
                 let mut body = Vec::new();
                 let _ = std::io::Read::read_to_end(
                     &mut std::io::Read::take(request.as_reader(), 4 * 1024 * 1024 + 1),
@@ -2340,6 +2598,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
                     &body,
                     port,
                     window.as_deref(),
+                    mod_token.as_deref(),
                 )
             } else {
                 shared.handle(&method, request.url())
