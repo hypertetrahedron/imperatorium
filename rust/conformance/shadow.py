@@ -208,7 +208,8 @@ def main():
     if "--rust" in sys.argv:
         RS = sys.argv[sys.argv.index("--rust") + 1]
     t0 = time.time()
-    paths = ["/api/health", "/api/health/", "/api/no-such-thing", "/api/conversation",
+    paths = ["/api/events", "/api/queue", "/api/prefs", "/api/decisions", "/api/quick",
+             "/api/health", "/api/health/", "/api/no-such-thing", "/api/conversation",
              "/api/conversation?session=00000000-0000-0000-0000-000000000000"]
     _, snap = get(PY, "/api/sessions")
     ids = [r["sessionId"] for r in snap.get("sessions", []) if not r.get("remote")]

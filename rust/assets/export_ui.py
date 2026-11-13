@@ -32,18 +32,36 @@ PAGES = {
 }
 
 
+def settings_schema():
+    """settings.FIELDS and SECTIONS as JSON. A default computed from the
+    config (`voice.*`: whether config.json has a voice block) is written as
+    {"from": "voice_block"}, and computed the same way by settings.rs."""
+    from imperatorium import settings
+    fields = []
+    for f in settings.FIELDS:
+        f = dict(f)
+        if callable(f.get("default")):
+            assert f["default"] is settings._voice_on, f["key"]
+            f["default"] = {"from": "voice_block"}
+        fields.append(f)
+    return json.dumps({"fields": fields, "sections": settings.SECTIONS,
+                       "restart": settings.RESTART}, indent=1, ensure_ascii=False) + "\n"
+
+
 def pages():
     real = ui._with_meta
     ui._with_meta = lambda token, page, boot="", look=False: page
     try:
-        return {name: render() for name, (render, _) in PAGES.items()}
+        out = {name: render() for name, (render, _) in PAGES.items()}
     finally:
         ui._with_meta = real
+    out["settings_fields.json"] = settings_schema()
+    return out
 
 
 def manifest(rendered):
     return {name: {"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                   "look": PAGES[name][1]}
+                   "look": PAGES[name][1] if name in PAGES else None}
             for name, text in sorted(rendered.items())}
 
 

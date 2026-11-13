@@ -7,6 +7,10 @@
     "sha256": "0f47d4351eefbbe0fac2516bceec3b206bb7eae70348ad1adef78c99bda11a54",
     "look": false
   },
+  "settings_fields.json": {
+    "sha256": "caf477297b17ff6fd258b252e90791caf2fdc38fc0178634b26aeed9ff2871da",
+    "look": null
+  },
   "shell.html": {
     "sha256": "73f5e0baabb686fbfb772bf98219e642eed3d9b0599de725c4737b66fb0f9a6a",
     "look": true

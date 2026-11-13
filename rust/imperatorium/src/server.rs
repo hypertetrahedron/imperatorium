@@ -23,7 +23,8 @@ use sha1::{Digest, Sha1};
 use crate::pyish::{json_dumps_sorted, truthy};
 use crate::registry::Row;
 use crate::{
-    activity, conversation, costs, history, paths, procs, registry, sessions, sessionstat, ui,
+    activity, conversation, costs, history, paths, procs, registry, sessions, sessionstat,
+    settings, ui,
 };
 
 pub struct Shared {
@@ -676,6 +677,47 @@ impl Shared {
             ("GET", "/matrix") => (200, self.page(ui::MATRIX, "", true)),
             ("GET", "/settings") => (200, self.page(ui::SETTINGS, &self.window_token, false)),
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
+            ("GET", "/api/events") => {
+                // store.events(100): the newest hundred, newest first.
+                let st = registry::state();
+                let all = st
+                    .get("events")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let recent: Vec<Value> = all.iter().rev().take(100).cloned().collect();
+                (200, Body::Json(json!({"events": recent})))
+            }
+            ("GET", "/api/queue") => {
+                // store.queued(): every session that has something queued.
+                let st = registry::state();
+                let q: Map<String, Value> = st
+                    .get("queue")
+                    .and_then(Value::as_object)
+                    .map(|q| {
+                        q.iter()
+                            .filter(|(_, v)| truthy(Some(v)))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (200, Body::Json(json!({"queue": q})))
+            }
+            ("GET", "/api/prefs") => {
+                let st = registry::state();
+                let prefs = st
+                    .get("prefs")
+                    .filter(|p| p.is_object() || p.is_array())
+                    .cloned()
+                    .unwrap_or(json!({}));
+                (200, Body::Json(json!({"prefs": prefs})))
+            }
+            ("GET", "/api/decisions") => (200, Body::Json(json!({"decisions": decisions(60)}))),
+            ("GET", "/api/quick") => (
+                200,
+                Body::Json(json!({"key": settings::value(&self.config, "quick.key"),
+                                  "phrases": settings::value(&self.config, "quick.phrases"), "ok": true})),
+            ),
             ("GET", "/api/health") => (
                 200,
                 Body::Json(
@@ -688,6 +730,24 @@ impl Shared {
             _ => (404, Body::Json(json!({"error": "no such path"}))),
         }
     }
+}
+
+/// Control.decisions: the permission hook's recent verdicts, newest first,
+/// from the decisions.jsonl beside the state file.
+fn decisions(limit: usize) -> Vec<Value> {
+    let Ok(text) = std::fs::read_to_string(paths::state_dir().join("decisions.jsonl")) else {
+        return vec![];
+    };
+    // readlines() keeps each line's end; the last `limit` of them.
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let start = lines.len().saturating_sub(limit);
+    lines[start..]
+        .iter()
+        .rev()
+        .map(|l| crate::pyish::strip(l))
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .collect()
 }
 
 const STREAM_SECONDS: f64 = 600.0;

@@ -38,6 +38,7 @@ mod registry;
 mod server;
 mod sessions;
 mod sessionstat;
+mod settings;
 mod ui;
 
 use std::io::{BufRead, Write};
