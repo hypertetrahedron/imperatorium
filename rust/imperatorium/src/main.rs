@@ -35,6 +35,7 @@ mod inbox;
 mod live;
 mod matrix;
 mod modlink;
+mod notify;
 mod paths;
 mod pending;
 mod policy;

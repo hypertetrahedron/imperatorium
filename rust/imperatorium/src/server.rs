@@ -28,6 +28,10 @@ use crate::{
 };
 
 pub struct Shared {
+    /// Pushes and speech: counters, and what is scheduled.
+    notifier: Arc<crate::notify::Notifier>,
+    /// This Shared, for timers that outlive the request that set them.
+    me: std::sync::OnceLock<std::sync::Weak<Shared>>,
     /// The Imperatorium mod in each session: its beats and the prompts
     /// waiting for it. Only with a store of our own: the token lives beside
     /// the state, and the live dispatcher's is not ours to answer for.
@@ -182,6 +186,8 @@ impl Shared {
         Shared {
             window_token: token_urlsafe(24),
             pending: Default::default(),
+            notifier: Default::default(),
+            me: Default::default(),
             modlink: store.as_ref().and_then(|s| {
                 let dir = s
                     .path
@@ -374,6 +380,7 @@ impl Shared {
                         if truthy(token.as_ref()) {
                             store.register(&key, token.as_ref(), &Map::new());
                         }
+                        self.announce(&key, c);
                     }
                     None => store.register(&key, token.as_ref(), &meta),
                 }
@@ -407,7 +414,10 @@ impl Shared {
                     json!(crate::pyish::take(&detail_s, 280)),
                 );
                 match caption {
-                    Some(c) => store.raise_attention(&key, c, "failure", &meta),
+                    Some(c) => {
+                        store.raise_attention(&key, c, "failure", &meta);
+                        self.announce(&key, c);
+                    }
                     None => store.register(&key, None, &meta),
                 }
                 if truthy(token.as_ref()) {
@@ -435,9 +445,17 @@ impl Shared {
                     &event.to_lowercase(),
                     json!({"cwd": cwd, "summary": crate::pyish::take(&summary, 280)}),
                 );
-                // Python also schedules the minute-later idle check here: it
-                // comes with notifications.
                 if event == "Stop" {
+                    let stop_at = meta.get("last_event_at").cloned().unwrap_or(Value::Null);
+                    if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
+                        let (k, at) = (key.clone(), stop_at);
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_secs_f64(IDLE_AFTER));
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                me.idle_check(&k, &at)
+                            }));
+                        });
+                    }
                     // The turn is over: one queued prompt per turn.
                     if let Some(id) = self.drain(store, &key) {
                         return json!({"ok": true, "delivered": id});
@@ -452,17 +470,14 @@ impl Shared {
     /// come with the notifier's port; the event is recorded as Python does.
     fn budget_crossed(&self, crossing: &Value) {
         let window = crossing["window"].as_str().unwrap_or("");
-        let label = match window {
-            "five_hour" => "5-hour",
-            "seven_day" => "weekly",
-            "spend_limit" => "spend",
-            other => other,
+        // Pushed and spoken only by a dispatcher with a store of its own:
+        // the read-only shadow must never buzz a phone.
+        let channels = if self.store.is_some() {
+            self.notify_enabled()
+        } else {
+            vec![]
         };
-        let used = crossing["used"].as_f64().unwrap_or(0.0);
-        let mut text = format!("{label} limit at {}%", crate::pyish::py_round(used));
-        if let Some(r) = crossing["resets_at"].as_f64().filter(|r| *r != 0.0) {
-            text.push_str(&format!(", resets {}", paths::local_hm(r)));
-        }
+        let text = self.notifier.budget(&channels, crossing);
         if let Some(store) = &self.store {
             let e = json!({"kind": "budget", "summary": text, "window": window, "used": crossing["used"]});
             store.add_event(e.as_object().unwrap().clone());
@@ -762,6 +777,79 @@ impl Shared {
             }
             _ => json!({"ok": false, "error": "no such path"}),
         }
+    }
+
+    /// Control._idle_check: the `idle_prompt` Claude Code no longer sends. A
+    /// minute after Stop, a session that is idle, has had no hook since and
+    /// has nothing running is waiting for you. True when it raised it.
+    fn idle_check(&self, key: &str, stop_at: &Value) -> bool {
+        let Some(store) = &self.store else {
+            return false;
+        };
+        let rec = store.session(key).unwrap_or_default();
+        if rec.get("last_event_at") != Some(stop_at) || truthy(rec.get("attention_since")) {
+            return false;
+        }
+        self.invalidate();
+        let Some(row) = self.row(key) else {
+            return false;
+        };
+        if row.get("status").and_then(Value::as_str) != Some("idle") {
+            return false;
+        }
+        // Background work holds idle_prompt back; a pending wakeup is not
+        // work, but the session will take its next turn by itself.
+        let work = row.get("work").cloned().unwrap_or(json!({}));
+        let busy = |k: &str| work.get(k).is_some_and(|v| truthy(Some(v)));
+        if registry::still_running(&row, Some(&json!("idle_prompt")))
+            || truthy(row.get("shell_processes"))
+            || ["agents", "shells", "monitors", "wakeups"]
+                .iter()
+                .any(|k| busy(k))
+        {
+            return false;
+        }
+        let caption = "waiting for you";
+        let mut meta = Map::new();
+        meta.insert("last_notification".into(), json!("idle_prompt"));
+        store.raise_attention(key, caption, "notification", &meta);
+        self.announce(key, caption);
+        self.invalidate();
+        let e = json!({"kind": "idle_prompt", "session_id": key,
+                       "cwd": rec.get("cwd").cloned().unwrap_or(Value::Null),
+                       "summary": "raised by the dispatcher"});
+        store.add_event(e.as_object().unwrap().clone());
+        true
+    }
+
+    /// Control._announce: tell the notifier a session started waiting,
+    /// named by its project, which reads better aloud than `gem-trip-4`.
+    fn announce(&self, key: &str, caption: &str) {
+        let (Some(store), Some(me)) = (
+            &self.store,
+            self.me.get().and_then(std::sync::Weak::upgrade),
+        ) else {
+            return;
+        };
+        let rec = store.session(key).unwrap_or_default();
+        let since = rec.get("attention_since").cloned().unwrap_or(Value::Null);
+        let cwd = rec
+            .get("cwd")
+            .filter(|v| truthy(Some(v)))
+            .map(crate::pyish::py_str)
+            .unwrap_or_default();
+        let base = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or("").to_string();
+        let name = rec
+            .get("name")
+            .filter(|v| truthy(Some(v)))
+            .map(crate::pyish::py_str)
+            .or_else(|| Some(base(cwd.trim_end_matches(['/', '\\']))).filter(|b| !b.is_empty()));
+        let project = Some(base(cwd.replace('\\', "/").trim_end_matches('/')))
+            .filter(|b| !b.is_empty())
+            .or(name);
+        let owner: Arc<dyn crate::notify::Waiting> = me;
+        self.notifier
+            .attention(owner, key, project, Some(caption.to_string()), since);
     }
 
     /// Control.mod_beat: what the session's mod says it is doing, its usage
@@ -1477,7 +1565,11 @@ impl Shared {
             if extra.is_empty() {
                 continue;
             }
-            overlay(row, extra);
+            if overlay(row, extra) {
+                if let Some(store) = &self.store {
+                    store.clear_attention(&sid);
+                }
+            }
             titled.push(i);
         }
         let ids: Vec<String> = titled
@@ -1841,8 +1933,8 @@ impl Shared {
                        "configured": configured}),
             );
         }
-        out.insert("last_error".into(), Value::Null);
-        out.insert("sent".into(), json!(0));
+        out.insert("last_error".into(), json!(self.notifier.last_error()));
+        out.insert("sent".into(), json!(self.notifier.sent()));
         Value::Object(out)
     }
 
@@ -2358,6 +2450,31 @@ const STREAM_EVERY: f64 = 5.0;
 const STREAM_MIN_GAP: f64 = 2.0;
 const STREAM_KEEPALIVE: f64 = 15.0;
 
+/// dispatcher.IDLE_AFTER: how long after Stop the idle check looks.
+const IDLE_AFTER: f64 = 60.0;
+
+impl crate::notify::Waiting for Shared {
+    fn channels(&self) -> crate::notify::Channels {
+        self.notify_enabled()
+    }
+
+    /// Control._still_waiting: through the session list first, which is
+    /// where a prompt answered at the terminal is noticed.
+    fn still_waiting(&self, key: &str, since: &Value) -> bool {
+        self.invalidate();
+        let _ = self.sessions(2.0);
+        let Some(store) = &self.store else {
+            return false;
+        };
+        truthy(Some(since))
+            && store
+                .session(key)
+                .and_then(|r| r.get("attention_since").cloned())
+                .as_ref()
+                == Some(since)
+    }
+}
+
 /// matrix.active: whether a session gets a tile - its process is up and it
 /// has not ended.
 fn matrix_active(row: &Row) -> bool {
@@ -2398,7 +2515,9 @@ fn finished_at(row: &Row) -> f64 {
 /// Control._overlay: fold what hooks recorded into a row. Read-only here:
 /// where Python would also clear stale attention in the store, this only
 /// leaves it off the row (Python's next snapshot does the same).
-fn overlay(row: &mut Row, extra: &Map<String, Value>) {
+/// Control._overlay. True when the recorded attention is settled and the
+/// store should clear it (Python clears it right there).
+fn overlay(row: &mut Row, extra: &Map<String, Value>) -> bool {
     for field in [
         "socket",
         "name",
@@ -2417,16 +2536,19 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>) {
     }
     let dispatchable = |row: &Row| truthy(row.get("socket")) && truthy(row.get("token"));
     if registry::finished(row) {
+        // A finished background job waits for nobody, whatever its last
+        // hook said.
         let d = dispatchable(row);
         row.insert("dispatchable".into(), json!(d));
-        return;
+        return truthy(extra.get("attention_since"));
     }
     let since = extra.get("attention_since").filter(|v| truthy(Some(v)));
     let kind = extra.get("attention_kind").and_then(Value::as_str);
     let failure = kind == Some("failure");
     let stale = !failure && registry::moved_on(row, since.and_then(Value::as_f64));
+    let mut clear = false;
     if since.is_some() && stale {
-        // cleared
+        clear = true;
     } else if since.is_some()
         && !failure
         && registry::still_running(row, extra.get("last_notification"))
@@ -2449,6 +2571,7 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>) {
     }
     let d = dispatchable(row);
     row.insert("dispatchable".into(), json!(d));
+    clear
 }
 
 /// A response body: a value to serialise, or JSON text already assembled.
@@ -2544,6 +2667,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
         }
     };
     let shared = Arc::new(Shared::new(home, state));
+    let _ = shared.me.set(Arc::downgrade(&shared));
     if shared.store.is_some() {
         let sweeper = Arc::clone(&shared);
         std::thread::spawn(move || loop {
