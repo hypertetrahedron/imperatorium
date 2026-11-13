@@ -1735,6 +1735,124 @@ impl Shared {
         best
     }
 
+    /// Control.focus_row: raise the window this session is in. One
+    /// WindowsTerminal.exe hosts every session, so the process tree finds
+    /// the terminal and the session's title picks its window. Three routes,
+    /// best first, and the answer says which was used.
+    fn focus_row(&self, store: &crate::store::Store, row: &Row) -> Option<Value> {
+        let sid = row.get("sessionId").and_then(Value::as_str).unwrap_or("").to_string();
+        let pid_v = row.get("pid").cloned().unwrap_or(Value::Null);
+        let pid = crate::pyish::py_number(row.get("pid")).map(|f| f as u32).unwrap_or(0);
+        let info = crate::sessions::info_json(&sid);
+        let want = [info.get("custom_title"), info.get("summary")]
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .find(|t| !t.is_empty())
+            .unwrap_or("")
+            .to_string();
+        let host = crate::winfocus::terminal_for(pid);
+        let windows = host.map(|h| crate::winfocus::titled_windows(Some(h))).unwrap_or_default();
+        let hwnd = if want.is_empty() { None } else { crate::winfocus::match_title(&want, &windows) };
+        if let Some(hwnd) = hwnd.filter(|h| crate::winfocus::focus_hwnd(*h)) {
+            let meta = json!({"window_hwnd": hwnd, "window_title": want});
+            store.register(&sid, None, meta.as_object().unwrap());
+            return Some(json!({"ok": true, "action": "focus", "session": sid, "pid": pid_v,
+                               "how": "title", "title": want}));
+        }
+        // Its tab is not the one in front, so no title matches; a tab stays
+        // in the window it opened in, so the window it was last seen in is
+        // where it still is, just behind another tab.
+        let remembered = store
+            .session(&sid)
+            .and_then(|r| r.get("window_hwnd").and_then(Value::as_i64))
+            .filter(|h| *h != 0);
+        if let Some(h) = remembered {
+            if host.is_some() && crate::winfocus::owner_pid(h as isize) == host && crate::winfocus::focus_hwnd(h as isize) {
+                return Some(json!({"ok": true, "action": "focus", "session": sid, "pid": pid_v,
+                                   "how": "remembered", "title": want,
+                                   "note": format!("its tab is not in front - look for {}",
+                                                   crate::pyish::py_repr(&json!(want)))}));
+            }
+        }
+        if crate::winfocus::focus_pid(pid) {
+            return Some(json!({"ok": true, "action": "focus", "session": sid, "pid": pid_v,
+                               "how": "terminal", "title": want,
+                               "note": "raised its terminal; could not tell its window apart"}));
+        }
+        None
+    }
+
+    /// Control.focus: put a project's session in front, or open one when
+    /// none is running, so a button press always does something.
+    fn focus(&self, store: &crate::store::Store, project: Option<&Value>, session_id: Option<&Value>) -> Value {
+        let rows = self.sessions(2.0);
+        let mut row: Option<Row> = None;
+        let mut path: Option<String> = None;
+        let gone = |name: &Value, host: &Value| {
+            json!({"ok": false, "error": format!("{} is on {} - there is no window here to raise",
+                crate::pyish::py_str(name), crate::pyish::py_str(host))})
+        };
+        if truthy(session_id) {
+            let sid = session_id.unwrap();
+            row = rows.iter().find(|r| r.get("sessionId") == Some(sid)).cloned();
+            if let Some(r) = &row {
+                if truthy(r.get("remote")) {
+                    // Its pid is a process on another machine.
+                    let name = crate::pyish::or(r.get("name"), Some(sid)).unwrap().clone();
+                    return gone(&name, r.get("host").unwrap_or(&Value::Null));
+                }
+            }
+            path = row.as_ref().and_then(|r| r.get("cwd").and_then(Value::as_str).map(str::to_string));
+        }
+        if row.is_none() {
+            if !truthy(project) {
+                return json!({"ok": false, "error": "no project or session named"});
+            }
+            let project = project.unwrap();
+            let res = crate::projects::resolve(&crate::pyish::py_str(project), &self.catalogue());
+            if res["confidence"] == "none" {
+                return json!({"ok": false, "error": format!("no project matched {}", crate::pyish::py_repr(project))});
+            }
+            if truthy(res["match"].get("host")) {
+                return gone(&res["match"]["name"], &res["match"]["host"]);
+            }
+            let p = res["match"]["path"].as_str().unwrap_or("").to_string();
+            let want = paths::abs_normcase(&p);
+            let mut live: Vec<Row> = rows
+                .iter()
+                .filter(|r| {
+                    let cwd = r.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty());
+                    cwd.is_some_and(|c| paths::abs_normcase(c) == want) && truthy(r.get("pid"))
+                })
+                .cloned()
+                .collect();
+            // Whatever is asking for a human wins; otherwise the busy one.
+            live.sort_by_key(|r| {
+                (!truthy(r.get("attention")), r.get("status").and_then(Value::as_str) != Some("busy"))
+            });
+            row = live.into_iter().next();
+            path = Some(p);
+        }
+        if let Some(r) = row.as_ref().filter(|r| truthy(r.get("pid"))) {
+            if let Some(got) = self.focus_row(store, r) {
+                return got;
+            }
+            // Running, so opening a window would start a second session on
+            // the same project - worse than saying it could not be raised.
+            return json!({"ok": false, "error": "could not raise its window",
+                          "session": r.get("sessionId").cloned().unwrap_or(Value::Null),
+                          "pid": r.get("pid").cloned().unwrap_or(Value::Null)});
+        }
+        let Some(path) = path.filter(|p| !p.is_empty()) else {
+            return json!({"ok": false, "error": "nothing to focus and nowhere to open"});
+        };
+        match crate::deeplink::launch(&path, "") {
+            Err(e) => json!({"ok": false, "error": e}),
+            Ok(url) => json!({"ok": true, "action": "launch", "url": url}),
+        }
+    }
+
     /// Control.run_command: type slash command `text` at the row's prompt.
     fn run_command(&self, store: &crate::store::Store, row: &Row, text: &str) -> Value {
         if let Some(why) = crate::slash::refusal(text) {
@@ -2004,6 +2122,15 @@ impl Shared {
                     return (400, Body::Json(json!({"error": "expected an object"})));
                 }
                 (200, Body::Json(self.dispatch(store, p, from_window)))
+            }
+            "/api/focus" => {
+                if object.is_none() {
+                    return (400, Body::Json(json!({"error": "expected an object"})));
+                }
+                let Some(store) = &self.store else {
+                    return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
+                };
+                (200, Body::Json(self.focus(store, p.get("project"), p.get("session_id"))))
             }
             "/api/typed" => {
                 if object.is_none() {

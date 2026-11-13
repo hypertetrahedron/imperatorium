@@ -44,6 +44,32 @@ pub fn split_ws(s: &str) -> Vec<&str> {
     s.split(is_space).filter(|t| !t.is_empty()).collect()
 }
 
+/// `str.casefold()`: lowercasing per character (no final-sigma context,
+/// as casefold has none) plus the full foldings Unicode adds on top of
+/// lowercase that plausibly occur in a title.
+pub fn casefold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\u{df}' | '\u{1e9e}' => out.push_str("ss"),
+            '\u{17f}' => out.push('s'),
+            '\u{3c2}' => out.push('\u{3c3}'),
+            '\u{fb00}' => out.push_str("ff"),
+            '\u{fb01}' => out.push_str("fi"),
+            '\u{fb02}' => out.push_str("fl"),
+            '\u{fb03}' => out.push_str("ffi"),
+            '\u{fb04}' => out.push_str("ffl"),
+            '\u{fb05}' | '\u{fb06}' => out.push_str("st"),
+            '\u{149}' => out.push_str("\u{2bc}n"),
+            '\u{3c9}' | '\u{3a9}' | '\u{2126}' => out.push('\u{3c9}'),
+            '\u{b5}' => out.push('\u{3bc}'),
+            '\u{1e9b}' => out.push('\u{1e61}'),
+            _ => out.extend(c.to_lowercase()),
+        }
+    }
+    out
+}
+
 /// `s[:n]`: the first n code points.
 pub fn take(s: &str, n: usize) -> String {
     s.chars().take(n).collect()

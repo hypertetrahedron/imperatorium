@@ -242,6 +242,23 @@ def main():
             if got["py"] != got["rs"]:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
 
+        # Focus, only where nothing is raised or opened: a match would take
+        # the keyboard focus from whoever is at this machine (focus_compare
+        # covers the matching and the window enumeration).
+        focus_cases = [
+            ("focus, nothing named", {}),
+            ("focus, no such session", {"session_id": "nobody"}),
+            ("focus, nothing like it", {"project": "zzqqxx"}),
+            ("focus, session then nothing", {"session_id": "nobody", "project": "zzqqxx"}),
+            ("focus, not an object", ["work"]),
+        ]
+        for label, body in focus_cases:
+            got = {side: json.dumps(list(post(port, "/api/focus", body)), sort_keys=True)
+                   for side, port in (("py", PY_PORT), ("rs", RS_PORT))}
+            steps.append((label, json.loads(got["py"])[1]))
+            if got["py"] != got["rs"]:
+                failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
+
         time.sleep(1.5)  # a launch is fire-and-forget: let the last ones log
         for label, answer in steps:
             print("  %-28s %s" % (label, answer.get("error") or "ok: %s" % {

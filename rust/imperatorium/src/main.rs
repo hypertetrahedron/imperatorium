@@ -56,6 +56,7 @@ mod store;
 mod taskout;
 mod ui;
 mod usage;
+mod winfocus;
 
 use std::io::{BufRead, Write};
 
@@ -177,6 +178,7 @@ fn main() {
         Some("settings-check") => settings::check_lines(),
         Some("slash-check") => slash::check_lines(),
         Some("projects-check") => projects::check_lines(),
+        Some("focus-check") => winfocus::check_lines(),
         // Internal: closing.rs types into a session's console through this.
         Some("type-into") => closing::type_into_main(&args[1..]),
         Some("sessions") => sessions_main(&args),

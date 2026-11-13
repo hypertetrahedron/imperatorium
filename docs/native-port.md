@@ -301,8 +301,18 @@ can reach a real one:
   Claude window; the URL it opens is covered by the differential. Remote
   projects answer "not ported yet" until phase 4.
 
-Not ported yet: focus (Win32), herdr-core hosting (hc terminals: refused
-as not ported), dictation, remote hosts.
+- `/api/focus` (winfocus.rs: title normalising and matching, the window
+  enumeration, the terminal a session sits in, SetForegroundWindow with the
+  AttachThreadInput borrow; `pyish::casefold`). `focus_compare.py`: 1,007
+  made-up titles and matches, then the read-only half on this machine's
+  real windows (20 windows, their owners, the terminal of each of 5
+  running `claude`) - identical. `session_twin.py`, 48 actions: focus's
+  refusals. Never run here: an actual raise, which would take the keyboard
+  focus from whoever is at the machine - the first press of Focus on a
+  binary build is its test.
+
+Not ported yet: herdr-core hosting (hc terminals: refused as not ported),
+dictation, remote hosts.
 
 ## Building
 
