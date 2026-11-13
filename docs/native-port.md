@@ -253,12 +253,21 @@ can reach a real one:
 - `_overlay` now clears settled attention in a store of its own, as Python
   does.
 
+- Saving Settings (settings.rs: check for all 15 field types, apply, the
+  atomic save with `.bak`, `json.dumps(indent=2)` byte for byte, restarts;
+  applied live only where Python applies it). `settings_compare.py`: 8,424
+  cases, every field against Python's `check`, identical (it found
+  `py_float` too lenient with underscores). `settings_twin.py`: 8 saves
+  into temporary homes, answers / config.json / .bak / the GETs after
+  identical. The shadow refuses to save.
+
 Not ported yet: slash commands typed into a terminal and Send As Typed
 (keystrokes into a console: `/api/typed`, a queued `/command`, both
 refused as "not ported yet"), close / resume / new / fork (processes and
 terminals), `/api/dispatch` (starts sessions), worktree merge/PR/discard,
-saving Settings (writes config.json), focus (Win32), herdr-core hosting,
-dictation, remote hosts.
+focus (Win32), herdr-core hosting, dictation, remote hosts. All of these
+start, stop or type into real processes, so testing them needs throwaway
+`claude` sessions (or terminals) of their own - a decision for the user.
 
 ## Building
 
