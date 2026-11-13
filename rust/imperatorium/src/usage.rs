@@ -199,7 +199,7 @@ struct Inner {
 
 pub struct Usage {
     inner: Mutex<Inner>,
-    pub thresholds: Vec<f64>,
+    thresholds: Mutex<Vec<f64>>,
     /// limits.json, written when `writes` (a store of our own).
     path: Option<PathBuf>,
     writes: bool,
@@ -211,12 +211,22 @@ fn fkey(v: Option<f64>) -> String {
 }
 
 impl Usage {
+    pub fn thresholds(&self) -> Vec<f64> {
+        self.thresholds.lock().unwrap().clone()
+    }
+
+    /// A saved budget.thresholds applies at once, sorted, as in Python.
+    pub fn set_thresholds(&self, mut t: Vec<f64>) {
+        t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        *self.thresholds.lock().unwrap() = t;
+    }
+
     pub fn new(thresholds: Vec<f64>, path: Option<PathBuf>, writes: bool, now: f64) -> Self {
         let mut t = thresholds;
         t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let u = Usage {
             inner: Mutex::new(Inner::default()),
-            thresholds: t,
+            thresholds: Mutex::new(t),
             path,
             writes,
         };
@@ -275,7 +285,7 @@ impl Usage {
             );
             inner.window.insert(name.clone(), resets);
             inner.history.insert(name.clone(), vec![]);
-            for t in &self.thresholds {
+            for t in &self.thresholds() {
                 if used >= *t {
                     inner
                         .fired
@@ -344,7 +354,7 @@ impl Usage {
                     hist.drain(..cut);
                 }
             }
-            for t in self.thresholds.clone() {
+            for t in self.thresholds() {
                 let mark = (name.clone(), fkey(window), crate::pyish::float_repr(t));
                 if used >= t && !inner.fired.contains(&mark) {
                     inner.fired.insert(mark);
@@ -406,7 +416,7 @@ impl Usage {
             })
             .collect();
         let has = !out.is_empty();
-        json!({"limits": out, "thresholds": self.thresholds, "plan": plan(&seen, has)})
+        json!({"limits": out, "thresholds": self.thresholds(), "plan": plan(&seen, has)})
     }
 }
 

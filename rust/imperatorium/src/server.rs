@@ -56,7 +56,12 @@ pub struct Shared {
     /// Handed to the pages when they load (ui._with_meta); never written down.
     window_token: String,
     history: history::Index,
-    config: Value,
+    /// config.json as this process applies it: what was there at start, with
+    /// the settings a save applies at once (Control._apply_settings).
+    config_live: std::sync::RwLock<Value>,
+    /// Processes a saved setting waits on (Control._restart_needed).
+    restart_needed: Mutex<std::collections::BTreeSet<String>>,
+    settings_lock: Mutex<()>,
     boot: String,
     /// The dispatcher's snapshot cache: (when, rows), the rows still holding
     /// their tokens - only `public()` copies leave the process.
@@ -233,7 +238,9 @@ impl Shared {
             tallies: Mutex::new(HashMap::new()),
             home: home.map(str::to_string),
             history: history::Index::new(),
-            config: load_config(home),
+            config_live: std::sync::RwLock::new(load_config(home)),
+            restart_needed: Default::default(),
+            settings_lock: Default::default(),
             boot,
             snap: Mutex::new(None),
             stats: sessionstat::Reader::new(),
@@ -701,7 +708,7 @@ impl Shared {
             "complete".into(),
             spent.get("complete").cloned().unwrap_or(json!(true)),
         );
-        let always = truthy(Some(&settings::value(&self.config, "chat.matrix_status")));
+        let always = truthy(Some(&settings::value(&self.config(), "chat.matrix_status")));
         json!({"tiles": tiles, "now": now, "spend": spend, "status_always": always})
     }
 
@@ -1013,6 +1020,141 @@ impl Shared {
                 f.write_all(format!("{}\n", crate::pyish::json_dumps(&record, false)).as_bytes());
         }
         json!({"verdict": got.verdict, "reason": got.reason, "tier": got.tier})
+    }
+
+    /// The config as applied now.
+    fn config(&self) -> Value {
+        self.config_live.read().unwrap().clone()
+    }
+
+    /// Control.save_settings: check every change, write config.json once,
+    /// and apply at once what can be applied; the rest waits for a restart,
+    /// which the answer names.
+    fn save_settings(&self, changes: Option<&Value>) -> Value {
+        let Some(changes) = changes.and_then(Value::as_object).filter(|c| !c.is_empty()) else {
+            return json!({"ok": false, "error": "nothing to save"});
+        };
+        let path = paths::config_home(self.home.as_deref()).join("config.json");
+        let need = {
+            let _held = self.settings_lock.lock().unwrap();
+            let cfg = match settings::load(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return json!({"ok": false, "error": format!("config.json cannot be read: {e}")})
+                }
+            };
+            let new = match settings::apply(&cfg, changes) {
+                Ok(n) => n,
+                Err(errors) => {
+                    return json!({"ok": false, "errors": errors, "error": "some values were not accepted"})
+                }
+            };
+            if let Err(e) = settings::save(&path, &new) {
+                return json!({"ok": false, "error": format!("config.json cannot be written: {e}")});
+            }
+            self.apply_settings(&new, changes);
+            let need = settings::restarts(changes.keys());
+            self.restart_needed
+                .lock()
+                .unwrap()
+                .extend(need.iter().cloned());
+            need
+        };
+        let mut out = self.api_settings();
+        let mut saved: Vec<&String> = changes.keys().collect();
+        saved.sort();
+        out["saved"] = json!(saved);
+        out["restart"] = json!(need);
+        out
+    }
+
+    /// Control._apply_settings: what the running dispatcher takes without a
+    /// restart. Everything else keeps its value from start.
+    fn apply_settings(&self, new: &Value, changes: &Map<String, Value>) {
+        const NOW: &[&str] = &[
+            "chat.send_as_typed",
+            "chat.cold_cache_tokens",
+            "terminal.host",
+            "terminal.hc_session",
+            "chat.matrix_status",
+            "quick.key",
+            "quick.phrases",
+            "budget.thresholds",
+            "list.hide_finished_hours",
+        ];
+        let mut cfg = self.config_live.write().unwrap();
+        let mut copy = |key: &str| {
+            let parts: Vec<&str> = key.split('.').collect();
+            let (last, path) = parts.split_last().unwrap();
+            let mut node = &mut *cfg;
+            for part in path {
+                if !node.get(*part).is_some_and(Value::is_object) {
+                    node[*part] = json!({});
+                }
+                node = node.get_mut(*part).unwrap();
+            }
+            match settings::get(new, key) {
+                Some(v) => node[*last] = v.clone(),
+                None => {
+                    node.as_object_mut().unwrap().shift_remove(*last);
+                }
+            }
+        };
+        for key in changes.keys() {
+            if NOW.contains(&key.as_str()) {
+                copy(key);
+            }
+        }
+        // The text sizes and highlights are redrawn from the new file whole.
+        if changes.keys().any(|k| {
+            k == "chat.font_size" || k == "chat.matrix_font_size" || k.starts_with("highlight.")
+        }) {
+            copy("chat.font_size");
+            copy("chat.matrix_font_size");
+            copy("highlight");
+        }
+        if changes.keys().any(|k| k.starts_with("background.")) {
+            copy("background");
+        }
+        // The notifier always takes its channels from the new file.
+        copy("notify");
+        drop(cfg);
+        let flips: Map<String, Value> = changes
+            .iter()
+            .filter(|(k, _)| *k == "notify.ntfy.enabled" || *k == "notify.speak.enabled")
+            .map(|(k, v)| {
+                (
+                    k.split('.').nth(1).unwrap().to_string(),
+                    json!(truthy(Some(v))),
+                )
+            })
+            .collect();
+        if let (Some(store), false) = (&self.store, flips.is_empty()) {
+            // Kept where /api/notify keeps its switches, which win at start.
+            let mut saved = self
+                .state()
+                .get("prefs")
+                .and_then(|x| x.get("notify"))
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            saved.extend(flips);
+            let mut change = Map::new();
+            change.insert("notify".into(), Value::Object(saved));
+            store.set_prefs(&change);
+        }
+        if changes.contains_key("budget.thresholds") {
+            let t: Vec<f64> = new
+                .get("budget")
+                .and_then(|b| b.get("thresholds"))
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(crate::pyish::py_float).collect())
+                .unwrap_or_default();
+            self.usage.set_thresholds(t);
+        }
+        if changes.contains_key("list.hide_finished_hours") {
+            self.invalidate();
+        }
     }
 
     /// Control.park_wait: how long a parked request is held. A background
@@ -1338,6 +1480,32 @@ impl Shared {
         }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p))),
+            "/api/settings" => {
+                if self.store.is_none() {
+                    return (
+                        200,
+                        Body::Json(
+                            json!({"ok": false, "error": "a read-only shadow changes nothing"}),
+                        ),
+                    );
+                }
+                // Turning Send As Typed on lets a message speak as you, so
+                // only the Settings window may do it.
+                let ch = p.get("changes");
+                if ch
+                    .and_then(|c| c.get("chat.send_as_typed"))
+                    .is_some_and(|v| truthy(Some(v)))
+                    && !from_window
+                {
+                    return (
+                        200,
+                        Body::Json(json!({"ok": false,
+                        "errors": {"chat.send_as_typed": "can only be turned on from the Settings window"},
+                        "error": "some values were not accepted"})),
+                    );
+                }
+                (200, Body::Json(self.save_settings(ch)))
+            }
             "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/queue" => {
                 let Some(store) = &self.store else {
                     return (
@@ -1611,7 +1779,7 @@ impl Shared {
             let key = r.get("key").and_then(Value::as_str).unwrap_or("");
             !(dismissed.contains_key(key) && !truthy(r.get("pid")))
         });
-        let hours = get(&self.config, "list.hide_finished_hours")
+        let hours = get(&self.config(), "list.hide_finished_hours")
             .filter(|v| v.is_number())
             .and_then(Value::as_f64)
             .filter(|h| *h > 0.0)
@@ -1761,7 +1929,7 @@ impl Shared {
         );
         out.insert(
             "cold_tokens".into(),
-            get(&self.config, "chat.cold_cache_tokens")
+            get(&self.config(), "chat.cold_cache_tokens")
                 .cloned()
                 .unwrap_or(json!(0)),
         );
@@ -1905,7 +2073,7 @@ impl Shared {
             .and_then(|p| p.get("notify"))
             .cloned()
             .unwrap_or(json!({}));
-        settings::notify_channels(&self.config)
+        settings::notify_channels(&self.config())
             .into_iter()
             .map(|(name, cfg)| {
                 let on = match prefs.get(name) {
@@ -1942,7 +2110,7 @@ impl Shared {
     /// folder the checkout sits in) and the folders sessions run in.
     fn catalogue(&self) -> Vec<Value> {
         let configured: Vec<String> = self
-            .config
+            .config()
             .get("roots")
             .and_then(Value::as_array)
             .map(|r| {
@@ -2271,15 +2439,20 @@ impl Shared {
         }
         out["ok"] = json!(true);
         out["path"] = json!(path.to_string_lossy());
-        out["waiting"] = json!([]);
-        out["notify_error"] = Value::Null;
+        out["waiting"] = json!(self
+            .restart_needed
+            .lock()
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>());
+        out["notify_error"] = json!(self.notifier.last_error());
         out["shortcuts"] = settings::schema()["shortcuts"].clone();
         out
     }
 
     fn page(&self, page: &str, token: &str, with_look: bool) -> Body {
         let drawn = if with_look {
-            Some(look(&self.config))
+            Some(look(&self.config()))
         } else {
             None
         };
@@ -2410,14 +2583,14 @@ impl Shared {
             ("GET", "/api/notify") => (200, Body::Json(self.api_notify())),
             ("GET", "/api/quick") => (
                 200,
-                Body::Json(json!({"key": settings::value(&self.config, "quick.key"),
-                                  "phrases": settings::value(&self.config, "quick.phrases"), "ok": true})),
+                Body::Json(json!({"key": settings::value(&self.config(), "quick.key"),
+                                  "phrases": settings::value(&self.config(), "quick.phrases"), "ok": true})),
             ),
             ("GET", "/api/health") => (
                 200,
                 Body::Json(
                     json!({"ok": true, "pid": std::process::id(), "boot": self.boot,
-                                  "look": look(&self.config)}),
+                                  "look": look(&self.config())}),
                 ),
             ),
             ("GET", "/api/conversation") => self.api_conversation(&q),

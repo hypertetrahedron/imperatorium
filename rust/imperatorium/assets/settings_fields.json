@@ -803,5 +803,29 @@
    "keys": "Ctrl+S",
    "what": "save"
   }
+ ],
+ "reserved_keys": {
+  "ctrl+enter": "Background",
+  "alt+enter": "Queue",
+  "ctrl+k": "the session jump",
+  "ctrl+f": "find in the conversation",
+  "alt+n": "next waiting for you",
+  "alt+arrowup": "previous message",
+  "alt+arrowdown": "next message",
+  "alt+1": "select session 1",
+  "alt+2": "select session 2",
+  "alt+3": "select session 3",
+  "alt+4": "select session 4",
+  "alt+5": "select session 5",
+  "alt+6": "select session 6",
+  "alt+7": "select session 7",
+  "alt+8": "select session 8",
+  "alt+9": "select session 9"
+ },
+ "modifiers": [
+  "ctrl",
+  "alt",
+  "shift",
+  "win"
  ]
 }

@@ -319,7 +319,16 @@ pub fn py_float(v: &Value) -> Option<f64> {
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         Value::Number(n) => n.as_f64(),
         Value::String(s) => {
-            let t = strip(s).replace('_', "");
+            // float() takes an underscore only between two digits.
+            let raw = strip(s);
+            let b = raw.as_bytes();
+            let between = |i: usize| {
+                i > 0 && i + 1 < b.len() && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit()
+            };
+            if b.iter().enumerate().any(|(i, c)| *c == b'_' && !between(i)) {
+                return None;
+            }
+            let t = raw.replace('_', "");
             match t.to_ascii_lowercase().as_str() {
                 "inf" | "+inf" | "infinity" | "+infinity" => Some(f64::INFINITY),
                 "-inf" | "-infinity" => Some(f64::NEG_INFINITY),
@@ -433,4 +442,47 @@ pub fn py_fsum_builtin(items: impl IntoIterator<Item = f64>) -> f64 {
         f += c;
     }
     f
+}
+
+/// `json.dumps(value, indent=n)`: ensure_ascii, "," and ": " separators,
+/// each item on its own line; empty containers stay `[]` and `{}`.
+pub fn json_dumps_indent(v: &Value, indent: usize) -> String {
+    fn pad(out: &mut String, indent: usize, level: usize) {
+        out.push('\n');
+        out.push_str(&" ".repeat(indent * level));
+    }
+    fn go(out: &mut String, v: &Value, indent: usize, level: usize) {
+        match v {
+            Value::Array(a) if !a.is_empty() => {
+                out.push('[');
+                for (i, item) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    pad(out, indent, level + 1);
+                    go(out, item, indent, level + 1);
+                }
+                pad(out, indent, level);
+                out.push(']');
+            }
+            Value::Object(o) if !o.is_empty() => {
+                out.push('{');
+                for (i, (k, item)) in o.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    pad(out, indent, level + 1);
+                    write_json_str(out, k, true);
+                    out.push_str(": ");
+                    go(out, item, indent, level + 1);
+                }
+                pad(out, indent, level);
+                out.push('}');
+            }
+            other => write_json(out, other, true, false),
+        }
+    }
+    let mut out = String::new();
+    go(&mut out, v, indent, 0);
+    out
 }

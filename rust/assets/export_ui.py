@@ -46,7 +46,10 @@ def settings_schema():
         fields.append(f)
     shortcuts = [{"where": w, "keys": k, "what": t} for w, k, t in ui.SHORTCUTS]
     return json.dumps({"fields": fields, "sections": settings.SECTIONS,
-                       "restart": settings.RESTART, "shortcuts": shortcuts},
+                       "restart": settings.RESTART, "shortcuts": shortcuts,
+                       # settings.check's rules for the `key` type.
+                       "reserved_keys": settings.RESERVED_KEYS,
+                       "modifiers": list(settings._ORDER)},
                       indent=1, ensure_ascii=False) + "\n"
 
 

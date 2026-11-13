@@ -169,6 +169,8 @@ fn main() {
         Some("statusline") => hooks::statusline_main(),
         Some("permission") => hooks::permission_main(home.as_deref()),
         Some("policy-decide") => policy_decide(),
+        // Conformance only: settings.check over JSON lines.
+        Some("settings-check") => settings::check_lines(),
         Some("sessions") => sessions_main(&args),
         Some("serve") => {
             let port = flag(&args, "--port")
