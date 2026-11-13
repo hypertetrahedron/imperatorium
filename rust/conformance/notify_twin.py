@@ -59,19 +59,19 @@ def config(topic):
                        "speak": {"enabled": False}}}
 
 
-def start(root):
+def start(root, extra_config=None, extra_env=None):
     py_home, rs_home = os.path.join(root, "py-home"), os.path.join(root, "rs-home")
     shutil.copytree(os.path.join(REPO, "imperatorium"), os.path.join(py_home, "imperatorium"),
                     ignore=shutil.ignore_patterns("__pycache__"))
     os.makedirs(rs_home)
     for home, topic in ((py_home, "twin-py"), (rs_home, "twin-rs")):
         with open(os.path.join(home, "config.json"), "w", encoding="utf-8") as fh:
-            json.dump(config(topic), fh)
+            json.dump(dict(config(topic), **(extra_config or {})), fh)
     procs = []
     for side, port in (("py", PY_PORT), ("rs", RS_PORT)):
         e = dict(env(), CLAUDE_CONFIG_DIR=os.path.join(root, "claude"),
                  LOCALAPPDATA=os.path.join(root, side + "-local"),
-                 IMPERATORIUM_POLICY=os.path.join(root, "no-policy.json"))
+                 IMPERATORIUM_POLICY=os.path.join(root, "no-policy.json"), **(extra_env or {}))
         state = os.path.join(root, side, "state.json")
         if side == "py":
             cmd, cwd = [sys.executable, "-m", "imperatorium.dispatcher", "--port", str(port),

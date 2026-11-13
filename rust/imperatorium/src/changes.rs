@@ -1,7 +1,8 @@
 //! What a session has changed, and the worktrees background sessions leave:
 //! the read side of `imperatorium/changes.py` (status, diff, recent commits,
-//! worktrees and their merge-base diffs). Every git call is bounded in time
-//! and output, as there. `finish` (merge/PR/discard) comes with step 2.
+//! worktrees and their merge-base diffs), and finishing a worktree (merge,
+//! PR, discard). Every git call is bounded in time
+//! and output, as there.
 
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -423,4 +424,222 @@ mod tests {
         assert_eq!(w[1]["detached"], true);
         assert!(is_agent_worktree("C:/r", "C:/r/.claude/worktrees/x"));
     }
+}
+
+// -- finishing a worktree: changes.finish -------------------------------------
+
+pub const ACTIONS: &[&str] = &["merge", "pr", "discard"];
+
+/// changes._find: the worktree at `path` under `project`, and the base branch.
+fn find(project: &str, path: &str) -> Result<(Map<String, Value>, Value), Value> {
+    let listed = worktrees(project);
+    if listed["ok"] != json!(true) {
+        return Err(listed);
+    }
+    let want = norm(path);
+    for wt in listed["worktrees"].as_array().into_iter().flatten() {
+        if norm(wt["path"].as_str().unwrap_or("")) == want {
+            return Ok((
+                wt.as_object().cloned().unwrap_or_default(),
+                listed["base"].clone(),
+            ));
+        }
+    }
+    Err(json!({"ok": false, "error": format!("no such worktree in {project}")}))
+}
+
+/// changes._run: (exit code, stdout + stderr), 60 s at most.
+fn run(cmd: &[&str], cwd: Option<&str>) -> (i32, String) {
+    let mut c = Command::new(cmd[0]);
+    c.args(&cmd[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(d) = cwd {
+        c.current_dir(d);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = match c.spawn() {
+        Ok(ch) => ch,
+        Err(e) => return (1, e.to_string()),
+    };
+    let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let o = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut out, &mut b);
+        b
+    });
+    let e = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut err, &mut b);
+        b
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if start.elapsed().as_secs_f64() < 60.0 => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return (
+                    1,
+                    format!("Command '{}' timed out after 60.0 seconds", cmd.join(" ")),
+                );
+            }
+        }
+    };
+    let mut text = String::from_utf8_lossy(&o.join().unwrap_or_default()).into_owned();
+    text.push_str(&String::from_utf8_lossy(&e.join().unwrap_or_default()));
+    (status.code().unwrap_or(1), text)
+}
+
+/// The last `n` characters, as Python's `s[-n:]`.
+fn tail(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    s.chars().skip(count.saturating_sub(n)).collect()
+}
+
+/// changes.finish: merge, open a PR for, or discard one worktree. Only
+/// worktrees Claude Code made under .claude/worktrees are touched; merge
+/// needs both checkouts clean; discarding unsaved work needs `force`.
+pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
+    if !ACTIONS.contains(&action) {
+        return json!({"ok": false, "error": format!("action must be one of {}", ACTIONS.join(", "))});
+    }
+    let (wt, base) = match find(project, path) {
+        Ok(f) => f,
+        Err(e) => return e,
+    };
+    if !crate::pyish::truthy(wt.get("agent")) {
+        return json!({"ok": false, "error": format!(
+            "only background-session worktrees under {} are managed here",
+            if cfg!(windows) { ".claude\\worktrees" } else { ".claude/worktrees" })});
+    }
+    let Some(branch) = wt
+        .get("branch")
+        .and_then(Value::as_str)
+        .filter(|b| !b.is_empty())
+        .map(str::to_string)
+    else {
+        return json!({"ok": false, "error": "that worktree has no branch (detached HEAD)"});
+    };
+    let dirty = crate::pyish::truthy(wt.get("dirty"));
+    let ahead = wt.get("ahead").and_then(Value::as_i64).unwrap_or(0);
+    let wt_path = wt
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let base_s = crate::pyish::py_str(&base);
+    let result: Result<Value, String> = (|| {
+        match action {
+            "merge" => {
+                if dirty {
+                    return Ok(
+                        json!({"ok": false, "error": "the worktree has uncommitted changes"}),
+                    );
+                }
+                let main = git(
+                    project,
+                    &["status", "--porcelain", "--untracked-files=no"],
+                    true,
+                )?;
+                if !crate::pyish::strip(&main).is_empty() {
+                    return Ok(
+                        json!({"ok": false, "error": "the main checkout has uncommitted changes"}),
+                    );
+                }
+                if ahead == 0 {
+                    return Ok(json!({"ok": false, "error": format!(
+                        "nothing to merge - {branch} is not ahead of {base_s}")}));
+                }
+                match git(project, &["merge", "--no-ff", "--no-edit", &branch], true) {
+                    Ok(out) => Ok(
+                        json!({"ok": true, "action": "merge", "branch": branch, "base": base,
+                                         "output": tail(crate::pyish::strip(&out), 400)}),
+                    ),
+                    Err(e) => {
+                        // A conflict or a refusal: either way the checkout
+                        // goes back as it was.
+                        let conflicted = !crate::pyish::strip(&git(
+                            project,
+                            &["diff", "--name-only", "--diff-filter=U"],
+                            false,
+                        )?)
+                        .is_empty();
+                        git(project, &["merge", "--abort"], false)?;
+                        Ok(json!({"ok": false, "error": if conflicted {
+                            "merge conflicts - aborted, nothing changed".to_string()
+                        } else {
+                            format!("merge refused: {e}")
+                        }}))
+                    }
+                }
+            }
+            "pr" => {
+                if dirty {
+                    return Ok(
+                        json!({"ok": false, "error": "the worktree has uncommitted changes"}),
+                    );
+                }
+                let pushed = run(
+                    &["git", "-C", &wt_path, "push", "-u", "origin", &branch],
+                    None,
+                );
+                if pushed.0 != 0 {
+                    return Ok(
+                        json!({"ok": false, "error": format!("push failed: {}", tail(&pushed.1, 300))}),
+                    );
+                }
+                let made = run(
+                    &[
+                        "gh", "pr", "create", "--fill", "--head", &branch, "--base", &base_s,
+                    ],
+                    Some(&wt_path),
+                );
+                if made.0 != 0 {
+                    return Ok(
+                        json!({"ok": false, "error": format!("gh pr create failed: {}", tail(&made.1, 300))}),
+                    );
+                }
+                let text = crate::pyish::strip(&made.1);
+                let url = splitlines(text)
+                    .last()
+                    .map(|l| l.to_string())
+                    .unwrap_or_default();
+                Ok(json!({"ok": true, "action": "pr", "branch": branch, "url": url}))
+            }
+            _ => {
+                if (dirty || ahead != 0) && !force {
+                    let what = if dirty {
+                        "uncommitted changes".to_string()
+                    } else {
+                        format!("{ahead} unmerged commit(s)")
+                    };
+                    return Ok(json!({"ok": false, "needs_force": true,
+                                     "error": format!("that worktree has {what} - discarding loses it")}));
+                }
+                let mut args = vec!["worktree", "remove"];
+                if force {
+                    args.push("--force");
+                }
+                args.push(&wt_path);
+                git(project, &args, true)?;
+                git(
+                    project,
+                    &["branch", if force { "-D" } else { "-d" }, &branch],
+                    false,
+                )?;
+                Ok(json!({"ok": true, "action": "discard", "branch": branch}))
+            }
+        }
+    })();
+    result.unwrap_or_else(|e| json!({"ok": false, "error": e}))
 }

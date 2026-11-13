@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RUST = os.path.dirname(HERE)
 PARTS = ["run_policy_tests.py", "differential.py", "hooks_blackbox.py", "sessions_compare.py",
          "items_compare.py", "stats_compare.py", "twin.py", "inbox_twin.py", "notify_twin.py",
-         "settings_compare.py", "settings_twin.py"]
+         "settings_compare.py", "settings_twin.py", "worktree_twin.py"]
 # shadow.py is not here: it compares against a running dispatcher (see its doc).
 # The reference these compare against; a part is skipped (and says so) when
 # the Python running this cannot import it.

@@ -1480,6 +1480,46 @@ impl Shared {
         }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p))),
+            "/api/worktree" => {
+                let Some(store) = &self.store else {
+                    return (
+                        200,
+                        Body::Json(
+                            json!({"ok": false, "error": "a read-only shadow changes nothing"}),
+                        ),
+                    );
+                };
+                let project = p
+                    .get("project")
+                    .filter(|v| !v.is_null())
+                    .map(crate::pyish::py_str);
+                // Only a directory the catalogue or a live session vouches
+                // for, never a path taken on trust from the request.
+                let Some(project) = project.filter(|pr| self.known_project(pr)) else {
+                    let shown = p
+                        .get("project")
+                        .map(crate::pyish::py_str)
+                        .unwrap_or_else(|| "None".into());
+                    return (
+                        200,
+                        Body::Json(
+                            json!({"ok": false, "error": format!("not a known project: {shown}")}),
+                        ),
+                    );
+                };
+                let path = p.get("path").map(crate::pyish::py_str).unwrap_or_default();
+                let action = p
+                    .get("action")
+                    .map(crate::pyish::py_str)
+                    .unwrap_or_else(|| "None".into());
+                let got = crate::changes::finish(&project, &path, &action, truthy(p.get("force")));
+                if got["ok"] == json!(true) {
+                    let summary = format!("{} {}", action, crate::pyish::py_str(&got["branch"]));
+                    let e = json!({"kind": format!("worktree_{action}"), "cwd": project, "summary": summary});
+                    store.add_event(e.as_object().unwrap().clone());
+                }
+                (200, Body::Json(got))
+            }
             "/api/settings" => {
                 if self.store.is_none() {
                     return (
