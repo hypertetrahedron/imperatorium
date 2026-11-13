@@ -184,6 +184,9 @@ pub fn project_of(cwd: Option<&str>) -> String {
 /// (date, project, model) - "?"+name for an unpriced model.
 type Key = (String, String, String);
 
+/// One session's running totals: (vector, cost, unpriced tokens, by model).
+type Running = ([i64; 5], f64, i64, indexmap::IndexMap<String, (i64, i64, f64)>);
+
 struct File {
     session: String,
     offset: u64,
@@ -507,15 +510,7 @@ impl History {
         }
         self.pinned = pinned;
         let want: std::collections::HashSet<&String> = ids.iter().collect();
-        let mut acc: indexmap::IndexMap<
-            String,
-            (
-                [i64; 5],
-                f64,
-                i64,
-                indexmap::IndexMap<String, (i64, i64, f64)>,
-            ),
-        > = indexmap::IndexMap::new();
+        let mut acc: indexmap::IndexMap<String, Running> = indexmap::IndexMap::new();
         for (session, model, v, _) in self.messages() {
             if !want.contains(&session) {
                 continue;
