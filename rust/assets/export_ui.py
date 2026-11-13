@@ -44,8 +44,10 @@ def settings_schema():
             assert f["default"] is settings._voice_on, f["key"]
             f["default"] = {"from": "voice_block"}
         fields.append(f)
+    shortcuts = [{"where": w, "keys": k, "what": t} for w, k, t in ui.SHORTCUTS]
     return json.dumps({"fields": fields, "sections": settings.SECTIONS,
-                       "restart": settings.RESTART}, indent=1, ensure_ascii=False) + "\n"
+                       "restart": settings.RESTART, "shortcuts": shortcuts},
+                      indent=1, ensure_ascii=False) + "\n"
 
 
 def pages():

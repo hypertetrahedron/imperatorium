@@ -28,6 +28,8 @@ use crate::{
 };
 
 pub struct Shared {
+    /// `--home`: where config.json is, read again for the Settings form.
+    home: Option<String>,
     /// Handed to the pages when they load (ui._with_meta); never written down.
     window_token: String,
     history: history::Index,
@@ -151,6 +153,7 @@ impl Shared {
         };
         Shared {
             window_token: token_urlsafe(24),
+            home: home.map(str::to_string),
             history: history::Index::new(),
             config: load_config(home),
             boot,
@@ -646,6 +649,80 @@ impl Shared {
         got
     }
 
+    /// Each notification channel on or off: config.json at start, with the
+    /// switch kept in prefs (`/api/notify`, impctl) winning, as Control does.
+    fn notify_enabled(&self) -> Vec<(&'static str, Map<String, Value>, bool)> {
+        let st = registry::state();
+        let prefs = st
+            .get("prefs")
+            .and_then(|p| p.get("notify"))
+            .cloned()
+            .unwrap_or(json!({}));
+        settings::notify_channels(&self.config)
+            .into_iter()
+            .map(|(name, cfg)| {
+                let on = match prefs.get(name) {
+                    Some(v) => truthy(Some(v)),
+                    None => truthy(cfg.get("enabled")),
+                };
+                (name, cfg, on)
+            })
+            .collect()
+    }
+
+    /// GET /api/notify: notify.status(). `last_error` and `sent` count
+    /// what this process has pushed, and the shadow pushes nothing.
+    fn api_notify(&self) -> Value {
+        let mut out = Map::new();
+        for (name, cfg, on) in self.notify_enabled() {
+            let configured = if name == "ntfy" {
+                truthy(cfg.get("topic"))
+            } else {
+                true
+            };
+            out.insert(
+                name.into(),
+                json!({"enabled": on, "delay": cfg.get("delay").cloned().unwrap_or(Value::Null),
+                       "configured": configured}),
+            );
+        }
+        out.insert("last_error".into(), Value::Null);
+        out.insert("sent".into(), json!(0));
+        Value::Object(out)
+    }
+
+    /// GET /api/settings: Control.settings_view.
+    fn api_settings(&self) -> Value {
+        let path = paths::config_home(self.home.as_deref()).join("config.json");
+        let cfg = match settings::load(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                return json!({"ok": false, "error": format!("config.json cannot be read: {e}")})
+            }
+        };
+        let mut out = settings::describe(&cfg);
+        let enabled: HashMap<&str, bool> = self
+            .notify_enabled()
+            .into_iter()
+            .map(|(n, _, on)| (n, on))
+            .collect();
+        if let Some(Value::Array(fields)) = out.get_mut("fields") {
+            for f in fields.iter_mut() {
+                let key = f["key"].as_str().unwrap_or("").to_string();
+                if key == "notify.ntfy.enabled" || key == "notify.speak.enabled" {
+                    let channel = key.split('.').nth(1).unwrap_or("");
+                    f["value"] = json!(enabled.get(channel).copied().unwrap_or(false));
+                }
+            }
+        }
+        out["ok"] = json!(true);
+        out["path"] = json!(path.to_string_lossy());
+        out["waiting"] = json!([]);
+        out["notify_error"] = Value::Null;
+        out["shortcuts"] = settings::schema()["shortcuts"].clone();
+        out
+    }
+
     fn page(&self, page: &str, token: &str, with_look: bool) -> Body {
         let drawn = if with_look {
             Some(look(&self.config))
@@ -713,6 +790,8 @@ impl Shared {
                 (200, Body::Json(json!({"prefs": prefs})))
             }
             ("GET", "/api/decisions") => (200, Body::Json(json!({"decisions": decisions(60)}))),
+            ("GET", "/api/settings") => (200, Body::Json(self.api_settings())),
+            ("GET", "/api/notify") => (200, Body::Json(self.api_notify())),
             ("GET", "/api/quick") => (
                 200,
                 Body::Json(json!({"key": settings::value(&self.config, "quick.key"),

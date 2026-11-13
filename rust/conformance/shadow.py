@@ -25,7 +25,12 @@ from sessions_compare import first_difference  # noqa: E402
 PY = "http://127.0.0.1:8792"
 RS = "http://127.0.0.1:8811"
 # Differ by design: which process answers, and when it started.
-IGNORE = {"/api/health": ("pid", "boot")}
+IGNORE = {"/api/health": ("pid", "boot"),
+          # Counted by the process that pushes notifications; the shadow pushes none.
+          "/api/notify": ("last_error", "sent"),
+          # Settings saved in the live window that wait on a restart, and the
+          # last push error: runtime state of the live process.
+          "/api/settings": ("waiting", "notify_error")}
 
 
 def get(base, path):
@@ -209,6 +214,7 @@ def main():
         RS = sys.argv[sys.argv.index("--rust") + 1]
     t0 = time.time()
     paths = ["/api/events", "/api/queue", "/api/prefs", "/api/decisions", "/api/quick",
+             "/api/settings", "/api/notify",
              "/api/health", "/api/health/", "/api/no-such-thing", "/api/conversation",
              "/api/conversation?session=00000000-0000-0000-0000-000000000000"]
     _, snap = get(PY, "/api/sessions")

@@ -701,5 +701,107 @@
   "dispatcher": "python impctl.py restart dispatcher",
   "hotkey": "restart the palette (hotkey.py)",
   "streamdeck": "restart the Stream Deck surface (streamdeck_surface.py)"
- }
+ },
+ "shortcuts": [
+  {
+   "where": "Anywhere",
+   "keys": "palette.hotkey",
+   "what": "raise or open this window (the first that is free)"
+  },
+  {
+   "where": "Prompt box",
+   "keys": "Enter",
+   "what": "Send"
+  },
+  {
+   "where": "Prompt box",
+   "keys": "Shift+Enter",
+   "what": "new line"
+  },
+  {
+   "where": "Prompt box",
+   "keys": "Ctrl+Enter",
+   "what": "send as a new background session"
+  },
+  {
+   "where": "Prompt box",
+   "keys": "Alt+Enter",
+   "what": "Queue: deliver when the current turn ends"
+  },
+  {
+   "where": "Prompt box",
+   "keys": "quick.key",
+   "what": "quick phrases: pick one to put in the box"
+  },
+  {
+   "where": "Prompt box",
+   "keys": "Esc",
+   "what": "leave the box"
+  },
+  {
+   "where": "Window",
+   "keys": "Ctrl+K",
+   "what": "jump to a session"
+  },
+  {
+   "where": "Window",
+   "keys": "J / K",
+   "what": "next / previous session (not while typing)"
+  },
+  {
+   "where": "Window",
+   "keys": "N, Alt+N",
+   "what": "next session waiting for you"
+  },
+  {
+   "where": "Window",
+   "keys": "Alt+1 - Alt+9",
+   "what": "the session at that place in the list"
+  },
+  {
+   "where": "Window",
+   "keys": "/",
+   "what": "filter the session list"
+  },
+  {
+   "where": "Window",
+   "keys": "F9",
+   "what": "dictate into the prompt box; again to stop"
+  },
+  {
+   "where": "Window",
+   "keys": "Esc",
+   "what": "close an open menu"
+  },
+  {
+   "where": "Conversation",
+   "keys": "Ctrl+F",
+   "what": "find in the conversation"
+  },
+  {
+   "where": "Conversation",
+   "keys": "Enter / Shift+Enter",
+   "what": "in find: earlier / later match"
+  },
+  {
+   "where": "Conversation",
+   "keys": "Alt+Up / Alt+Down",
+   "what": "your previous / next prompt"
+  },
+  {
+   "where": "Lists",
+   "keys": "Up / Down, Enter, Esc",
+   "what": "session jump, project picker and quick phrases: choose, take, close"
+  },
+  {
+   "where": "Changes",
+   "keys": "Ctrl+Enter, Esc",
+   "what": "review comment: add, cancel"
+  },
+  {
+   "where": "Settings",
+   "keys": "Ctrl+S",
+   "what": "save"
+  }
+ ]
 }
