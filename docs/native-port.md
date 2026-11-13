@@ -225,12 +225,38 @@ change only the dispatcher's own state (`/api/prefs`, `/api/notify`,
 `/api/unqueue`, `/api/dismiss`, `/api/queue`'s refusals). twin.py: 32 hook
 events, 7 refused POSTs and 13 API POSTs identical.
 
-Left in step 2, all of which act on real sessions or files and so want a
-test plan that never reaches a real one: delivery into a session's inbox
-(dispatch, the queue, Stop's drain, the idle check), the mod link
-(`/api/mod/beat|check`, its token), parked permissions (`/permission/park`,
-`/api/decide`, `/api/pending`), notifications (ntfy, speech), close /
-resume / new / fork (processes and terminals), worktree merge/PR/discard,
+Then, 2026-11-13, the parts that reach sessions, all tested so that none
+can reach a real one:
+
+- `rust/conformance/inbox_twin.py` gives each twin a `CLAUDE_CONFIG_DIR`
+  of its own: a temporary folder whose `sessions/` holds made-up session
+  records, each pointing at a named pipe the script serves and records. A
+  real session's inbox is never named and its token never known.
+  - Delivery (inbox.rs, the queue in store.rs, enqueue / drain / the
+    15-second sweep / Stop's drain, `_deliver`): idle gets it at once,
+    busy waits for Stop (one per turn), waiting on you holds it, a gone
+    pipe keeps it with the error, a token arriving late is swept, from the
+    window is marked as the person's own. Bytes delivered identical.
+  - Parked permissions (pending.rs, `/permission/park`, `/api/decide`,
+    `/api/pending`, park_wait): 17 steps identical, outcomes checked.
+  - The mod link (modlink.rs, `/api/mod/beat|check`, the token beside the
+    state, the row's mod fields, delivery through a live mod): 19 steps
+    identical, with a temporary copy of the policy (auto-approval on) so
+    `mod/check` decides; decisions.jsonl identical.
+- `rust/conformance/notify_twin.py`: ntfy pushes (notify.rs; ureq now has
+  rustls for https servers) to a fake server on 127.0.0.1, the Python
+  twin run from a temporary copy of the package so it can have a
+  config.json. Permission prompt, failed turn, usage threshold and the
+  idle check a minute after Stop pushed identically; nothing for a prompt
+  answered within the delay or with ntfy off. Speech is unit-tested only
+  (it would talk out loud). The shadow never pushes.
+- `_overlay` now clears settled attention in a store of its own, as Python
+  does.
+
+Not ported yet: slash commands typed into a terminal and Send As Typed
+(keystrokes into a console: `/api/typed`, a queued `/command`, both
+refused as "not ported yet"), close / resume / new / fork (processes and
+terminals), `/api/dispatch` (starts sessions), worktree merge/PR/discard,
 saving Settings (writes config.json), focus (Win32), herdr-core hosting,
 dictation, remote hosts.
 
