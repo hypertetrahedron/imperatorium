@@ -1490,6 +1490,251 @@ impl Shared {
         None
     }
 
+    /// Control.dispatch: route an utterance. mode is auto | inject | launch |
+    /// background | dry-run. `session_id` or `path` skip the name matching:
+    /// the window has already chosen. Only from the window does a prompt
+    /// speak as the person (as_user).
+    fn dispatch(
+        &self,
+        store: &crate::store::Store,
+        p: &Map<String, Value>,
+        as_user: bool,
+    ) -> Value {
+        let text = |k: &str| {
+            p.get(k)
+                .filter(|v| truthy(Some(v)))
+                .map(crate::pyish::py_str)
+        };
+        let mode = match p.get("mode") {
+            None => "auto".to_string(),
+            Some(v) => crate::pyish::py_str(v),
+        };
+        let session_id = text("session_id");
+        let mut prompt = text("prompt");
+        let mut project = text("project");
+        if let (Some(sid), Some(pr)) = (&session_id, &prompt) {
+            if mode == "auto" || mode == "inject" {
+                let Some(row) = self
+                    .sessions(2.0)
+                    .into_iter()
+                    .find(|r| r.get("sessionId").and_then(Value::as_str) == Some(sid))
+                else {
+                    return json!({"ok": false, "error": "no such session"});
+                };
+                if crate::slash::is_command(pr) {
+                    return self.run_command(store, &row, pr);
+                }
+                if !truthy(row.get("dispatchable")) {
+                    return json!({"ok": false, "error":
+                        "that session is not reachable (no credential yet - it registers on its next hook event)"});
+                }
+                if let Some(e) = self.deliver(store, &row, pr, as_user) {
+                    return json!({"ok": false, "error": e});
+                }
+                return json!({"ok": true, "action": "inject", "session": sid,
+                              "session_name": row.get("name").cloned().unwrap_or(Value::Null),
+                              "host": row.get("host").cloned().unwrap_or(Value::Null)});
+            }
+        }
+        if let (Some(t), None) = (text("text"), &prompt) {
+            let (spoken, said) = crate::projects::parse_utterance(&t);
+            prompt = Some(said).filter(|s| !s.is_empty());
+            project = project.or(spoken);
+        }
+        let Some(prompt) = prompt else {
+            return json!({"ok": false, "error": "no prompt"});
+        };
+        let res = if let Some(path) = text("path") {
+            match self.exact_project(&path, text("host").as_deref()) {
+                Some(r) => r,
+                None => return json!({"ok": false, "error": format!("no project at {path}")}),
+            }
+        } else if let Some(name) = &project {
+            crate::projects::resolve(name, &self.catalogue())
+        } else {
+            return json!({"ok": false, "error": "no project named"});
+        };
+        let heard = project
+            .clone()
+            .map(Value::from)
+            .unwrap_or_else(|| res["match"]["name"].clone());
+        let mut out = json!({"heard_project": heard, "prompt": prompt, "confidence": res["confidence"],
+                             "score": res["score"], "candidates": res["candidates"]});
+        let shown = crate::pyish::py_repr(&project.clone().map(Value::from).unwrap_or(Value::Null));
+        let set = |out: &mut Value, more: Value| {
+            for (k, v) in more.as_object().unwrap() {
+                out[k] = v.clone();
+            }
+        };
+        if res["confidence"] == "none" {
+            set(
+                &mut out,
+                json!({"ok": false, "error": format!("no project matched {shown}")}),
+            );
+            return out;
+        }
+        // A merely probable match is never acted on silently: a misheard
+        // name costs a keystroke, not a prompt at the wrong repository.
+        if res["confidence"] != "certain" && !truthy(p.get("confirm")) {
+            set(
+                &mut out,
+                json!({"ok": false, "needs_confirmation": true,
+                                 "error": format!("ambiguous project {shown}")}),
+            );
+            return out;
+        }
+        let m = res["match"].clone();
+        out["project"] = m.clone();
+        if mode == "dry-run" {
+            set(&mut out, json!({"ok": true, "action": "dry-run"}));
+            return out;
+        }
+        let path = m["path"].as_str().unwrap_or("").to_string();
+        let remote = truthy(m.get("host"));
+        if crate::slash::is_command(&prompt) {
+            // Never a launch: a new session started on "/compact" would be a
+            // stranger doing nothing useful.
+            let target = if remote {
+                None
+            } else {
+                self.session_for(&path)
+            };
+            let Some(target) = target else {
+                set(
+                    &mut out,
+                    json!({"ok": false, "error":
+                    "no running session on this machine for that project to run the command in"}),
+                );
+                return out;
+            };
+            let got = self.run_command(store, &target, &prompt);
+            set(&mut out, got);
+            return out;
+        }
+        if remote {
+            set(
+                &mut out,
+                json!({"ok": false, "error": "remote hosts are not ported yet"}),
+            );
+            return out;
+        }
+        if mode == "background" {
+            let options = self
+                .config()
+                .get("background")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let options: Map<String, Value> = options
+                .into_iter()
+                .filter(|(k, _)| {
+                    ["model", "permission_mode", "agent", "name", "extra"].contains(&k.as_str())
+                })
+                .collect();
+            match crate::background::start(&prompt, &path, &options) {
+                Err(e) => set(&mut out, json!({"ok": false, "error": e})),
+                Ok(started) => {
+                    let e = json!({"kind": "dispatch_background", "cwd": path,
+                                   "summary": crate::pyish::take(&prompt, 280), "bg_id": started["id"]});
+                    store.add_event(e.as_object().unwrap().clone());
+                    self.invalidate();
+                    set(
+                        &mut out,
+                        json!({"ok": true, "action": "background", "bg_id": started["id"]}),
+                    );
+                }
+            }
+            return out;
+        }
+        if mode == "auto" || mode == "inject" {
+            match self.session_for(&path) {
+                Some(target) => match self.deliver(store, &target, &prompt, as_user) {
+                    None => {
+                        set(
+                            &mut out,
+                            json!({"ok": true, "action": "inject",
+                            "session": target.get("sessionId").cloned().unwrap_or(Value::Null),
+                            "session_name": target.get("name").cloned().unwrap_or(Value::Null)}),
+                        );
+                        return out;
+                    }
+                    Some(e) if mode == "inject" => {
+                        set(&mut out, json!({"ok": false, "error": e}));
+                        return out;
+                    }
+                    Some(_) => {} // auto: a window instead
+                },
+                None if mode == "inject" => {
+                    set(
+                        &mut out,
+                        json!({"ok": false, "error": "no dispatchable session for that project"}),
+                    );
+                    return out;
+                }
+                None => {}
+            }
+        }
+        match crate::deeplink::launch(&path, &prompt) {
+            Err(e) => set(&mut out, json!({"ok": false, "error": e})),
+            Ok(url) => {
+                let e = json!({"kind": "dispatch_launch", "cwd": path, "summary": crate::pyish::take(&prompt, 280)});
+                store.add_event(e.as_object().unwrap().clone());
+                set(
+                    &mut out,
+                    json!({"ok": true, "action": "launch", "url": url}),
+                );
+            }
+        }
+        out
+    }
+
+    /// Control._exact_project: the catalogue entry at `path`, as a certain
+    /// match. (The catalogue holds this machine's projects only until remote
+    /// hosts are ported.)
+    fn exact_project(&self, path: &str, host: Option<&str>) -> Option<Value> {
+        if host.is_some() {
+            return None;
+        }
+        let want = paths::abs_normcase(path)?;
+        let proj = self.catalogue().into_iter().find(|p| {
+            !truthy(p.get("host"))
+                && p["path"].as_str().and_then(paths::abs_normcase).as_deref()
+                    == Some(want.as_str())
+        })?;
+        Some(json!({"match": proj, "score": 1.0, "confidence": "certain", "candidates": [proj]}))
+    }
+
+    /// Control._session_for: the best dispatchable session in `path` on this
+    /// machine - an idle one if there is one, since a busy one would queue it
+    /// behind its own work.
+    fn session_for(&self, path: &str) -> Option<Row> {
+        let want = paths::abs_normcase(path)?;
+        let mut best: Option<Row> = None;
+        for row in self.sessions(2.0) {
+            let Some(cwd) = row
+                .get("cwd")
+                .and_then(Value::as_str)
+                .filter(|c| !c.is_empty())
+            else {
+                continue;
+            };
+            if !truthy(row.get("dispatchable"))
+                || truthy(row.get("remote"))
+                || truthy(row.get("host"))
+            {
+                continue;
+            }
+            if paths::abs_normcase(cwd).as_deref() != Some(want.as_str()) {
+                continue;
+            }
+            let idle = |r: &Row| r.get("status").and_then(Value::as_str) == Some("idle");
+            if best.is_none() || (idle(&row) && !idle(best.as_ref().unwrap())) {
+                best = Some(row);
+            }
+        }
+        best
+    }
+
     /// Control.run_command: type slash command `text` at the row's prompt.
     fn run_command(&self, store: &crate::store::Store, row: &Row, text: &str) -> Value {
         if let Some(why) = crate::slash::refusal(text) {
@@ -1746,6 +1991,20 @@ impl Shared {
         }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p))),
+            "/api/dispatch" => {
+                let Some(store) = &self.store else {
+                    return (
+                        200,
+                        Body::Json(
+                            json!({"ok": false, "error": "a read-only shadow changes nothing"}),
+                        ),
+                    );
+                };
+                if object.is_none() {
+                    return (400, Body::Json(json!({"error": "expected an object"})));
+                }
+                (200, Body::Json(self.dispatch(store, p, from_window)))
+            }
             "/api/typed" => {
                 if object.is_none() {
                     return (400, Body::Json(json!({"error": "expected an object"})));

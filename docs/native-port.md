@@ -288,9 +288,21 @@ can reach a real one:
   `/exit`, blank, busy, a parked permission), the queue's - identical, and
   the console received exactly what was meant.
 
-Not ported yet: `/api/dispatch` (routes an utterance, may start
-sessions), focus (Win32), herdr-core hosting (hc terminals: refused as not
-ported), dictation, remote hosts.
+- `/api/dispatch` (projects.rs: `_norm`, difflib's `SequenceMatcher.ratio`
+  as CPython computes it, resolve, parse_utterance; deeplink.rs; dispatch,
+  `_exact_project`, `_session_for`). `projects_compare.py`: 595 cases -
+  333 spoken names over this machine's 38 projects and made-up colliding
+  ones, norms, utterances, deep links - identical to the rounded score.
+  `session_twin.py`, 43 actions now: refusals, a dry run, a misheard and an
+  unknown name, a command routed by project name into that project's own
+  console, inject to an unreachable inbox, a background start - identical.
+  Never tested live: mode `launch` (and `auto` falling back to it), since
+  `cmd /c start` resolves from System32 ahead of PATH and would open a real
+  Claude window; the URL it opens is covered by the differential. Remote
+  projects answer "not ported yet" until phase 4.
+
+Not ported yet: focus (Win32), herdr-core hosting (hc terminals: refused
+as not ported), dictation, remote hosts.
 
 ## Building
 

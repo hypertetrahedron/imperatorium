@@ -58,6 +58,8 @@ def neutral(text, ids):
     for real, name in ids.items():
         text = text.replace(real, name)
     text = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", "<new-uuid>", text)
+    # The OS's wording of "no such pipe" is Python's or Windows' own.
+    text = re.sub(r'"cannot open [^"]*"', '"<cannot open the inbox>"', text)
     return text
 
 
@@ -92,8 +94,13 @@ def main():
             folder = os.path.join(root, "claude", "sessions")
             os.makedirs(folder, exist_ok=True)
             with open(os.path.join(folder, sid + ".json"), "w", encoding="utf-8") as fh:
-                json.dump({"pid": p.pid, "sessionId": sid, "cwd": work, "name": "twin-" + role,
-                           "kind": "interactive", "status": "busy" if role == "busy" else "idle"}, fh)
+                rec = {"pid": p.pid, "sessionId": sid, "cwd": work, "name": "twin-" + role,
+                       "kind": "interactive", "status": "busy" if role == "busy" else "idle"}
+                if role == "typing":
+                    # Its inbox, which nothing serves: a token recorded
+                    # against it makes the session reachable for routing.
+                    rec["messagingSocketPath"] = r"\\.\pipe\imp-twin-nobody-" + side
+                json.dump(rec, fh)
     record(root, GONE, "", None, "twin-gone")  # a record whose process is gone
     with open(os.path.join(root, "claude", "sessions", GONE + ".json"), "r+", encoding="utf-8") as fh:
         rec = json.load(fh)
@@ -198,6 +205,41 @@ def main():
             steps.append((label, answer))
             a, b = (re.sub(r'"(id|at)": [^,}]+', r'"\1": 0', got[k]) for k in ("py", "rs"))
             if a != b:
+                failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
+
+        # Dispatch: each twin's own typing console becomes reachable (a token
+        # and an inbox that is not there), so routing can find it. Never
+        # mode launch, nor auto with a failing target: either would open a
+        # real Claude window through the deep link.
+        for side, port in (("py", PY_PORT), ("rs", RS_PORT)):
+            post(port, "/hook", {"hook_event_name": "SessionStart", "session_id": sessions[(side, "typing")],
+                                 "cwd": work, "source": "startup", "messaging_token": "tok",
+                                 "messaging_socket": r"\\.\pipe\imp-twin-nobody-" + side})
+        dispatch_cases = [
+            ("dispatch, nothing", lambda s: {}),
+            ("dispatch, no project", lambda s: {"prompt": "x"}),
+            ("dispatch, no such path", lambda s: {"path": os.path.join(root, "nope"), "prompt": "x"}),
+            ("dispatch, said, dry run", lambda s: {"text": "project: work, check the build", "mode": "dry-run"}),
+            ("dispatch, misheard", lambda s: {"project": "wrok", "prompt": "x"}),
+            ("dispatch, nothing like it", lambda s: {"project": "zzqqxx", "prompt": "x"}),
+            ("dispatch, a command by name", lambda s: {"project": "work", "prompt": "/model sonnet"}),
+            ("dispatch, a menu by name", lambda s: {"project": "work", "prompt": "/config"}),
+            ("dispatch, inject by path", lambda s: {"path": work, "prompt": "hello", "mode": "inject"}),
+            ("dispatch, background", lambda s: {"path": work, "prompt": "build the thing", "mode": "background"}),
+            ("dispatch, to a session", lambda s: {"session_id": sessions[(s, "typing")], "prompt": "hi"}),
+            ("dispatch, a command to a session", lambda s: {"session_id": sessions[(s, "typing")],
+                                                            "prompt": "/model haiku"}),
+            ("dispatch, unreachable session", lambda s: {"session_id": sessions[(s, "busy")], "prompt": "hi"}),
+            ("dispatch, no such session", lambda s: {"session_id": "nobody", "prompt": "hi"}),
+        ]
+        for label, body in dispatch_cases:
+            got = {}
+            for side, port in (("py", PY_PORT), ("rs", RS_PORT)):
+                got[side] = neutral(json.dumps(list(post(port, "/api/dispatch", body(side))), sort_keys=True), ids)
+            answer = json.loads(got["py"])[1]
+            steps.append((label, {k: answer.get(k) for k in ("ok", "error", "action", "confidence", "command",
+                                                             "bg_id", "needs_confirmation") if k in answer}))
+            if got["py"] != got["rs"]:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
 
         time.sleep(1.5)  # a launch is fire-and-forget: let the last ones log
