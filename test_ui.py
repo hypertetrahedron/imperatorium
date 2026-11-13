@@ -597,6 +597,24 @@ class LogWindow(unittest.TestCase):
                        "/api/voice/warm"):
             self.assertIn(needle, ui.SCRIPT)
 
+    def test_positions_in_the_log_ignore_the_text_zoom(self):
+        # The chat text size zooms each turn, and a zoomed element's offsetTop
+        # is in zoomed units: prompt jumps and find overshot by the zoom
+        # factor (2026-11-12, thousands of px at 15px text). Positions inside
+        # the log come from bounding rects, via logY.
+        self.assertNotIn(".offsetTop", ui.SCRIPT)
+        self.assertIn("const at = x => logY(x) - 8", ui.SCRIPT)
+        self.assertIn("logY(m)", ui.SCRIPT)
+        a = ui.SCRIPT.index("function logY")
+        body = ui.SCRIPT[a:ui.SCRIPT.index("// -- jump between your prompts")]
+        js = ("const log = {scrollTop: 5000, clientTop: 0, getBoundingClientRect: () => ({top: 120})};"
+              "const $ = () => log;" + body +
+              "process.stdout.write(JSON.stringify(logY({getBoundingClientRect: () => ({top: 400})})));")
+        out = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True,
+                             encoding="utf-8", timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout), 5280)
+
 
 class Controls(unittest.TestCase):
     @unittest.skipUnless(NODE, "node not installed")

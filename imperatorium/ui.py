@@ -2185,13 +2185,24 @@ $("#procgrip").addEventListener("pointerdown", e => {
   e.target.addEventListener("pointerup", up);
 });
 
+// Where `el` sits in the log's own scroll coordinates. Not `offsetTop`: the
+// chat text size zooms every turn (`#log>*{zoom:var(--chatz)}`), and Chrome
+// gives a zoomed element's offsetTop in its zoomed units while the log
+// scrolls in plain pixels - at 15px text (zoom 1.07) a jump overshot by 7% of
+// the distance, thousands of pixels in a long chat. The bounding rect is in
+// viewport pixels whatever the zoom.
+function logY(el){
+  const log = $("#log");
+  return el.getBoundingClientRect().top - log.getBoundingClientRect().top - log.clientTop + log.scrollTop;
+}
+
 // -- jump between your prompts ---------------------------------------------
 function jump(dir){
   const log = $("#log");
   const top = log.scrollTop, turns = [...log.querySelectorAll(".turn.you-turn")];
   // Compare where each prompt would be scrolled to, not where it sits, or the
   // prompt just jumped to counts as the next one down.
-  const at = x => x.offsetTop - 8;
+  const at = x => logY(x) - 8;
   const t = dir < 0 ? turns.filter(x => at(x) < top - 2).pop()
                     : turns.find(x => at(x) > top + 2);
   // Above the first drawn prompt: draw the earlier turns and go on from there.
@@ -2516,7 +2527,7 @@ function goFind(dir){
     if (!q || d.textContent.toLowerCase().includes(q)){ d.open = true; opened.add(d.dataset.k); }
   });
   const m = el.querySelector("mark.cur") || el;
-  $("#log").scrollTop = Math.max(0, m.offsetTop - $("#log").clientHeight / 3);
+  $("#log").scrollTop = Math.max(0, logY(m) - $("#log").clientHeight / 3);
 }
 // Highlights every match in the drawn turns, and the current one strongest.
 function markFinds(){
