@@ -178,6 +178,9 @@ fn parse_numstat(text: &str) -> Map<String, Value> {
     out
 }
 
+/// What `changes` reads: status, numstat, diff and recent commits.
+type Read = (Map<String, Value>, Map<String, Value>, String, Vec<Value>);
+
 /// changes.changes(cwd): everything uncommitted, ready for the window.
 pub fn changes(cwd: &str) -> Value {
     if cwd.is_empty() || !std::path::Path::new(cwd).is_dir() {
@@ -186,7 +189,7 @@ pub fn changes(cwd: &str) -> Value {
     if !is_repo(cwd) {
         return json!({"ok": true, "repo": false, "files": [], "diff": ""});
     }
-    let run = || -> Result<(Map<String, Value>, Map<String, Value>, String, Vec<Value>), String> {
+    let run = || -> Result<Read, String> {
         let status = parse_status(&git(
             cwd,
             &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
