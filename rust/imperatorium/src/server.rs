@@ -28,6 +28,10 @@ use crate::{
 };
 
 pub struct Shared {
+    /// Control._errors (the whole answer, ERRORS_EVERY) and _tallies
+    /// (each session's tally, until its transcript's size moves).
+    errors_cache: Mutex<Option<(f64, f64, Value)>>,
+    tallies: Mutex<HashMap<String, (Value, Value)>>,
     /// `--home`: where config.json is, read again for the Settings form.
     home: Option<String>,
     /// Handed to the pages when they load (ui._with_meta); never written down.
@@ -153,6 +157,8 @@ impl Shared {
         };
         Shared {
             window_token: token_urlsafe(24),
+            errors_cache: Mutex::new(None),
+            tallies: Mutex::new(HashMap::new()),
             home: home.map(str::to_string),
             history: history::Index::new(),
             config: load_config(home),
@@ -738,6 +744,127 @@ impl Shared {
         self.sessions(2.0).into_iter().find(hit)
     }
 
+    /// Control.activity: one session's tool calls, from its conversation.
+    /// (Python prefers the tool hooks' record when it has one; the shadow
+    /// gets no hooks, so it always reads the conversation.)
+    fn api_activity(&self, session: &str) -> Value {
+        let hit = |rows: &[Row]| {
+            rows.iter()
+                .find(|r| {
+                    r.get("sessionId").and_then(Value::as_str) == Some(session)
+                        || r.get("key").and_then(Value::as_str) == Some(session)
+                })
+                .cloned()
+        };
+        let row = hit(&self.sessions(15.0)).or_else(|| hit(&self.sessions(2.0)));
+        let sid = row
+            .as_ref()
+            .and_then(|r| r.get("sessionId").and_then(Value::as_str))
+            .unwrap_or(session)
+            .to_string();
+        let items = match self.conversation(&sid) {
+            Ok(c) => {
+                let start = c.raw.len().saturating_sub(200);
+                conversation::merge_turns(c.raw[start..].to_vec())
+            }
+            Err(e) => return json!({"ok": false, "error": format!("RuntimeError: {e}")}),
+        };
+        let calls = activity::timeline(&items);
+        let start = calls.len().saturating_sub(200);
+        json!({"ok": true, "source": "conversation", "timeline": calls[start..].to_vec(),
+               "tally": activity::tally(&calls), "current": null})
+    }
+
+    /// Control.errors: tool failures across recent sessions.
+    fn api_errors(&self, days: f64) -> Value {
+        let now = Self::now();
+        if let Some((at, d, result)) = self.errors_cache.lock().unwrap().as_ref() {
+            if *d == days && now - at < 300.0 {
+                return result.clone();
+            }
+        }
+        let rows: Vec<Map<String, Value>> = self
+            .history
+            .list()
+            .into_iter()
+            .filter(|r| {
+                now - r.get("modified").and_then(Value::as_f64).unwrap_or(0.0) <= days * 86400.0
+            })
+            .take(120)
+            .collect();
+        let mut per_project: indexmap::IndexMap<String, (i64, i64, i64)> =
+            indexmap::IndexMap::new();
+        let mut tallies = Vec::new();
+        for r in &rows {
+            let sid = r
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let size = r.get("size").cloned().unwrap_or(Value::Null);
+            let cached = self
+                .tallies
+                .lock()
+                .unwrap()
+                .get(&sid)
+                .filter(|c| c.0 == size)
+                .map(|c| c.1.clone());
+            let t = match cached {
+                Some(t) => t,
+                None => {
+                    let Ok(c) = self.conversation(&sid) else {
+                        continue;
+                    };
+                    let t = activity::tally(&activity::timeline(&c.merged));
+                    self.tallies
+                        .lock()
+                        .unwrap()
+                        .insert(sid.clone(), (size, t.clone()));
+                    t
+                }
+            };
+            let cwd = r
+                .get("cwd")
+                .filter(|v| truthy(Some(v)))
+                .map(crate::pyish::py_str)
+                .unwrap_or_else(|| "?".into());
+            let cwd = cwd.replace('\\', "/");
+            let name = cwd
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let name = if name.is_empty() {
+                "?".to_string()
+            } else {
+                name
+            };
+            let p = per_project.entry(name).or_insert((0, 0, 0));
+            p.0 += t["calls"].as_i64().unwrap_or(0);
+            p.1 += t["errors"].as_i64().unwrap_or(0);
+            p.2 += 1;
+            tallies.push(t);
+        }
+        let mut out = activity::merge_tallies(&tallies);
+        out.insert("ok".into(), json!(true));
+        out.insert("days".into(), json!(days));
+        out.insert("sessions".into(), json!(tallies.len()));
+        out.insert(
+            "by_project".into(),
+            Value::Object(
+                per_project
+                    .into_iter()
+                    .map(|(k, (c, e, s))| (k, json!({"calls": c, "errors": e, "sessions": s})))
+                    .collect(),
+            ),
+        );
+        out.insert("at".into(), json!(now));
+        let result = Value::Object(out);
+        *self.errors_cache.lock().unwrap() = Some((now, days, result.clone()));
+        result
+    }
+
     /// Control.changes: git status and diff in the session's folder.
     fn api_changes(&self, session: &str) -> Value {
         let Some(row) = self.row(session) else {
@@ -876,6 +1003,15 @@ impl Shared {
             ("GET", "/api/settings") => (200, Body::Json(self.api_settings())),
             ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue()}))),
             ("GET", "/api/changes") => (200, Body::Json(self.api_changes(&arg("session")))),
+            ("GET", "/api/activity") => (200, Body::Json(self.api_activity(&arg("session")))),
+            ("GET", "/api/errors") => {
+                let raw = arg("days");
+                let raw = if raw.is_empty() { "7".to_string() } else { raw };
+                let days = crate::pyish::py_float(&json!(raw))
+                    .map(|d| d.clamp(0.1, 90.0))
+                    .unwrap_or(7.0);
+                (200, Body::Json(self.api_errors(days)))
+            }
             ("GET", "/api/worktrees") => {
                 let project = arg("project");
                 let body = if self.known_project(&project) {

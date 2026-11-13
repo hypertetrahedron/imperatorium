@@ -30,7 +30,9 @@ IGNORE = {"/api/health": ("pid", "boot"),
           "/api/notify": ("last_error", "sent"),
           # Settings saved in the live window that wait on a restart, and the
           # last push error: runtime state of the live process.
-          "/api/settings": ("waiting", "notify_error")}
+          "/api/settings": ("waiting", "notify_error"),
+          # When each side last worked the answer out (cached 5 minutes).
+          "/api/errors": ("at",)}
 
 
 def get(base, path):
@@ -50,6 +52,12 @@ def compare(path):
                 body.pop(key, None)
     if a[0] != b[0]:
         return "status %s vs %s" % (a[0], b[0])
+    if route == "/api/activity" and a[1].get("source") == "hooks":
+        # Python answered from the tool hooks' record, which only POSTs feed.
+        ACTIVITY_COUNTS["hooks"] += 1
+        return None
+    if route == "/api/activity":
+        ACTIVITY_COUNTS["conversation"] += 1
     if route == "/api/projects":
         # Remote hosts' projects come with phase 4.
         a[1]["projects"] = [p for p in a[1]["projects"] if p.get("source") != "remote"]
@@ -207,6 +215,7 @@ def history_difference(a, b):
 
 
 HISTORY_COUNTS = {"rows": 0}
+ACTIVITY_COUNTS = {"conversation": 0, "hooks": 0}
 
 
 def main():
@@ -234,6 +243,9 @@ def main():
                   "/api/conversation?session=%s&blocks=400" % q,
                   "/api/conversation?session=%s&known=%s" % (q, sig),
                   "/api/conversation?session=%s&known=stale&blocks=3" % q]
+    for sid in ids:
+        paths.append("/api/activity?session=" + urllib.parse.quote(sid))
+    paths += ["/api/errors", "/api/errors?days=1", "/api/errors?days=bad"]
     # Changes and worktrees: plain git, read-only, in every project here.
     for sid in [r["sessionId"] for r in snap.get("sessions", []) if not r.get("remote")] + ["nope"]:
         paths.append("/api/changes?session=" + urllib.parse.quote(sid))
@@ -287,6 +299,8 @@ def main():
         failures.append(("/api/stream", diff))
     print("sessions: %d fields compared, %d left out as POST-fed" % (counts["compared"], counts["skipped"]))
     print("history: %d rows of sessions not running compared exactly" % HISTORY_COUNTS["rows"])
+    print("activity: %(conversation)d compared from the conversation, %(hooks)d answered "
+          "from tool hooks by Python (POST-fed, left out)" % ACTIVITY_COUNTS)
     print("shadow: %d requests over %d sessions, %d settled on retry, %.1fs"
           % (paths_done, len(ids), live, time.time() - t0))
     for path, diff in failures[:25]:
