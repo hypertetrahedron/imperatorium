@@ -1,10 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["imperatorium"]
+members = ["imperatorium", "conformance/fakecli"]
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
-panic = "abort"
+# Unwind, not abort: in `serve`, a panic in one request or timer thread
+# must cost only that thread, as an exception does in Python.

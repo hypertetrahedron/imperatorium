@@ -28,6 +28,24 @@ ID_PATTERN = re.compile(r"\b([0-9a-f]{6,12})\b")
 DEFAULT_TIMEOUT = 90.0
 
 
+# Set by a running Claude Code session for its own child processes. A
+# `claude` that inherits them takes itself for that session's child: it sits
+# on its banner and never registers. `wt` hands its caller's environment to
+# the new tab, and `claude --bg` is a child here too, so every launch drops
+# them - which matters when the dispatcher runs inside a session (`impctl run`).
+SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+               "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+               "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT",
+               "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "AI_AGENT")
+
+
+def launch_env(env=None):
+    env = dict(os.environ if env is None else env)
+    for name in SESSION_ENV:
+        env.pop(name, None)
+    return env
+
+
 class BackgroundError(RuntimeError):
     pass
 
@@ -90,7 +108,7 @@ def start(prompt, cwd, timeout=DEFAULT_TIMEOUT, **options):
     try:
         # keep: the session it starts must outlive it.
         done = subproc.run(cmd, cwd=cwd, capture_output=True, text=True,
-                           timeout=timeout, keep=True)
+                           timeout=timeout, keep=True, env=launch_env())
     except FileNotFoundError as exc:
         raise BackgroundError("claude is not on PATH") from exc
     except subprocess.TimeoutExpired as exc:

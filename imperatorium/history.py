@@ -255,21 +255,10 @@ def new_session(cwd, popen=None, session_id=None, opener=None):
                  "command": " ".join(cmd), "session_id": session_id}, **extra)
 
 
-# Set by a running Claude Code session for its own child processes. `wt`
-# hands its caller's environment to the new tab, so a dispatcher started from
-# inside a session (`impctl run`) would launch a `claude` that takes itself
-# for that session's child: it sits on its banner and never registers.
-SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
-               "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
-               "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT",
-               "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "AI_AGENT")
-
-
-def launch_env(env=None):
-    env = dict(os.environ if env is None else env)
-    for name in SESSION_ENV:
-        env.pop(name, None)
-    return env
+# A launched `claude` must not inherit the calling session's identity; see
+# background.SESSION_ENV. Kept under these names for callers and tests.
+SESSION_ENV = background.SESSION_ENV
+launch_env = background.launch_env
 
 
 def _popen(cmd, cwd):

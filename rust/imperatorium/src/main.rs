@@ -25,13 +25,16 @@
 //!     imperatorium policy-decide           # JSON lines {request, policy} -> [verdict, reason, tier]
 
 mod activity;
+mod background;
 mod changes;
+mod closing;
 mod conversation;
 mod costs;
 mod history;
 mod hooks;
 mod http;
 mod inbox;
+mod launch;
 mod live;
 mod matrix;
 mod modlink;
@@ -171,6 +174,8 @@ fn main() {
         Some("policy-decide") => policy_decide(),
         // Conformance only: settings.check over JSON lines.
         Some("settings-check") => settings::check_lines(),
+        // Internal: closing.rs types into a session's console through this.
+        Some("type-into") => closing::type_into_main(&args[1..]),
         Some("sessions") => sessions_main(&args),
         Some("serve") => {
             let port = flag(&args, "--port")

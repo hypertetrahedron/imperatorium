@@ -827,6 +827,21 @@ class Resume(unittest.TestCase):
                                   "CLAUDE_CODE_MESSAGING_SOCKET": "p", "PATH": "/bin"})
         self.assertEqual(env, {"PATH": "/bin"})
 
+    def test_a_background_launch_drops_the_calling_sessions_identity_too(self):
+        # Found by the native port's session_twin: `claude --bg` inherited
+        # the dispatcher's own environment, session variables included.
+        from unittest import mock
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw.get("env") or {})
+            return types.SimpleNamespace(returncode=0, stdout="started 1f2e3d4c", stderr="")
+        with mock.patch.dict(os.environ, {"CLAUDECODE": "1", "CLAUDE_PID": "7", "KEEP_ME": "1"}),                 mock.patch.object(background.subproc, "run", fake_run):
+            background.start("go on", self.dir)
+        self.assertIn("KEEP_ME", seen)
+        self.assertNotIn("CLAUDECODE", seen)
+        self.assertNotIn("CLAUDE_PID", seen)
+
     def test_new_session_gets_a_fresh_id_each_time_or_the_one_given(self):
         launch = lambda cwd, **k: history.new_session(cwd, popen=lambda *a: None, **k)
         a, b = launch(self.dir), launch(self.dir)

@@ -1157,6 +1157,152 @@ impl Shared {
         }
     }
 
+    /// Control.resume: resume or fork a local session, in a new tab or in
+    /// the background.
+    fn resume(
+        &self,
+        store: &crate::store::Store,
+        session_id: &str,
+        where_: &str,
+        fork: bool,
+        prompt: Option<&str>,
+        cwd: Option<String>,
+    ) -> Value {
+        let row = self.row(session_id);
+        if let Some(r) = row.as_ref().filter(|r| truthy(r.get("remote"))) {
+            return json!({"ok": false, "error": format!("resuming a session on {} is not supported yet",
+                crate::pyish::py_str(r.get("host").unwrap_or(&Value::Null)))});
+        }
+        let text = |r: &Row, k: &str| {
+            r.get(k)
+                .filter(|v| truthy(Some(v)))
+                .map(crate::pyish::py_str)
+        };
+        let mut cwd = cwd.or_else(|| row.as_ref().and_then(|r| text(r, "cwd")));
+        if cwd.is_none() {
+            cwd = self
+                .history
+                .list()
+                .into_iter()
+                .find(|h| h.get("session_id").and_then(Value::as_str) == Some(session_id))
+                .and_then(|h| {
+                    h.get("cwd")
+                        .filter(|v| truthy(Some(v)))
+                        .map(crate::pyish::py_str)
+                });
+        }
+        if let Some(r) = &row {
+            if (truthy(r.get("pid")) || truthy(r.get("status"))) && !fork && where_ == "window" {
+                return json!({"ok": false, "error": "that session is still running - focus it, or fork it to branch off"});
+            }
+        }
+        if where_ == "window" && self.hc_hosting() {
+            return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
+        }
+        let options = self
+            .config()
+            .get("background")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let got =
+            match crate::launch::resume(session_id, cwd.as_deref(), where_, fork, prompt, &options)
+            {
+                Ok(g) => g,
+                Err(e) => return json!({"ok": false, "error": e}),
+            };
+        let e = json!({"kind": if fork { "fork" } else { "resume" }, "session_id": session_id,
+                       "cwd": cwd, "summary": got["command"]});
+        store.add_event(e.as_object().unwrap().clone());
+        self.invalidate();
+        got
+    }
+
+    /// Whether window sessions start in a herdr-core terminal (terminal.host).
+    fn hc_hosting(&self) -> bool {
+        settings::value(&self.config(), "terminal.host").as_str() == Some("hc")
+    }
+
+    /// Control.new_session: a fresh session in the same project, in a new
+    /// tab; with `close`, the old one ends once the new one is launched.
+    fn new_session(
+        &self,
+        store: &crate::store::Store,
+        session_id: Option<&str>,
+        cwd: Option<String>,
+        close: bool,
+    ) -> Value {
+        let row = session_id.and_then(|s| self.row(s));
+        if let Some(r) = row.as_ref().filter(|r| truthy(r.get("remote"))) {
+            return json!({"ok": false, "error": format!("starting a session on {} is not supported yet",
+                crate::pyish::py_str(r.get("host").unwrap_or(&Value::Null)))});
+        }
+        if close && !row.as_ref().is_some_and(|r| truthy(r.get("pid"))) {
+            return json!({"ok": false, "error": NOT_RUNNING});
+        }
+        let cwd = cwd.or_else(|| {
+            row.as_ref().and_then(|r| {
+                r.get("cwd")
+                    .filter(|v| truthy(Some(v)))
+                    .map(crate::pyish::py_str)
+            })
+        });
+        if self.hc_hosting() {
+            return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
+        }
+        let sid = uuid4();
+        let mut got = match crate::launch::new_session(cwd.as_deref(), &sid) {
+            Ok(g) => g,
+            Err(e) => return json!({"ok": false, "error": e}),
+        };
+        let e = json!({"kind": "new", "cwd": cwd, "summary": got["command"], "session_id": got["session_id"]});
+        store.add_event(e.as_object().unwrap().clone());
+        if close {
+            got["closed"] = self.close_row(store, row.as_ref().unwrap());
+        }
+        self.invalidate();
+        got
+    }
+
+    /// Control.close_session: end a local session and, with it, its tab.
+    fn close_session(&self, store: &crate::store::Store, session_id: Option<&str>) -> Value {
+        let row = session_id.and_then(|s| self.row(s));
+        if let Some(r) = row.as_ref().filter(|r| truthy(r.get("remote"))) {
+            return json!({"ok": false, "error": format!("closing a session on {} is not supported yet",
+                crate::pyish::py_str(r.get("host").unwrap_or(&Value::Null)))});
+        }
+        let Some(row) = row.filter(|r| truthy(r.get("pid"))) else {
+            return json!({"ok": false, "error": NOT_RUNNING});
+        };
+        let got = self.close_row(store, &row);
+        self.invalidate();
+        got
+    }
+
+    /// Control._close_row. (A herdr-core terminal is closed through hc,
+    /// which comes with herdr-core hosting.)
+    fn close_row(&self, store: &crate::store::Store, row: &Row) -> Value {
+        let hosted = row
+            .get("hc")
+            .and_then(|h| h.get("address"))
+            .is_some_and(|a| truthy(Some(a)));
+        let got = if hosted {
+            json!({"ok": false, "error": "closing a herdr-core terminal is not ported yet"})
+        } else {
+            crate::closing::close(row.get("pid").unwrap_or(&Value::Null))
+        };
+        let summary = got
+            .get("how")
+            .filter(|v| truthy(Some(v)))
+            .or(got.get("error"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let e = json!({"kind": "close", "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
+                       "session_id": row.get("sessionId").cloned().unwrap_or(Value::Null), "summary": summary});
+        store.add_event(e.as_object().unwrap().clone());
+        got
+    }
+
     /// Control.park_wait: how long a parked request is held. A background
     /// session has no terminal, so it gets `wait_background`; a question
     /// takes longer to answer than an Allow.
@@ -1480,6 +1626,37 @@ impl Shared {
         }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p))),
+            "/api/resume" | "/api/new" | "/api/close" => {
+                let Some(store) = &self.store else {
+                    return (
+                        200,
+                        Body::Json(
+                            json!({"ok": false, "error": "a read-only shadow changes nothing"}),
+                        ),
+                    );
+                };
+                let text = |k: &str| {
+                    p.get(k)
+                        .filter(|v| truthy(Some(v)))
+                        .map(crate::pyish::py_str)
+                };
+                let sid = text("session_id");
+                let got = match path {
+                    "/api/resume" => self.resume(
+                        store,
+                        sid.as_deref().unwrap_or(""),
+                        text("where").as_deref().unwrap_or("window"),
+                        truthy(p.get("fork")),
+                        text("prompt").as_deref(),
+                        text("cwd"),
+                    ),
+                    "/api/new" => {
+                        self.new_session(store, sid.as_deref(), text("cwd"), truthy(p.get("close")))
+                    }
+                    _ => self.close_session(store, sid.as_deref()),
+                };
+                (200, Body::Json(got))
+            }
             "/api/worktree" => {
                 let Some(store) = &self.store else {
                     return (
@@ -2662,6 +2839,26 @@ const STREAM_SECONDS: f64 = 600.0;
 const STREAM_EVERY: f64 = 5.0;
 const STREAM_MIN_GAP: f64 = 2.0;
 const STREAM_KEEPALIVE: f64 = 15.0;
+
+/// dispatcher.NOT_RUNNING.
+const NOT_RUNNING: &str = "that session is not running here, so there is nothing to close";
+
+/// str(uuid.uuid4()).
+fn uuid4() -> String {
+    let mut b = [0u8; 16];
+    getrandom::getrandom(&mut b).expect("random bytes");
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
 
 /// dispatcher.IDLE_AFTER: how long after Stop the idle check looks.
 const IDLE_AFTER: f64 = 60.0;

@@ -71,7 +71,8 @@ def start(root, extra_config=None, extra_env=None):
     for side, port in (("py", PY_PORT), ("rs", RS_PORT)):
         e = dict(env(), CLAUDE_CONFIG_DIR=os.path.join(root, "claude"),
                  LOCALAPPDATA=os.path.join(root, side + "-local"),
-                 IMPERATORIUM_POLICY=os.path.join(root, "no-policy.json"), **(extra_env or {}))
+                 IMPERATORIUM_POLICY=os.path.join(root, "no-policy.json"),
+                 **((extra_env(side) if callable(extra_env) else extra_env) or {}))
         state = os.path.join(root, side, "state.json")
         if side == "py":
             cmd, cwd = [sys.executable, "-m", "imperatorium.dispatcher", "--port", str(port),
