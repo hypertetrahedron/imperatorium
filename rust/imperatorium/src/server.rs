@@ -23,8 +23,8 @@ use sha1::{Digest, Sha1};
 use crate::pyish::{json_dumps_sorted, truthy};
 use crate::registry::Row;
 use crate::{
-    activity, conversation, costs, history, paths, procs, registry, sessions, sessionstat,
-    settings, ui,
+    activity, conversation, costs, history, paths, procs, projects, registry, sessions,
+    sessionstat, settings, ui,
 };
 
 pub struct Shared {
@@ -691,6 +691,44 @@ impl Shared {
         Value::Object(out)
     }
 
+    /// Control.catalogue, local part: the roots from config.json (else the
+    /// folder the checkout sits in) and the folders sessions run in.
+    fn catalogue(&self) -> Vec<Value> {
+        let configured: Vec<String> = self
+            .config
+            .get("roots")
+            .and_then(Value::as_array)
+            .map(|r| {
+                r.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let roots = if configured.is_empty() {
+            // projects.DEFAULT_ROOTS: the folder the checkout sits in.
+            let home = paths::config_home(self.home.as_deref());
+            vec![home
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()]
+        } else {
+            configured
+        };
+        let local: Vec<String> = self
+            .sessions(2.0)
+            .iter()
+            .filter(|r| !truthy(r.get("remote")))
+            .filter_map(|r| {
+                r.get("cwd")
+                    .and_then(Value::as_str)
+                    .filter(|c| !c.is_empty())
+                    .map(str::to_string)
+            })
+            .collect();
+        projects::discover(&roots, &local)
+    }
+
     /// GET /api/settings: Control.settings_view.
     fn api_settings(&self) -> Value {
         let path = paths::config_home(self.home.as_deref()).join("config.json");
@@ -791,6 +829,7 @@ impl Shared {
             }
             ("GET", "/api/decisions") => (200, Body::Json(json!({"decisions": decisions(60)}))),
             ("GET", "/api/settings") => (200, Body::Json(self.api_settings())),
+            ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue()}))),
             ("GET", "/api/notify") => (200, Body::Json(self.api_notify())),
             ("GET", "/api/quick") => (
                 200,

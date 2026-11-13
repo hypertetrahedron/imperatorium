@@ -33,6 +33,7 @@ mod http;
 mod paths;
 mod policy;
 mod procs;
+mod projects;
 mod pyish;
 mod registry;
 mod server;

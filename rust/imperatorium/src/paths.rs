@@ -76,6 +76,16 @@ pub fn abs_normcase(p: &str) -> Option<String> {
     imp::abs_normcase(p)
 }
 
+/// `os.path.normpath(p)`.
+pub fn normpath(p: &str) -> String {
+    imp::normpath(p)
+}
+
+/// `os.path.abspath(p)`, or None where Python would raise.
+pub fn abspath(p: &str) -> Option<String> {
+    imp::abspath(p)
+}
+
 /// `os.path.basename(p)`.
 pub fn basename(p: &str) -> &str {
     #[cfg(windows)]
@@ -107,6 +117,12 @@ mod imp {
     /// separators and trailing dots) then ntpath.normcase (an invariant-
     /// locale LCMapStringEx lowercase), the same calls Python makes.
     pub fn abs_normcase(p: &str) -> Option<String> {
+        lower(&abspath(p)?.replace('/', "\\"))
+    }
+
+    /// ntpath.abspath: normpath, then GetFullPathNameW, else the lexical
+    /// fallback Python uses when that call refuses the name.
+    pub fn abspath(p: &str) -> Option<String> {
         let norm = normpath(p);
         // _getfullpathname raises on NUL (ValueError) and on names Windows
         // rejects, such as " " (OSError); Python then joins lexically.
@@ -115,11 +131,10 @@ mod imp {
         } else {
             full_path(&norm)
         };
-        let full = match full {
-            Some(f) => f,
-            None => abspath_fallback(p)?,
-        };
-        lower(&full.replace('/', "\\"))
+        match full {
+            Some(f) => Some(f),
+            None => abspath_fallback(p),
+        }
     }
 
     /// ntpath._abspath_fallback: join to the cwd unless isabs, then normpath.
@@ -269,6 +284,10 @@ mod imp {
     /// posixpath.abspath: join to the cwd, then normpath. Lexical, like
     /// Python: symlinks are not resolved. normcase is the identity.
     pub fn abs_normcase(p: &str) -> Option<String> {
+        abspath(p)
+    }
+
+    pub fn abspath(p: &str) -> Option<String> {
         let joined = if p.starts_with('/') {
             p.to_string()
         } else {
