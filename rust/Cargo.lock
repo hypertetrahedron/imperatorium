@@ -235,6 +235,7 @@ dependencies = [
 name = "imperatorium"
 version = "0.3.0-dev"
 dependencies = [
+ "indexmap",
  "libc",
  "regex",
  "serde_json",

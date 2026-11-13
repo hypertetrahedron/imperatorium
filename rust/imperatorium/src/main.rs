@@ -24,15 +24,19 @@
 //!
 //!     imperatorium policy-decide           # JSON lines {request, policy} -> [verdict, reason, tier]
 
+mod activity;
 mod conversation;
+mod costs;
 mod hooks;
 mod http;
 mod paths;
 mod policy;
+mod procs;
 mod pyish;
 mod registry;
 mod server;
 mod sessions;
+mod sessionstat;
 
 use std::io::{BufRead, Write};
 
@@ -109,6 +113,12 @@ fn sessions_main(args: &[String]) -> i32 {
         Some("chain") => sessions::chain_json(id),
         Some("info") => Ok(sessions::info_json(id)),
         Some("titles") => Ok(sessions::titles_json(&args[2..])),
+        Some("stats") => {
+            let now = flag(args, "--now")
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0.0);
+            Ok(sessionstat::summarise_file(id, now).unwrap_or(serde_json::Value::Null))
+        }
         Some("items") => sessions::chain_json(id).map(|chain| {
             let chain = chain.as_array().cloned().unwrap_or_default();
             let merge = args.iter().any(|a| a == "--merge");

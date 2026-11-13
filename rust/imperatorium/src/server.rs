@@ -5,8 +5,13 @@
 //! the answers. It reads config.json, state.json and the transcripts, and
 //! writes nothing.
 //!
-//! Ported so far: GET /api/health, GET /api/conversation. Anything else is
-//! a 404, as the Python dispatcher answers an unknown path.
+//! Ported so far: GET /api/health, GET /api/conversation, GET /api/sessions.
+//! Anything else is a 404, as the Python dispatcher answers an unknown path.
+//!
+//! The session rows are the Python dispatcher's `sessions()` less what only
+//! it can know, because it is fed by POSTs this shadow never receives: a
+//! tool hook's live activity, the statusline's usage, the mod's beats, and
+//! the PR badges it polls `gh` for. Those come with step 2.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,12 +21,18 @@ use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 
 use crate::pyish::{json_dumps_sorted, truthy};
-use crate::{conversation, paths, registry, sessions};
+use crate::registry::Row;
+use crate::{activity, conversation, costs, paths, procs, registry, sessions, sessionstat};
 
 pub struct Shared {
     config: Value,
     boot: String,
-    lookup: registry::Lookup,
+    /// The dispatcher's snapshot cache: (when, rows), the rows still holding
+    /// their tokens - only `public()` copies leave the process.
+    snap: Mutex<Option<(f64, Vec<Row>)>>,
+    stats: sessionstat::Reader,
+    /// _doing_line's cache: sid -> (when, line).
+    doing: Mutex<HashMap<String, (f64, String)>>,
     convs: Mutex<HashMap<String, Arc<Cached>>>,
     /// convcache._paths: each session's transcript, found once.
     paths: Mutex<HashMap<String, PathBuf>>,
@@ -135,7 +146,9 @@ impl Shared {
         Shared {
             config: load_config(home),
             boot,
-            lookup: registry::Lookup::new(),
+            snap: Mutex::new(None),
+            stats: sessionstat::Reader::new(),
+            doing: Mutex::new(HashMap::new()),
             convs: Mutex::new(HashMap::new()),
             paths: Mutex::new(HashMap::new()),
         }
@@ -211,7 +224,17 @@ impl Shared {
         };
         let limit = int("limit") as usize;
         let blocks = int("blocks");
-        let row = self.lookup.find(&session, &self.config);
+        // _row(session, max_age=LOOKUP_AGE): a 15 s old snapshot will do,
+        // and a fresh one (at most 2 s old) is asked only when it is missing.
+        let hit = |rows: &[Row]| {
+            rows.iter()
+                .find(|r| {
+                    r.get("sessionId").and_then(Value::as_str) == Some(session.as_str())
+                        || r.get("id").and_then(Value::as_str) == Some(session.as_str())
+                })
+                .cloned()
+        };
+        let row = hit(&self.sessions(15.0)).or_else(|| hit(&self.sessions(2.0)));
         let sid = row
             .as_ref()
             .and_then(|r| r.get("sessionId").and_then(Value::as_str))
@@ -289,6 +312,244 @@ impl Shared {
         (200, Body::Json(Value::Object(body)))
     }
 
+    // -- the session snapshot -------------------------------------------------
+
+    fn now() -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)
+    }
+
+    /// Control.sessions(max_age): the rows, cached briefly.
+    pub fn sessions(&self, max_age: f64) -> Vec<Row> {
+        let now = Self::now();
+        if let Some((at, rows)) = self.snap.lock().unwrap().as_ref() {
+            if now - at < max_age {
+                return rows.clone();
+            }
+        }
+        let rows = self.build_snapshot();
+        *self.snap.lock().unwrap() = Some((Self::now(), rows.clone()));
+        rows
+    }
+
+    fn build_snapshot(&self) -> Vec<Row> {
+        let st = registry::state();
+        let creds = registry::credentials(&st);
+        let mut rows = registry::merge(
+            &registry::agents(std::time::Duration::from_secs(20)),
+            &registry::session_files(),
+            &creds,
+        );
+        procs::annotate(&mut rows);
+        let empty = Map::new();
+        let known = st
+            .get("sessions")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty);
+        let mut titled = Vec::new();
+        for (i, row) in rows.iter_mut().enumerate() {
+            let sid = row
+                .get("sessionId")
+                .map(crate::pyish::py_str)
+                .unwrap_or_default();
+            let Some(Value::Object(extra)) = known.get(&sid) else {
+                continue;
+            };
+            if extra.is_empty() {
+                continue;
+            }
+            overlay(row, extra);
+            titled.push(i);
+        }
+        let ids: Vec<String> = titled
+            .iter()
+            .filter_map(|&i| {
+                rows[i]
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        if let Value::Object(found) = sessions::titles_json(&ids) {
+            for &i in &titled {
+                let sid = rows[i]
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                rows[i].insert(
+                    "window_title".into(),
+                    found.get(&sid).cloned().unwrap_or(json!("")),
+                );
+            }
+        }
+        let queue = st
+            .get("queue")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for row in rows.iter_mut() {
+            self.decorate(row, &queue);
+        }
+        let dismissed = st
+            .get("dismissed")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        rows.retain(|r| {
+            let key = r.get("key").and_then(Value::as_str).unwrap_or("");
+            !(dismissed.contains_key(key) && !truthy(r.get("pid")))
+        });
+        let hours = get(&self.config, "list.hide_finished_hours")
+            .filter(|v| v.is_number())
+            .and_then(Value::as_f64)
+            .filter(|h| *h > 0.0)
+            .unwrap_or(0.0);
+        if hours > 0.0 {
+            let cutoff = Self::now() - hours * 3600.0;
+            rows.retain(|r| !(registry::finished(r) && finished_at(r) < cutoff));
+        }
+        rows
+    }
+
+    /// Control._decorate, less what only the Python dispatcher knows.
+    fn decorate(&self, row: &mut Row, queue: &Map<String, Value>) {
+        let sid = row
+            .get("sessionId")
+            .map(crate::pyish::py_str)
+            .unwrap_or_default();
+        row.insert("key".into(), json!(sid));
+        let state = row.get("state").and_then(Value::as_str).map(str::to_string);
+        let ended = matches!(
+            state.as_deref(),
+            Some("done") | Some("failed") | Some("stopped")
+        );
+        if !ended {
+            let line = self.doing_line(&sid);
+            row.insert("doing".into(), json!(line));
+        }
+        if let Some(Value::Array(q)) = queue.get(&sid) {
+            if !q.is_empty() {
+                row.insert("queued".into(), json!(q.len()));
+            }
+        }
+        let bg_idle = row.get("kind").and_then(Value::as_str) == Some("background")
+            && !truthy(row.get("pid"))
+            && !truthy(row.get("status"));
+        if ended || bg_idle {
+            row.insert("resumable".into(), json!(true));
+        }
+        row.insert(
+            "resume_command".into(),
+            json!(format!("claude --resume {sid}")),
+        );
+        let work = self.work(row);
+        row.insert("work".into(), work);
+    }
+
+    /// Control._doing_line: activity.doing over the last 8 messages,
+    /// remembered for DOING_EVERY (10 s).
+    fn doing_line(&self, sid: &str) -> String {
+        let now = Self::now();
+        let hit = self.doing.lock().unwrap().get(sid).cloned();
+        if let Some((at, line)) = &hit {
+            if now - at < 10.0 {
+                return line.clone();
+            }
+        }
+        let line = match self.conversation(sid) {
+            Ok(c) => {
+                let start = c.raw.len().saturating_sub(8);
+                activity::doing(&conversation::merge_turns(c.raw[start..].to_vec()))
+            }
+            Err(_) => hit.map(|h| h.1).unwrap_or_default(),
+        };
+        self.doing
+            .lock()
+            .unwrap()
+            .insert(sid.to_string(), (now, line.clone()));
+        line
+    }
+
+    /// Control._work: what the tile shows at a glance.
+    fn work(&self, row: &Row) -> Value {
+        let sid = row
+            .get("sessionId")
+            .map(crate::pyish::py_str)
+            .unwrap_or_default();
+        let stat = self
+            .stats
+            .read(&sid, Self::now())
+            .unwrap_or_else(|| json!({}));
+        let alive =
+            row.get("pid").is_some_and(|p| p.is_u64() || p.is_i64()) && truthy(row.get("status"));
+        let cache = stat.get("cache").cloned().unwrap_or_else(|| json!({}));
+        let mut out = Map::new();
+        out.insert(
+            "cache_expires_at".into(),
+            cache.get("expires_at").cloned().unwrap_or(Value::Null),
+        );
+        out.insert(
+            "context_tokens".into(),
+            stat.get("context_tokens").cloned().unwrap_or(Value::Null),
+        );
+        out.insert(
+            "cold_tokens".into(),
+            get(&self.config, "chat.cold_cache_tokens")
+                .cloned()
+                .unwrap_or(json!(0)),
+        );
+        out.insert(
+            "resume_cost_usd".into(),
+            costs::rewrite_cost(
+                stat.get("model_id"),
+                stat.get("context_tokens"),
+                cache.get("ttl"),
+            ),
+        );
+        out.insert("alive".into(), json!(alive));
+        if alive {
+            for name in ["agents", "shells", "monitors", "wakeups"] {
+                let n = stat
+                    .get(name)
+                    .and_then(Value::as_array)
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                out.insert(name.into(), json!(n));
+            }
+            let soonest = stat
+                .get("wakeups")
+                .and_then(Value::as_array)
+                .map(|w| {
+                    w.iter()
+                        .filter_map(|x| x.get("fires_at").and_then(Value::as_f64))
+                        .filter(|f| *f != 0.0)
+                        .fold(None, |m: Option<f64>, f| Some(m.map_or(f, |m| m.min(f))))
+                })
+                .unwrap_or(None);
+            out.insert(
+                "wakes_at".into(),
+                soonest.map(|f| json!(f)).unwrap_or(Value::Null),
+            );
+            let n = row
+                .get("shell_processes")
+                .filter(|v| truthy(Some(v)))
+                .cloned()
+                .unwrap_or(json!(0));
+            out.insert("processes".into(), n);
+        }
+        Value::Object(out)
+    }
+
+    /// GET /api/sessions: the snapshot as it may leave the process.
+    fn api_sessions(&self) -> Value {
+        // The Stream Deck polls once a second; STREAM_EVERY is 1.0 there.
+        let rows = self.sessions(1.0);
+        json!({"at": Self::now(), "sessions": public(rows)})
+    }
+
     pub fn handle(&self, method: &str, url: &str) -> (u16, Body) {
         let (path, query) = url.split_once('?').unwrap_or((url, ""));
         let q = parse_query(query);
@@ -301,9 +562,93 @@ impl Shared {
                 ),
             ),
             ("GET", "/api/conversation") => self.api_conversation(&q),
+            ("GET", "/api/sessions") => (200, Body::Json(self.api_sessions())),
             _ => (404, Body::Json(json!({"error": "no such path"}))),
         }
     }
+}
+
+/// Row fields that never leave the process (dispatcher.PRIVATE_ROW_FIELDS).
+const PRIVATE_ROW_FIELDS: &[&str] = &["token"];
+
+fn public(rows: Vec<Row>) -> Vec<Value> {
+    rows.into_iter()
+        .map(|mut r| {
+            for k in PRIVATE_ROW_FIELDS {
+                r.shift_remove(*k);
+            }
+            Value::Object(r)
+        })
+        .collect()
+}
+
+/// dispatcher.finished_at: a finished job's last hook event, else its start.
+fn finished_at(row: &Row) -> f64 {
+    let num = |k: &str| {
+        row.get(k)
+            .filter(|v| v.is_number())
+            .and_then(Value::as_f64)
+            .filter(|v| *v > 0.0)
+    };
+    num("last_event_at")
+        .or_else(|| num("startedAt").map(|s| s / 1000.0))
+        .unwrap_or(0.0)
+}
+
+/// Control._overlay: fold what hooks recorded into a row. Read-only here:
+/// where Python would also clear stale attention in the store, this only
+/// leaves it off the row (Python's next snapshot does the same).
+fn overlay(row: &mut Row, extra: &Map<String, Value>) {
+    for field in [
+        "socket",
+        "name",
+        "cwd",
+        "last_notification",
+        "last_event",
+        "last_event_at",
+        "last_failure",
+        "last_failure_detail",
+        "window_title",
+        "hc",
+    ] {
+        if truthy(extra.get(field)) && !truthy(row.get(field)) {
+            row.insert(field.into(), extra[field].clone());
+        }
+    }
+    let dispatchable = |row: &Row| truthy(row.get("socket")) && truthy(row.get("token"));
+    if registry::finished(row) {
+        let d = dispatchable(row);
+        row.insert("dispatchable".into(), json!(d));
+        return;
+    }
+    let since = extra.get("attention_since").filter(|v| truthy(Some(v)));
+    let kind = extra.get("attention_kind").and_then(Value::as_str);
+    let failure = kind == Some("failure");
+    let stale = !failure && registry::moved_on(row, since.and_then(Value::as_f64));
+    if since.is_some() && stale {
+        // cleared
+    } else if since.is_some()
+        && !failure
+        && registry::still_running(row, extra.get("last_notification"))
+    {
+        // hidden while the work goes on
+    } else if let Some(since) = since {
+        row.insert("attention_since".into(), since.clone());
+        row.insert("attention".into(), json!(true));
+        row.insert(
+            "attention_reason".into(),
+            extra
+                .get("attention_reason")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        row.insert(
+            "attention_kind".into(),
+            extra.get("attention_kind").cloned().unwrap_or(Value::Null),
+        );
+    }
+    let d = dispatchable(row);
+    row.insert("dispatchable".into(), json!(d));
 }
 
 /// A response body: a value to serialise, or JSON text already assembled.

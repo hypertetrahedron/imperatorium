@@ -162,9 +162,26 @@ Python's once warm: the full conversation is spliced in from items
 serialised once per change, and bodies carry Content-Length (tiny_http
 would otherwise go chunked above 32 KiB).
 
-Next in step 1: `/api/sessions` (the snapshot: procs, work, overlay,
-decorate, sessionstat, costs, usage), then `/api/history`, the pages
-(`/`, `/matrix`, `/settings`) and the remaining GETs.
+`GET /api/sessions` followed: `registry.rs` now ports the whole merge
+(credential pairing, attention, `moved_on`/`still_running`, `place`,
+labels), `procs.rs` the shells under each session (Toolhelp on Windows, `ps`
+elsewhere), `sessionstat.rs` the incremental transcript fold
+(`stats_compare.py`: 125 sessions x 4 clocks identical, types included),
+`costs.rs` `resolve`/`rewrite_cost`, `activity.rs` the doing line; the
+server adds the overlay, titles, decorate, dismiss and hide, and sends rows
+through `public()` (no tokens). `shadow.py` compares every row the binary
+can know: 190 fields over 6 live tiles identical. Left out, and listed in
+the comparator: what only the live dispatcher is fed by POSTs (`usage`,
+`pr`, `mod`, `mod_pending`, a live hook's `doing`), and on mod-reported rows
+the `status`/`dispatchable`/`work.alive` its beat rewrites - step 2.
+
+A cold snapshot costs about 1.4 s, nearly all of it `claude agents` itself
+(Claude Code 2.1.323 here, timed alone). Python pays the same; its open
+window's `/api/stream` keeps the cache warm so requests rarely see it. The
+binary will do the same once `/api/stream` is ported.
+
+Next in step 1: `/api/history`, the pages (`/`, `/matrix`, `/settings`),
+`/api/stream`, and the remaining GETs.
 
 ## Building
 

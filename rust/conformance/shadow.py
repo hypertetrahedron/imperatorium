@@ -48,6 +48,60 @@ def compare(path):
     return first_difference(a[1], b[1])
 
 
+# /api/sessions: what only the Python dispatcher can know, fed by POSTs the
+# shadow never receives (step 2 ports them). Always left out of a row:
+POST_FED = ("usage", "pr", "mod", "mod_pending", "doing_since")
+# ...and on a row the mod reports on, what its beat rewrites (`status`,
+# `dispatchable`) and what follows from that status in `work`:
+MOD_FED = ("status", "dispatchable")
+MOD_WORK = ("alive", "agents", "shells", "monitors", "wakeups", "wakes_at", "processes")
+
+
+def project(py_row, rs_row, counts):
+    """The two rows cut to what both can know, and a tally of what was cut."""
+    drop = set(POST_FED)
+    if "doing_since" in py_row:       # a live tool hook set `doing`
+        drop.add("doing")
+    modded = "mod" in py_row
+    if modded:
+        drop.update(MOD_FED)
+    out = []
+    for row in (py_row, rs_row):
+        row = {k: v for k, v in row.items() if k not in drop}
+        if modded and isinstance(row.get("work"), dict):
+            row["work"] = {k: v for k, v in row["work"].items() if k not in MOD_WORK}
+        out.append(row)
+    counts["compared"] += len(out[0]) + len((out[0].get("work") or {}))
+    counts["skipped"] += len(py_row) - len(out[0])
+    return out
+
+
+def ordered(value):
+    """Rows compare by content: key order inside a row means nothing."""
+    if isinstance(value, dict):
+        return {k: ordered(value[k]) for k in sorted(value)}
+    if isinstance(value, list):
+        return [ordered(v) for v in value]
+    return value
+
+
+def compare_sessions(counts):
+    _, a = get(PY, "/api/sessions")
+    _, b = get(RS, "/api/sessions")
+    py = [r for r in a.get("sessions", []) if not r.get("remote")]
+    rs = b.get("sessions", [])
+    if [r["sessionId"] for r in py] != [r["sessionId"] for r in rs]:
+        return "rows %r vs %r" % ([r.get("name") for r in py], [r.get("name") for r in rs])
+    for p, r in zip(py, rs):
+        if "token" in r:
+            return "the binary sent a token for %s" % r.get("name")
+        p, r = project(p, r, counts)
+        diff = first_difference(ordered(p), ordered(r), "$[%s]" % p.get("name"))
+        if diff:
+            return diff
+    return None
+
+
 def main():
     global PY, RS
     if "--python" in sys.argv:
@@ -81,6 +135,17 @@ def main():
                 live += 1
                 continue
             failures.append((path, diff2))
+    counts = {"compared": 0, "skipped": 0}
+    diff = compare_sessions(counts)
+    for _ in range(4):           # tiles move: a session working, a cache expiring
+        if not diff:
+            break
+        time.sleep(1.5)
+        counts = {"compared": 0, "skipped": 0}
+        diff = compare_sessions(counts)
+    if diff:
+        failures.append(("/api/sessions", diff))
+    print("sessions: %d fields compared, %d left out as POST-fed" % (counts["compared"], counts["skipped"]))
     print("shadow: %d requests over %d sessions, %d settled on retry, %.1fs"
           % (len(paths), len(ids), live, time.time() - t0))
     for path, diff in failures[:25]:

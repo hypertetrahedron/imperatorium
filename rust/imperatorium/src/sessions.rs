@@ -490,6 +490,12 @@ fn first_prompt_from_head(head: &str) -> String {
 /// `datetime.fromisoformat(ts).timestamp() * 1000`, truncated, for the
 /// forms Claude Code writes (`2026-11-12T19:16:41.123Z`, or an offset).
 fn iso_ms(ts: &str) -> Option<i64> {
+    iso_seconds(ts).map(|secs| (secs * 1000.0) as i64)
+}
+
+/// `datetime.fromisoformat(ts).timestamp()` for an aware timestamp (a
+/// trailing Z read as +00:00): seconds, as Python computes them.
+pub fn iso_seconds(ts: &str) -> Option<f64> {
     let ts = ts
         .strip_suffix('Z')
         .map(|t| format!("{t}+00:00"))
@@ -538,7 +544,7 @@ fn iso_ms(ts: &str) -> Option<i64> {
     let days = era * 146_097 + doe - 719_468;
     let total_us = ((days * 86_400 + h * 3600 + mi * 60 + s - offset_min * 60) * 1_000_000) + us;
     // timedelta.total_seconds() is int / 10**6 (correctly rounded), then * 1000.
-    Some(((total_us as f64 / 1e6) * 1000.0) as i64)
+    Some(total_us as f64 / 1e6)
 }
 
 /// `_parse_session_info_from_lite`, as JSON (SDKSessionInfo's fields).
