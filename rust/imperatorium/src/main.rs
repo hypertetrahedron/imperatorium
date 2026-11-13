@@ -18,7 +18,7 @@
 //! Phase 3 is the dispatcher itself, endpoint by endpoint, as a shadow beside
 //! the Python one until the cutover:
 //!
-//!     imperatorium serve [--port 8811] [--home DIR]
+//!     imperatorium serve [--port 8811] [--home DIR] [--state FILE]
 //!
 //! and, for the conformance suite only:
 //!
@@ -31,6 +31,7 @@ mod costs;
 mod history;
 mod hooks;
 mod http;
+mod live;
 mod paths;
 mod policy;
 mod procs;
@@ -41,6 +42,7 @@ mod server;
 mod sessions;
 mod sessionstat;
 mod settings;
+mod store;
 mod taskout;
 mod ui;
 
@@ -166,7 +168,8 @@ fn main() {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8811);
             let host = flag(&args, "--host").unwrap_or_else(|| "127.0.0.1".into());
-            server::serve(&host, port, home.as_deref())
+            let state = flag(&args, "--state");
+            server::serve(&host, port, home.as_deref(), state.as_deref())
         }
         Some("version") | Some("--version") => {
             println!("imperatorium {VERSION}");

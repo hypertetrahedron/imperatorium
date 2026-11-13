@@ -185,7 +185,12 @@ pub fn project_of(cwd: Option<&str>) -> String {
 type Key = (String, String, String);
 
 /// One session's running totals: (vector, cost, unpriced tokens, by model).
-type Running = ([i64; 5], f64, i64, indexmap::IndexMap<String, (i64, i64, f64)>);
+type Running = (
+    [i64; 5],
+    f64,
+    i64,
+    indexmap::IndexMap<String, (i64, i64, f64)>,
+);
 
 struct File {
     session: String,

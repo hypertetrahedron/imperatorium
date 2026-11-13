@@ -28,6 +28,11 @@ use crate::{
 };
 
 pub struct Shared {
+    /// The state this dispatcher writes, when it was given one (`--state`);
+    /// None is the read-only shadow, which reads the live state file.
+    store: Option<crate::store::Store>,
+    /// Tool events from hooks (activity.Live).
+    live: crate::live::Live,
     /// Control.cost_history: the spend ledger, read incrementally.
     cost_history: Mutex<costs::History>,
     /// Control._errors (the whole answer, ERRORS_EVERY) and _tallies
@@ -150,7 +155,16 @@ fn transcript_stamp(sid: &str) -> Option<(PathBuf, u64, u128)> {
 }
 
 impl Shared {
-    pub fn new(home: Option<&str>) -> Self {
+    pub fn new(home: Option<&str>, state: Option<&str>) -> Self {
+        let store = state.map(
+            |p| match crate::store::Store::open(std::path::Path::new(p)) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("imperatorium: {e}");
+                    std::process::exit(2);
+                }
+            },
+        );
         let boot: String = {
             let t = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -159,6 +173,8 @@ impl Shared {
         };
         Shared {
             window_token: token_urlsafe(24),
+            store,
+            live: crate::live::Live::default(),
             cost_history: Mutex::new(costs::History::new()),
             errors_cache: Mutex::new(None),
             tallies: Mutex::new(HashMap::new()),
@@ -171,6 +187,259 @@ impl Shared {
             doing: Mutex::new(HashMap::new()),
             convs: Mutex::new(HashMap::new()),
             paths: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The state as store.py holds it: the store's, or the live file read.
+    fn state(&self) -> Map<String, Value> {
+        match &self.store {
+            Some(s) => s.snapshot(),
+            None => registry::state(),
+        }
+    }
+
+    /// Where the state file is, and decisions.jsonl beside it.
+    fn state_dir(&self) -> PathBuf {
+        match &self.store {
+            Some(s) => s
+                .path
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(".")),
+            None => paths::state_dir(),
+        }
+    }
+
+    /// Control.on_hook: one hook event.
+    fn on_hook(&self, payload: &Map<String, Value>) -> Value {
+        let Some(store) = &self.store else {
+            return json!({"ok": false, "error": "a read-only shadow takes no hooks"});
+        };
+        let event = payload
+            .get("hook_event_name")
+            .filter(|v| truthy(Some(v)))
+            .map(crate::pyish::py_str)
+            .unwrap_or_else(|| "unknown".into());
+        let sid = payload
+            .get("session_id")
+            .filter(|v| truthy(Some(v)))
+            .map(crate::pyish::py_str);
+        if let Some(sid) = &sid {
+            if event == "imperatorium_statusline" || event == "ccontrol_statusline" {
+                // Several a minute per session: memory only (usage, step 2).
+                return json!({"ok": true});
+            }
+            if crate::live::TOOL_EVENTS.contains(&event.as_str()) {
+                self.live.ingest(sid, payload, Self::now());
+                return json!({"ok": true});
+            }
+        }
+        const INTERESTING: &[&str] = &[
+            "SessionStart",
+            "SessionEnd",
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "SubagentStop",
+            "TaskCompleted",
+        ];
+        let Some(key) = sid.filter(|_| INTERESTING.contains(&event.as_str())) else {
+            return json!({"ok": true, "ignored": event});
+        };
+        let mut meta = Map::new();
+        meta.insert(
+            "cwd".into(),
+            payload.get("cwd").cloned().unwrap_or(Value::Null),
+        );
+        meta.insert("last_event".into(), json!(event));
+        meta.insert("last_event_at".into(), json!(Self::now()));
+        let token = payload.get("messaging_token").cloned();
+        if let Some(sock) = payload.get("messaging_socket").filter(|v| truthy(Some(v))) {
+            meta.insert("socket".into(), sock.clone());
+        }
+        // herdr-core hosting comes with step 3; a SessionStart outside it
+        // replaces the old terminal's record, as in Python.
+        if !truthy(payload.get("hc_terminal")) && event == "SessionStart" {
+            meta.insert("hc".into(), json!({}));
+        }
+        let ev = |kind: &str, extra: Value| {
+            let mut e = json!({"kind": kind, "session_id": key})
+                .as_object()
+                .unwrap()
+                .clone();
+            if let Value::Object(x) = extra {
+                e.extend(x);
+            }
+            store.add_event(e);
+        };
+        let cwd = payload.get("cwd").cloned().unwrap_or(Value::Null);
+        match event.as_str() {
+            "SessionStart" => {
+                meta.insert(
+                    "name".into(),
+                    payload.get("session_name").cloned().unwrap_or(Value::Null),
+                );
+                store.register(&key, token.as_ref(), &meta);
+                store.undismiss(&key);
+                self.invalidate();
+                ev("session_start", json!({"cwd": meta.get("cwd")}));
+            }
+            "SessionEnd" => {
+                let gone = store.session(&key).unwrap_or_default();
+                store.forget(&key);
+                self.live.forget(&key);
+                self.invalidate();
+                let cwd = if truthy(Some(&cwd)) {
+                    cwd.clone()
+                } else {
+                    gone.get("cwd").cloned().unwrap_or(Value::Null)
+                };
+                ev(
+                    "session_end",
+                    json!({"cwd": cwd, "name": gone.get("name").cloned().unwrap_or(Value::Null)}),
+                );
+            }
+            "Notification" => {
+                let kind = payload
+                    .get("notification_type")
+                    .filter(|v| truthy(Some(v)))
+                    .map(crate::pyish::py_str)
+                    .unwrap_or_else(|| "notification".into());
+                meta.insert("last_notification".into(), json!(kind));
+                let caption = match kind.as_str() {
+                    "permission_prompt" => Some("needs permission"),
+                    "idle_prompt" => Some("waiting for you"),
+                    "agent_needs_input" => Some("needs input"),
+                    "elicitation_dialog" => Some("needs an answer"),
+                    "elicitation_url_dialog" => Some("needs a URL"),
+                    _ => None,
+                };
+                match caption {
+                    Some(c) => {
+                        store.raise_attention(&key, c, "notification", &meta);
+                        if truthy(token.as_ref()) {
+                            store.register(&key, token.as_ref(), &Map::new());
+                        }
+                    }
+                    None => store.register(&key, token.as_ref(), &meta),
+                }
+                self.invalidate();
+                ev(&kind, json!({"cwd": cwd}));
+            }
+            "StopFailure" => {
+                let summary = payload
+                    .get("last_assistant_message")
+                    .filter(|v| truthy(Some(v)))
+                    .cloned();
+                let error = payload.get("error").cloned().unwrap_or(Value::Null);
+                let detail = payload
+                    .get("error_details")
+                    .filter(|v| truthy(Some(v)))
+                    .cloned()
+                    .or(summary);
+                let detail_s = detail
+                    .as_ref()
+                    .map(crate::pyish::py_str)
+                    .unwrap_or_default();
+                let caption = registry::failure_caption(error.as_str(), &detail_s);
+                let failure = if truthy(Some(&error)) {
+                    error.clone()
+                } else {
+                    json!("unknown")
+                };
+                meta.insert("last_failure".into(), failure);
+                meta.insert(
+                    "last_failure_detail".into(),
+                    json!(crate::pyish::take(&detail_s, 280)),
+                );
+                match caption {
+                    Some(c) => store.raise_attention(&key, c, "failure", &meta),
+                    None => store.register(&key, None, &meta),
+                }
+                if truthy(token.as_ref()) {
+                    store.register(&key, token.as_ref(), &Map::new());
+                }
+                self.invalidate();
+                ev(
+                    "stopfailure",
+                    json!({"cwd": cwd, "error": error,
+                                         "summary": crate::pyish::take(&detail_s, 280)}),
+                );
+            }
+            _ => {
+                let summary = payload
+                    .get("last_assistant_message")
+                    .filter(|v| truthy(Some(v)))
+                    .map(crate::pyish::py_str)
+                    .unwrap_or_default();
+                store.register(&key, token.as_ref(), &meta);
+                if ["Stop", "SubagentStop", "TaskCompleted"].contains(&event.as_str()) {
+                    store.clear_attention(&key);
+                }
+                self.invalidate();
+                ev(
+                    &event.to_lowercase(),
+                    json!({"cwd": cwd, "summary": crate::pyish::take(&summary, 280)}),
+                );
+                // Python also schedules the minute-later idle check and
+                // delivers a queued prompt here: step 2, with the inbox.
+            }
+        }
+        json!({"ok": true})
+    }
+
+    /// Control.invalidate: the next look rebuilds the snapshot.
+    fn invalidate(&self) {
+        *self.snap.lock().unwrap() = None;
+    }
+
+    /// A POST, with the dispatcher's checks: no foreign Origin, a JSON body
+    /// of 1..MAX_BODY bytes.
+    pub fn post(
+        &self,
+        path: &str,
+        origin: Option<&str>,
+        ctype: Option<&str>,
+        body: &[u8],
+        port: u16,
+    ) -> (u16, Body) {
+        const MAX_BODY: usize = 4 * 1024 * 1024;
+        if let Some(o) = origin {
+            if o != format!("http://127.0.0.1:{port}") && o != format!("http://localhost:{port}") {
+                return (
+                    403,
+                    Body::Json(json!({"error": "cross-origin requests are refused"})),
+                );
+            }
+        }
+        let ctype = ctype.unwrap_or("").split(';').next().unwrap_or("").trim();
+        if ctype != "application/json" {
+            return (
+                415,
+                Body::Json(json!({"error": "expected application/json"})),
+            );
+        }
+        if body.is_empty() || body.len() > MAX_BODY {
+            return (
+                413,
+                Body::Json(json!({"error": format!("body must be 1..{MAX_BODY} bytes")})),
+            );
+        }
+        let Ok(payload) = std::str::from_utf8(body)
+            .map_err(|_| ())
+            .and_then(|t| serde_json::from_str::<Value>(t).map_err(|_| ()))
+        else {
+            return (400, Body::Json(json!({"error": "body is not JSON"})));
+        };
+        match path {
+            "/hook" => {
+                let empty = Map::new();
+                (
+                    200,
+                    Body::Json(self.on_hook(payload.as_object().unwrap_or(&empty))),
+                )
+            }
+            _ => (404, Body::Json(json!({"error": "no such path"}))),
         }
     }
 
@@ -361,7 +630,7 @@ impl Shared {
     }
 
     fn build_snapshot(&self) -> Vec<Row> {
-        let st = registry::state();
+        let st = self.state();
         let creds = registry::credentials(&st);
         let mut rows = registry::merge(
             &registry::agents(std::time::Duration::from_secs(20)),
@@ -452,7 +721,19 @@ impl Shared {
             state.as_deref(),
             Some("done") | Some("failed") | Some("stopped")
         );
-        if !ended {
+        let current = self.live.current(&sid, Self::now());
+        if let Value::Object(c) = &current {
+            let summary = activity::first_line(c.get("summary"));
+            let tool = c
+                .get("tool")
+                .map(crate::pyish::py_str)
+                .unwrap_or_else(|| "None".into());
+            row.insert("doing".into(), json!(format!("{tool} {summary}")));
+            row.insert(
+                "doing_since".into(),
+                c.get("since").cloned().unwrap_or(Value::Null),
+            );
+        } else if !ended {
             let line = self.doing_line(&sid);
             row.insert("doing".into(), json!(line));
         }
@@ -661,7 +942,7 @@ impl Shared {
     /// Each notification channel on or off: config.json at start, with the
     /// switch kept in prefs (`/api/notify`, impctl) winning, as Control does.
     fn notify_enabled(&self) -> Vec<(&'static str, Map<String, Value>, bool)> {
-        let st = registry::state();
+        let st = self.state();
         let prefs = st
             .get("prefs")
             .and_then(|p| p.get("notify"))
@@ -765,17 +1046,27 @@ impl Shared {
             .and_then(|r| r.get("sessionId").and_then(Value::as_str))
             .unwrap_or(session)
             .to_string();
-        let items = match self.conversation(&sid) {
-            Ok(c) => {
-                let start = c.raw.len().saturating_sub(200);
-                conversation::merge_turns(c.raw[start..].to_vec())
-            }
-            Err(e) => return json!({"ok": false, "error": format!("RuntimeError: {e}")}),
+        let key = row
+            .as_ref()
+            .and_then(|r| r.get("key").and_then(Value::as_str))
+            .unwrap_or(session)
+            .to_string();
+        let events = self.live.events(&key);
+        let (calls, source) = if !events.is_empty() {
+            (events, "hooks")
+        } else {
+            let items = match self.conversation(&sid) {
+                Ok(c) => {
+                    let start = c.raw.len().saturating_sub(200);
+                    conversation::merge_turns(c.raw[start..].to_vec())
+                }
+                Err(e) => return json!({"ok": false, "error": format!("RuntimeError: {e}")}),
+            };
+            (activity::timeline(&items), "conversation")
         };
-        let calls = activity::timeline(&items);
         let start = calls.len().saturating_sub(200);
-        json!({"ok": true, "source": "conversation", "timeline": calls[start..].to_vec(),
-               "tally": activity::tally(&calls), "current": null})
+        json!({"ok": true, "source": source, "timeline": calls[start..].to_vec(),
+               "tally": activity::tally(&calls), "current": self.live.current(&key, Self::now())})
     }
 
     /// Control.session_status: what the transcript and process tree add to
@@ -1064,7 +1355,7 @@ impl Shared {
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
             ("GET", "/api/events") => {
                 // store.events(100): the newest hundred, newest first.
-                let st = registry::state();
+                let st = self.state();
                 let all = st
                     .get("events")
                     .and_then(Value::as_array)
@@ -1075,7 +1366,7 @@ impl Shared {
             }
             ("GET", "/api/queue") => {
                 // store.queued(): every session that has something queued.
-                let st = registry::state();
+                let st = self.state();
                 let q: Map<String, Value> = st
                     .get("queue")
                     .and_then(Value::as_object)
@@ -1089,7 +1380,7 @@ impl Shared {
                 (200, Body::Json(json!({"queue": q})))
             }
             ("GET", "/api/prefs") => {
-                let st = registry::state();
+                let st = self.state();
                 let prefs = st
                     .get("prefs")
                     .filter(|p| p.is_object() || p.is_array())
@@ -1097,7 +1388,10 @@ impl Shared {
                     .unwrap_or(json!({}));
                 (200, Body::Json(json!({"prefs": prefs})))
             }
-            ("GET", "/api/decisions") => (200, Body::Json(json!({"decisions": decisions(60)}))),
+            ("GET", "/api/decisions") => (
+                200,
+                Body::Json(json!({"decisions": decisions(&self.state_dir(), 60)})),
+            ),
             ("GET", "/api/settings") => (200, Body::Json(self.api_settings())),
             ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue()}))),
             ("GET", "/api/changes") => (200, Body::Json(self.api_changes(&arg("session")))),
@@ -1173,8 +1467,8 @@ impl Shared {
 
 /// Control.decisions: the permission hook's recent verdicts, newest first,
 /// from the decisions.jsonl beside the state file.
-fn decisions(limit: usize) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(paths::state_dir().join("decisions.jsonl")) else {
+fn decisions(dir: &std::path::Path, limit: usize) -> Vec<Value> {
+    let Ok(text) = std::fs::read_to_string(dir.join("decisions.jsonl")) else {
         return vec![];
     };
     // readlines() keeps each line's end; the last `limit` of them.
@@ -1360,7 +1654,7 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-pub fn serve(host: &str, port: u16, home: Option<&str>) -> i32 {
+pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> i32 {
     let addr = format!("{host}:{port}");
     let server = match tiny_http::Server::http(&addr) {
         Ok(s) => s,
@@ -1369,11 +1663,12 @@ pub fn serve(host: &str, port: u16, home: Option<&str>) -> i32 {
             return 1;
         }
     };
-    let shared = Arc::new(Shared::new(home));
+    let shared = Arc::new(Shared::new(home, state));
     println!("imperatorium (native) listening on http://{addr}");
     for request in server.incoming_requests() {
         let shared = Arc::clone(&shared);
         std::thread::spawn(move || {
+            let mut request = request;
             let method = request.method().as_str().to_string();
             let path = request
                 .url()
@@ -1387,7 +1682,29 @@ pub fn serve(host: &str, port: u16, home: Option<&str>) -> i32 {
                 shared.stream(&mut *writer);
                 return;
             }
-            let (code, body) = shared.handle(&method, request.url());
+            let (code, body) = if method == "POST" {
+                let header = |name: &str| {
+                    request
+                        .headers()
+                        .iter()
+                        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+                        .map(|h| h.value.as_str().to_string())
+                };
+                let (origin, ctype) = (header("Origin"), header("Content-Type"));
+                let mut body = Vec::new();
+                let _ = std::io::Read::read_to_end(
+                    &mut std::io::Read::take(request.as_reader(), 4 * 1024 * 1024 + 1),
+                    &mut body,
+                );
+                let p = if path.is_empty() {
+                    "/".to_string()
+                } else {
+                    path.clone()
+                };
+                shared.post(&p, origin.as_deref(), ctype.as_deref(), &body, port)
+            } else {
+                shared.handle(&method, request.url())
+            };
             let (bytes, ctype, cache) = body.into_parts();
             // Content-Length, as the Python dispatcher sends: tiny_http goes
             // chunked above 32 KiB by default, and a conversation is often

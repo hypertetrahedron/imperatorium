@@ -384,6 +384,37 @@ pub fn merge(
     out
 }
 
+/// registry.failure_caption: the line a tile shows for a failed turn, or
+/// None for the failures Claude Code itself shrugs at.
+pub fn failure_caption(error: Option<&str>, detail: &str) -> Option<&'static str> {
+    if error == Some("max_output_tokens") {
+        return None;
+    }
+    if error == Some("invalid_request") {
+        static OVERSIZE: OnceLock<Regex> = OnceLock::new();
+        let re = OVERSIZE.get_or_init(|| {
+            Regex::new(r"(?i)\b(too long|too large|exceeds|token limit)\b").unwrap()
+        });
+        if re.is_match(detail) {
+            return Some("request too large - /compact or trim");
+        }
+    }
+    Some(match error.unwrap_or("") {
+        "overloaded" => "API overloaded - wait and retry",
+        "server_error" => "API unavailable - retry",
+        "rate_limit" => "rate limited - wait and retry",
+        "billing_error" => "usage limit reached - check plan",
+        "authentication_failed" => "login required - run /login",
+        "oauth_org_not_allowed" => "org disabled OAuth - use API key or ask admin",
+        "account_on_hold" => "account on hold - see detail",
+        "verification_required" => "verification required - see detail",
+        "cloud_credential_error" => "cloud credentials unavailable - check or refresh",
+        "invalid_request" => "invalid API request - see detail",
+        "model_not_found" => "model unavailable - see detail",
+        _ => "API error",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
