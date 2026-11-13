@@ -25,6 +25,7 @@
 //!     imperatorium policy-decide           # JSON lines {request, policy} -> [verdict, reason, tier]
 
 mod activity;
+mod changes;
 mod conversation;
 mod costs;
 mod history;

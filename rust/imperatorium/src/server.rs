@@ -23,7 +23,7 @@ use sha1::{Digest, Sha1};
 use crate::pyish::{json_dumps_sorted, truthy};
 use crate::registry::Row;
 use crate::{
-    activity, conversation, costs, history, paths, procs, projects, registry, sessions,
+    activity, changes, conversation, costs, history, paths, procs, projects, registry, sessions,
     sessionstat, settings, ui,
 };
 
@@ -729,6 +729,49 @@ impl Shared {
         projects::discover(&roots, &local)
     }
 
+    /// Control._row(id): the row whose sessionId or key is `id`.
+    fn row(&self, id: &str) -> Option<Row> {
+        let hit = |r: &Row| {
+            r.get("sessionId").and_then(Value::as_str) == Some(id)
+                || r.get("key").and_then(Value::as_str) == Some(id)
+        };
+        self.sessions(2.0).into_iter().find(hit)
+    }
+
+    /// Control.changes: git status and diff in the session's folder.
+    fn api_changes(&self, session: &str) -> Value {
+        let Some(row) = self.row(session) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let cwd = row.get("cwd").and_then(Value::as_str).unwrap_or("");
+        changes::changes(cwd)
+    }
+
+    /// Control._known_project: a path the catalogue or a live session
+    /// vouches for, never one taken on trust from the request.
+    fn known_project(&self, path: &str) -> bool {
+        if path.is_empty() {
+            return false;
+        }
+        let Some(want) = paths::abs_normcase(path) else {
+            return false;
+        };
+        let mut known: Vec<String> = self
+            .catalogue()
+            .iter()
+            .filter_map(|p| p.get("path").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        known.extend(
+            self.sessions(2.0)
+                .iter()
+                .filter(|r| !truthy(r.get("remote")))
+                .filter_map(|r| r.get("cwd").and_then(Value::as_str).map(str::to_string)),
+        );
+        known
+            .iter()
+            .any(|k| !k.is_empty() && paths::abs_normcase(k).as_deref() == Some(want.as_str()))
+    }
+
     /// GET /api/settings: Control.settings_view.
     fn api_settings(&self) -> Value {
         let path = paths::config_home(self.home.as_deref()).join("config.json");
@@ -779,6 +822,8 @@ impl Shared {
         let trimmed = raw_path.trim_end_matches('/');
         let path = if trimmed.is_empty() { "/" } else { trimmed };
         let q = parse_query(query);
+        // Handler._arg: the first value of a query parameter, else "".
+        let arg = |name: &str| q.get(name).cloned().unwrap_or_default();
         if method == "GET" {
             if let Some(name) = path.strip_prefix("/fonts/") {
                 return match ui::font(name) {
@@ -830,6 +875,25 @@ impl Shared {
             ("GET", "/api/decisions") => (200, Body::Json(json!({"decisions": decisions(60)}))),
             ("GET", "/api/settings") => (200, Body::Json(self.api_settings())),
             ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue()}))),
+            ("GET", "/api/changes") => (200, Body::Json(self.api_changes(&arg("session")))),
+            ("GET", "/api/worktrees") => {
+                let project = arg("project");
+                let body = if self.known_project(&project) {
+                    changes::worktrees(&project)
+                } else {
+                    json!({"ok": false, "error": format!("not a known project: {project}")})
+                };
+                (200, Body::Json(body))
+            }
+            ("GET", "/api/worktree_diff") => {
+                let project = arg("project");
+                let body = if self.known_project(&project) {
+                    changes::worktree_diff(&project, &arg("path"))
+                } else {
+                    json!({"ok": false, "error": format!("not a known project: {project}")})
+                };
+                (200, Body::Json(body))
+            }
             ("GET", "/api/notify") => (200, Body::Json(self.api_notify())),
             ("GET", "/api/quick") => (
                 200,

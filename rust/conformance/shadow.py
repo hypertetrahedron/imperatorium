@@ -234,6 +234,17 @@ def main():
                   "/api/conversation?session=%s&blocks=400" % q,
                   "/api/conversation?session=%s&known=%s" % (q, sig),
                   "/api/conversation?session=%s&known=stale&blocks=3" % q]
+    # Changes and worktrees: plain git, read-only, in every project here.
+    for sid in [r["sessionId"] for r in snap.get("sessions", []) if not r.get("remote")] + ["nope"]:
+        paths.append("/api/changes?session=" + urllib.parse.quote(sid))
+    _, cat = get(PY, "/api/projects")
+    projects = [p["path"] for p in cat.get("projects", []) if p.get("source") != "remote"]
+    for proj in projects + [r"C:\Windows"]:
+        paths.append("/api/worktrees?project=" + urllib.parse.quote(proj))
+        _, wts = get(PY, "/api/worktrees?project=" + urllib.parse.quote(proj))
+        for wt in (wts.get("worktrees") or [])[:3]:
+            paths.append("/api/worktree_diff?project=%s&path=%s"
+                         % (urllib.parse.quote(proj), urllib.parse.quote(wt["path"])))
     failures, live = [], 0
     for path in paths:
         diff = compare(path)
