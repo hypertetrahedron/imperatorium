@@ -1,9 +1,9 @@
 //! The dispatcher's state file, written: a port of `imperatorium/store.py`.
 //!
-//! Used only when the binary is given a state path of its own (`--state`);
-//! without one it is the read-only shadow and nothing here runs. A store
-//! refuses the live state file outright: until the cutover that file
-//! belongs to the Python dispatcher.
+//! Used only when the binary is given a state path of its own (`--state`),
+//! or is the dispatcher (`serve --live`); without either it is the
+//! read-only shadow and nothing here runs. Only `--live` may open the live
+//! state file: a test dispatcher that wrote it would fight the real one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -33,13 +33,19 @@ fn empty() -> Map<String, Value> {
 
 impl Store {
     /// Open (or start) the state at `path`. Err for the live state file.
+    #[allow(dead_code)] // the tests; the server opens through open_as
     pub fn open(path: &Path) -> Result<Store, String> {
+        Self::open_as(path, false)
+    }
+
+    /// `open`, or with `live` the live state file itself (`serve --live`).
+    pub fn open_as(path: &Path, live_ok: bool) -> Result<Store, String> {
         let live = crate::paths::state_dir().join("state.json");
         let same = |a: &Path, b: &Path| {
             crate::paths::abs_normcase(&a.to_string_lossy())
                 == crate::paths::abs_normcase(&b.to_string_lossy())
         };
-        if same(path, &live) {
+        if !live_ok && same(path, &live) {
             return Err(format!(
                 "{} is the live dispatcher's state; give this one its own",
                 path.display()

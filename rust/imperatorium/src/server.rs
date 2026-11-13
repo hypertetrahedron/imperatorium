@@ -53,6 +53,11 @@ pub struct Shared {
     tallies: Mutex<HashMap<String, (Value, Value)>>,
     /// `--home`: where config.json is, read again for the Settings form.
     home: Option<String>,
+    /// Each session's pull request, polled off the request path (prs.Tracker).
+    prs: Arc<crate::prs::Tracker>,
+    /// The dictation child (voice.Worker), when voice is on and the
+    /// checkout has its venv. Only for a dispatcher with its own store.
+    voice: Option<Arc<crate::voice::Worker>>,
     /// Handed to the pages when they load (ui._with_meta); never written down.
     window_token: String,
     history: history::Index,
@@ -172,9 +177,9 @@ fn transcript_stamp(sid: &str) -> Option<(PathBuf, u64, u128)> {
 }
 
 impl Shared {
-    pub fn new(home: Option<&str>, state: Option<&str>) -> Self {
+    pub fn new(home: Option<&str>, state: Option<&str>, live: bool) -> Self {
         let store = state.map(
-            |p| match crate::store::Store::open(std::path::Path::new(p)) {
+            |p| match crate::store::Store::open_as(std::path::Path::new(p), live) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("imperatorium: {e}");
@@ -182,6 +187,7 @@ impl Shared {
                 }
             },
         );
+        let has_store = store.is_some();
         let boot: String = {
             let t = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -236,6 +242,22 @@ impl Shared {
             cost_history: Mutex::new(costs::History::new()),
             errors_cache: Mutex::new(None),
             tallies: Mutex::new(HashMap::new()),
+            prs: Default::default(),
+            voice: {
+                let cfg = load_config(home);
+                match cfg.get("voice").filter(|v| v.is_object()) {
+                    Some(block) if has_store => {
+                        let settings = crate::voice::settings_from(Some(block));
+                        let dir = paths::config_home(home);
+                        if truthy(settings.get("enabled")) && crate::voice::available(&dir) {
+                            Some(crate::voice::Worker::new(settings, &dir))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            },
             home: home.map(str::to_string),
             history: history::Index::new(),
             config_live: std::sync::RwLock::new(load_config(home)),
@@ -1735,6 +1757,36 @@ impl Shared {
         best
     }
 
+    /// Control.transcribe: browser-recorded audio to text in the dictation
+    /// child, where the model stays loaded.
+    fn transcribe(&self, audio: &[u8]) -> Value {
+        let Some(v) = &self.voice else {
+            return json!({"ok": false, "error": "dictation is not available"});
+        };
+        match v.transcribe_bytes(audio, None) {
+            Err(e) => json!({"ok": false, "error": format!("VoiceError: {e}")}),
+            Ok(text) => {
+                let mut out = v.where_().and_then(|w| w.as_object().cloned()).unwrap_or_default();
+                out.insert("ok".into(), json!(true));
+                out.insert("text".into(), json!(text));
+                Value::Object(out)
+            }
+        }
+    }
+
+    /// Control.warm_voice: the mic was pressed - build the model while the
+    /// person speaks, and say where the last load landed.
+    fn warm_voice(&self) -> Value {
+        let Some(v) = &self.voice else {
+            return json!({"ok": false, "error": "dictation is not available"});
+        };
+        v.warm();
+        let mut out = v.where_().and_then(|w| w.as_object().cloned()).unwrap_or_default();
+        out.insert("ok".into(), json!(true));
+        out.insert("running".into(), json!(v.running()));
+        Value::Object(out)
+    }
+
     /// Control.focus_row: raise the window this session is in. One
     /// WindowsTerminal.exe hosts every session, so the process tree finds
     /// the terminal and the session's title picks its window. Three routes,
@@ -2022,6 +2074,13 @@ impl Shared {
                 );
             }
         }
+        if path == "/api/transcribe" {
+            // Raw audio, not JSON (Handler._read_binary).
+            if body.is_empty() || body.len() > MAX_BODY * 8 {
+                return (413, Body::Json(json!({"error": "body out of range"})));
+            }
+            return (200, Body::Json(self.transcribe(body)));
+        }
         let ctype = ctype.unwrap_or("").split(';').next().unwrap_or("").trim();
         if ctype != "application/json" {
             return (
@@ -2122,6 +2181,31 @@ impl Shared {
                     return (400, Body::Json(json!({"error": "expected an object"})));
                 }
                 (200, Body::Json(self.dispatch(store, p, from_window)))
+            }
+            "/api/voice/warm" => (200, Body::Json(self.warm_voice())),
+            "/api/dictate" => {
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "dictation opens the microphone: only the Imperatorium window and its herdr mods"})));
+                }
+                // The mods' own microphone (voice.Recorder) is herdr-only.
+                (200, Body::Json(json!({"ok": false, "error": "dictation from the herdr mods is not ported yet"})))
+            }
+            "/api/open_window" => {
+                let (route, size) = match p.get("page").and_then(Value::as_str) {
+                    Some("matrix") => ("/matrix", "1100,720"),
+                    Some("window") => ("/", "1280,820"),
+                    _ => return (400, Body::Json(json!({"ok": false, "error": "page is one of matrix, window"}))),
+                };
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window and its herdr mods"})));
+                }
+                let url = format!("http://127.0.0.1:{port}{route}");
+                (200, Body::Json(match crate::voice::open_window(&url, size) {
+                    Err(e) => json!({"ok": false, "error": e}),
+                    Ok(used) => json!({"ok": true, "url": url, "browser": used.map(|b| {
+                        b.rsplit(['/', '\\']).next().unwrap_or("").to_string()
+                    })}),
+                }))
             }
             "/api/focus" => {
                 if object.is_none() {
@@ -2582,6 +2666,13 @@ impl Shared {
                 u.insert(k.into(), got.get(k).cloned().unwrap_or(Value::Null));
             }
             row.insert("usage".into(), Value::Object(u));
+        }
+        if !truthy(row.get("remote")) {
+            if let Some(cwd) = row.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()) {
+                if let Some(pr) = self.prs.get(cwd).filter(|p| truthy(Some(p))) {
+                    row.insert("pr".into(), pr);
+                }
+            }
         }
         if let Some(Value::Array(q)) = queue.get(&sid) {
             if !q.is_empty() {
@@ -3230,6 +3321,8 @@ impl Shared {
             ("GET", "/matrix") => (200, self.page(ui::MATRIX, "", true)),
             ("GET", "/settings") => (200, self.page(ui::SETTINGS, &self.window_token, false)),
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
+            // Remote hosts are phase 4: until then this dispatcher polls none.
+            ("GET", "/api/hosts") => (200, Body::Json(json!({"hosts": [], "status": {}}))),
             ("GET", "/api/events") => {
                 // store.events(100): the newest hundred, newest first.
                 let st = self.state();
@@ -3597,7 +3690,7 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> i32 {
+pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, live: bool) -> i32 {
     let addr = format!("{host}:{port}");
     let server = match tiny_http::Server::http(&addr) {
         Ok(s) => s,
@@ -3606,9 +3699,26 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
             return 1;
         }
     };
-    let shared = Arc::new(Shared::new(home, state));
+    let shared = Arc::new(Shared::new(home, state, live));
     let _ = shared.me.set(Arc::downgrade(&shared));
     if shared.store.is_some() {
+        // Only once the port is ours, as in Python: a second dispatcher that
+        // failed to bind never runs a second set of gh calls or a model.
+        shared.prs.start();
+        if let Some(v) = &shared.voice {
+            if truthy(v.settings.get("preload")) {
+                v.warm();
+            }
+        }
+        let warm = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            // Control.warm_spend: read the transcripts once at start.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let now = Shared::now();
+                let limits = warm.usage.summary(now)["limits"].clone();
+                warm.spend(now, 120.0, &limits);
+            }));
+        });
         let sweeper = Arc::clone(&shared);
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(15));
@@ -3647,7 +3757,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
                 let mod_token = header("X-Imperatorium-Mod");
                 let mut body = Vec::new();
                 let _ = std::io::Read::read_to_end(
-                    &mut std::io::Read::take(request.as_reader(), 4 * 1024 * 1024 + 1),
+                    &mut std::io::Read::take(request.as_reader(), 32 * 1024 * 1024 + 1),
                     &mut body,
                 );
                 let p = if path.is_empty() {

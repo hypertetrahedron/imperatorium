@@ -45,6 +45,7 @@ mod pending;
 mod policy;
 mod procs;
 mod projects;
+mod prs;
 mod pyish;
 mod registry;
 mod server;
@@ -56,6 +57,7 @@ mod store;
 mod taskout;
 mod ui;
 mod usage;
+mod voice;
 mod winfocus;
 
 use std::io::{BufRead, Write};
@@ -187,8 +189,15 @@ fn main() {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(8811);
             let host = flag(&args, "--host").unwrap_or_else(|| "127.0.0.1".into());
-            let state = flag(&args, "--state");
-            server::serve(&host, port, home.as_deref(), state.as_deref())
+            // --live: this is the dispatcher - the live state file, and
+            // port 8792 unless told otherwise. (The cutover; see
+            // docs/native-port.md.)
+            let live = args.iter().any(|a| a == "--live");
+            let state = flag(&args, "--state").or_else(|| {
+                live.then(|| paths::state_dir().join("state.json").to_string_lossy().into_owned())
+            });
+            let port = if live && flag(&args, "--port").is_none() { 8792 } else { port };
+            server::serve(&host, port, home.as_deref(), state.as_deref(), live)
         }
         Some("version") | Some("--version") => {
             println!("imperatorium {VERSION}");

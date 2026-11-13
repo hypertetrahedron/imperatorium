@@ -312,7 +312,32 @@ can reach a real one:
   binary build is its test.
 
 Not ported yet: herdr-core hosting (hc terminals: refused as not ported),
-dictation, remote hosts.
+the herdr mods' `/api/dictate` (it records from the dispatcher's own mic),
+remote hosts.
+
+### Step 3: the cutover (2026-11-13)
+
+Closed first, so the switch lost nothing the window uses on this machine:
+`prs.rs` (each session's pull request, polled with `gh` off the request
+path), `voice.rs` (the dispatcher side of dictation: `/api/transcribe` and
+`/api/voice/warm` drive the same `python -m imperatorium.voice --worker`
+child over its JSON-lines protocol, from the checkout's venv; preload,
+idle unload, the 180 s reply limit; a synthesized WAV came back word for
+word, 3.6 s cold and 0.13 s warm on CUDA), `/api/open_window`, `/api/hosts`
+(empty until phase 4), the spend warm-up at start, and `serve --live`: the
+live state file (which a store otherwise refuses) on port 8792.
+
+The task `ImperatoriumDispatcher` now runs
+`conhost.exe --headless <installed imperatorium.exe> serve --live --home
+<checkout>`: the task is interactive, and a console program started from it
+would put a console window on the desktop; a headless conhost shows none.
+The binary outlives its conhost, so stopping the task does not stop it - end
+the `imperatorium.exe` whose command line has `serve --live`.
+`%LOCALAPPDATA%\imperatorium\cutover\` holds the Python task definition, the
+state file as it was and the phase-2 binary, with `rollback-to-python.ps1`.
+
+Lost at the switch until phase 4: remote hosts and their hook tunnels (both
+configured hosts had no sessions at the time).
 
 ## Building
 
