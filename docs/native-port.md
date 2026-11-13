@@ -180,8 +180,22 @@ A cold snapshot costs about 1.4 s, nearly all of it `claude agents` itself
 window's `/api/stream` keeps the cache warm so requests rarely see it. The
 binary will do the same once `/api/stream` is ported.
 
-Next in step 1: `/api/history`, the pages (`/`, `/matrix`, `/settings`),
-`/api/stream`, and the remaining GETs.
+Then the window itself: `rust/assets/export_ui.py` writes the three pages
+from ui.py (with `_with_meta` switched off) and settings.FIELDS as JSON;
+the binary embeds them, adds the token, boot id and `look_head` as
+`_with_meta` does, and serves the fonts. A Python test fails when ui.py or
+settings.py changes without an export. Also ported: `/api/history` (list,
+search, snippets), `/api/stream` (the SSE feed, timing as Python's), and
+`/api/events`, `/queue`, `/prefs`, `/decisions`, `/quick`. shadow.py: 165
+requests identical - the pages byte for byte bar the per-start token and
+boot id.
+
+Left in step 1: `/api/settings`, `/api/costs`, `/api/usage`, `/api/projects`,
+`/api/changes`, `/api/worktrees`, `/api/worktree_diff`, `/api/awaited`,
+`/api/session_status`, `/api/activity`, `/api/errors`, `/api/matrix`. Left
+for step 2 because only POSTs feed them: `/api/pending`, `/api/notify`'s
+counters, and the row fields listed in shadow.py. `/api/hosts` and
+`/api/transcribe` come with phases 4 and 5.
 
 ## Building
 
