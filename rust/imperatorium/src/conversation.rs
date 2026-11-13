@@ -566,3 +566,11 @@ mod tests {
         assert_eq!(out[0]["blocks"], json!([1]));
     }
 }
+
+/// conversation.with_origin: `content` with ORIGIN_NOTE in front, once.
+pub fn with_origin(content: &str) -> String {
+    if content.starts_with(ORIGIN_NOTE) {
+        return content.to_string();
+    }
+    format!("{ORIGIN_NOTE}\n\n{content}")
+}

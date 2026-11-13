@@ -411,8 +411,14 @@ impl Shared {
                     &event.to_lowercase(),
                     json!({"cwd": cwd, "summary": crate::pyish::take(&summary, 280)}),
                 );
-                // Python also schedules the minute-later idle check and
-                // delivers a queued prompt here: step 2, with the inbox.
+                // Python also schedules the minute-later idle check here: it
+                // comes with notifications.
+                if event == "Stop" {
+                    // The turn is over: one queued prompt per turn.
+                    if let Some(id) = self.drain(store, &key) {
+                        return json!({"ok": true, "delivered": id});
+                    }
+                }
             }
         }
         json!({"ok": true})
@@ -672,7 +678,13 @@ impl Shared {
     /// Handler._post_api, for the routes that change only the dispatcher's
     /// own state. The rest (resume, new, close, worktree, settings, remote)
     /// act on sessions, terminals or files and come later in step 2.
-    fn post_api(&self, store: &crate::store::Store, path: &str, p: &Map<String, Value>) -> Value {
+    fn post_api(
+        &self,
+        store: &crate::store::Store,
+        path: &str,
+        p: &Map<String, Value>,
+        from_window: bool,
+    ) -> Value {
         match path {
             "/api/prefs" => {
                 let allowed: Map<String, Value> = ["pinned", "archived", "group", "filter"]
@@ -722,13 +734,125 @@ impl Shared {
                 if self.row(sid).is_none() {
                     return json!({"ok": false, "error": "no such session"});
                 }
-                // Queueing for a live session delivers at once when it is idle:
-                // that needs the inbox, which is not ported yet. Refused rather
-                // than half done.
-                json!({"ok": false, "error": "queueing is not ported yet"})
+                self.enqueue(store, sid, prompt, from_window)
             }
             _ => json!({"ok": false, "error": "no such path"}),
         }
+    }
+
+    /// Control.enqueue: hold `prompt` until the session's turn ends; one
+    /// that is idle and reachable gets it at once.
+    fn enqueue(
+        &self,
+        store: &crate::store::Store,
+        session_id: &str,
+        prompt: &str,
+        as_user: bool,
+    ) -> Value {
+        let Some(row) = self.row(session_id) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        if crate::slash::is_command(prompt) {
+            // Typing into a terminal comes with close/resume (step 2, later).
+            return json!({"ok": false, "error": "slash commands are not ported yet"});
+        }
+        let key = row
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|k| !k.is_empty())
+            .unwrap_or(session_id)
+            .to_string();
+        let item = store.enqueue(&key, prompt, as_user);
+        self.invalidate();
+        if row.get("status").and_then(Value::as_str) == Some("idle")
+            && !truthy(row.get("attention"))
+            && truthy(row.get("dispatchable"))
+        {
+            self.drain(store, &key);
+        }
+        json!({"ok": true, "queued": item, "session": session_id,
+               "waiting": store.queued(&key).len()})
+    }
+
+    /// Control.drain: deliver the oldest queued prompt for `key`; its id.
+    fn drain(&self, store: &crate::store::Store, key: &str) -> Option<Value> {
+        if store.queued(key).is_empty() {
+            return None;
+        }
+        self.invalidate();
+        let row = self
+            .sessions(2.0)
+            .into_iter()
+            .find(|r| r.get("key").and_then(Value::as_str) == Some(key))?;
+        if !truthy(row.get("dispatchable")) {
+            return None; // the sweep retries once it registers
+        }
+        let item = store.take_queued(key)?;
+        let prompt = item.get("prompt").and_then(Value::as_str).unwrap_or("");
+        let error = if crate::slash::is_command(prompt) {
+            Some("slash commands are not ported yet".to_string())
+        } else {
+            self.deliver(store, &row, prompt)
+        };
+        if let Some(e) = error {
+            store.requeue_front(key, &item, Some(&e));
+            return None;
+        }
+        self.invalidate();
+        item.get("id").cloned()
+    }
+
+    /// Control.sweep_queue: deliver to queued sessions that are idle and not
+    /// waiting on you - a prompt queued before the session had a token, or a
+    /// missed Stop.
+    fn sweep_queue(&self) -> Vec<Value> {
+        let Some(store) = &self.store else {
+            return vec![];
+        };
+        let keys = store.queued_keys();
+        if keys.is_empty() {
+            return vec![];
+        }
+        self.invalidate();
+        let rows: HashMap<String, Row> = self
+            .sessions(2.0)
+            .into_iter()
+            .filter_map(|r| Some((r.get("key")?.as_str()?.to_string(), r)))
+            .collect();
+        let mut out = vec![];
+        for key in keys {
+            let Some(row) = rows.get(&key) else { continue };
+            if row.get("status").and_then(Value::as_str) == Some("idle")
+                && !truthy(row.get("attention"))
+                && truthy(row.get("dispatchable"))
+            {
+                if let Some(id) = self.drain(store, &key) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    }
+
+    /// Control._deliver: put the prompt in the session's inbox. None, or the
+    /// error. (The mod's path, for sessions whose mod is live, comes with the
+    /// mod link; remote hosts with phase 4.)
+    fn deliver(&self, store: &crate::store::Store, row: &Row, prompt: &str) -> Option<String> {
+        if truthy(row.get("remote")) {
+            return Some("remote hosts are not ported yet".into());
+        }
+        let text = crate::conversation::with_origin(prompt);
+        let socket = row.get("socket").and_then(Value::as_str).unwrap_or("");
+        let token = row.get("token").and_then(Value::as_str);
+        if let Err(e) = crate::inbox::send(socket, token, &text) {
+            return Some(e);
+        }
+        let sid = row.get("sessionId").cloned().unwrap_or(Value::Null);
+        let summary = crate::pyish::take(&crate::conversation::strip_origin(&text), 280);
+        let e = json!({"kind": "dispatch_inject", "session_id": sid,
+                       "cwd": row.get("cwd").cloned().unwrap_or(Value::Null), "summary": summary});
+        store.add_event(e.as_object().unwrap().clone());
+        None
     }
 
     /// Control.dismiss_session: take a session with no process off the list.
@@ -776,6 +900,7 @@ impl Shared {
         ctype: Option<&str>,
         body: &[u8],
         port: u16,
+        window: Option<&str>,
     ) -> (u16, Body) {
         const MAX_BODY: usize = 4 * 1024 * 1024;
         if let Some(o) = origin {
@@ -824,6 +949,8 @@ impl Shared {
             return (400, Body::Json(json!({"error": "expected an object"})));
         }
         let p = object.unwrap_or(&empty);
+        let from_window = origin.is_some()
+            && window.is_some_and(|w| w.as_bytes() == self.window_token.as_bytes());
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p))),
             "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/queue" => {
@@ -835,7 +962,7 @@ impl Shared {
                         ),
                     );
                 };
-                (200, Body::Json(self.post_api(store, path, p)))
+                (200, Body::Json(self.post_api(store, path, p, from_window)))
             }
             _ => (404, Body::Json(json!({"error": "no such path"}))),
         }
@@ -2091,6 +2218,14 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
         }
     };
     let shared = Arc::new(Shared::new(home, state));
+    if shared.store.is_some() {
+        let sweeper = Arc::clone(&shared);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            let _ =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sweeper.sweep_queue()));
+        });
+    }
     println!("imperatorium (native) listening on http://{addr}");
     for request in server.incoming_requests() {
         let shared = Arc::clone(&shared);
@@ -2118,6 +2253,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
                         .map(|h| h.value.as_str().to_string())
                 };
                 let (origin, ctype) = (header("Origin"), header("Content-Type"));
+                let window = header("X-Imperatorium-Window");
                 let mut body = Vec::new();
                 let _ = std::io::Read::read_to_end(
                     &mut std::io::Read::take(request.as_reader(), 4 * 1024 * 1024 + 1),
@@ -2128,7 +2264,14 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>) -> 
                 } else {
                     path.clone()
                 };
-                shared.post(&p, origin.as_deref(), ctype.as_deref(), &body, port)
+                shared.post(
+                    &p,
+                    origin.as_deref(),
+                    ctype.as_deref(),
+                    &body,
+                    port,
+                    window.as_deref(),
+                )
             } else {
                 shared.handle(&method, request.url())
             };

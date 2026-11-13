@@ -250,6 +250,88 @@ impl Store {
         })
     }
 
+    /// Store.enqueue: hold a prompt for a session. The id is random, not the
+    /// clock, so two queued in one tick can be cancelled apart.
+    pub fn enqueue(&self, sid: &str, prompt: &str, as_user: bool) -> Value {
+        let mut raw = [0u8; 6];
+        getrandom::getrandom(&mut raw).expect("random bytes");
+        let id: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let mut item = json!({"id": id, "prompt": prompt, "at": now()});
+        if as_user {
+            item["as_user"] = json!(true);
+        }
+        self.with(|data| {
+            let queue = Self::table(data, "queue");
+            match queue.get_mut(sid) {
+                Some(Value::Array(q)) => q.push(item.clone()),
+                _ => {
+                    queue.insert(sid.into(), json!([item.clone()]));
+                }
+            }
+            (item, true)
+        })
+    }
+
+    /// Store.queued(sid): one session's queue.
+    pub fn queued(&self, sid: &str) -> Vec<Value> {
+        self.snapshot()
+            .get("queue")
+            .and_then(|q| q.get(sid))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Store.queued(): every non-empty queue's key, in order.
+    pub fn queued_keys(&self) -> Vec<String> {
+        self.snapshot()
+            .get("queue")
+            .and_then(Value::as_object)
+            .map(|q| {
+                q.iter()
+                    .filter(|(_, v)| v.as_array().is_some_and(|a| !a.is_empty()))
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Store.take_queued: pop the oldest queued prompt.
+    pub fn take_queued(&self, sid: &str) -> Option<Value> {
+        self.with(|data| {
+            let queue = Self::table(data, "queue");
+            let Some(Value::Array(q)) = queue.get_mut(sid) else {
+                return (None, false);
+            };
+            if q.is_empty() {
+                return (None, false);
+            }
+            let item = q.remove(0);
+            if q.is_empty() {
+                queue.shift_remove(sid);
+            }
+            (Some(item), true)
+        })
+    }
+
+    /// Store.requeue_front: put back a prompt whose delivery failed, saying why.
+    pub fn requeue_front(&self, sid: &str, item: &Value, error: Option<&str>) {
+        let mut item = item.clone();
+        if let Some(e) = error.filter(|e| !e.is_empty()) {
+            item["error"] = json!(e);
+        }
+        self.with(|data| {
+            let queue = Self::table(data, "queue");
+            match queue.get_mut(sid) {
+                Some(Value::Array(q)) => q.insert(0, item),
+                _ => {
+                    queue.insert(sid.into(), json!([item]));
+                }
+            }
+            ((), true)
+        })
+    }
+
     /// Store.unqueue: drop one queued prompt; whether it was there.
     pub fn unqueue(&self, sid: &str, item_id: &Value) -> bool {
         self.with(|data| {
