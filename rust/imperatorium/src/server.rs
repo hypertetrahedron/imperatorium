@@ -2823,9 +2823,17 @@ impl Shared {
 
     /// GET /api/stream: server-sent events, the session list whenever it
     /// changes - looked at every STREAM_EVERY seconds, never more often
-    /// than STREAM_MIN_GAP, a keepalive after STREAM_KEEPALIVE of quiet,
-    /// and closed after STREAM_SECONDS (the page reconnects). HTTP/1.0 and
-    /// no length, as the Python handler answers.
+    /// than STREAM_MIN_GAP, a keepalive after STREAM_KEEPALIVE of quiet.
+    /// HTTP/1.0 and no length, as the Python handler answers.
+    ///
+    /// Unlike Python it never ends the stream itself: it runs until a write
+    /// fails, which the keepalive makes happen within STREAM_KEEPALIVE of
+    /// the page going away. Python closes after 600 s and the page
+    /// reconnects, but tiny_http cannot close a keep-alive connection:
+    /// dropping the writer leaves the socket open for a next request, so
+    /// the browser would wait on a stream that never ends and never says
+    /// anything again - the window froze ten minutes after each load
+    /// (2026-11-13).
     ///
     /// Python is also woken early by a hook event (Control.invalidate);
     /// this shadow receives no hooks, so it only looks on its clock.
@@ -2839,9 +2847,8 @@ impl Shared {
         {
             return;
         }
-        let start = Self::now();
-        let (mut last, mut quiet, mut looked) = (String::new(), start, 0.0);
-        while Self::now() < start + STREAM_SECONDS {
+        let (mut last, mut quiet, mut looked) = (String::new(), Self::now(), 0.0);
+        loop {
             let gap = STREAM_MIN_GAP - (Self::now() - looked);
             if gap > 0.0 {
                 std::thread::sleep(std::time::Duration::from_secs_f64(gap));
@@ -3458,7 +3465,6 @@ fn decisions(dir: &std::path::Path, limit: usize) -> Vec<Value> {
         .collect()
 }
 
-const STREAM_SECONDS: f64 = 600.0;
 const STREAM_EVERY: f64 = 5.0;
 const STREAM_MIN_GAP: f64 = 2.0;
 const STREAM_KEEPALIVE: f64 = 15.0;
