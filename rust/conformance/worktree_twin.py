@@ -15,6 +15,7 @@ what is left in each repository - worktrees, branches, the main history.
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -81,6 +82,14 @@ def project(root, name):
     write(os.path.join(main, "a.txt"), "main's line\n")
     git(main, "commit", "-q", "-am", "main moves on")
     return main
+
+
+def remove(folder):
+    """rmtree that also takes git's read-only object files."""
+    def writable(func, path, _exc):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    shutil.rmtree(folder, onerror=writable)
 
 
 def state(main):
@@ -172,7 +181,7 @@ def main():
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 p.kill()
-        shutil.rmtree(root, ignore_errors=True)
+        remove(root)
     for what, diff in failures:
         print("DIFF %s\n     %s" % (what, diff))
     print("worktree_twin: %d actions on each; %s" % (
