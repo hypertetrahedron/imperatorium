@@ -127,6 +127,23 @@ IDLE_AFTER = 60.0
 BY_NOTIFICATION, BY_FAILURE = "notification", "failure"
 
 
+# Row fields that stay inside the dispatcher. `token` is a session's inbox
+# credential: whoever holds it can put a prompt straight into that session,
+# past every check here. Until 2026-11-12 /api/sessions and /api/stream sent
+# it to any process that asked 127.0.0.1:8792 - another account on this
+# machine included - though nothing outside the dispatcher ever used it.
+PRIVATE_ROW_FIELDS = ("token",)
+
+
+def public_snapshot(snap):
+    """`snap` as it may leave the process: rows copied, secrets left out.
+    The cached snapshot itself keeps them, for the dispatcher's own use."""
+    out = dict(snap)
+    out["sessions"] = [{k: v for k, v in row.items() if k not in PRIVATE_ROW_FIELDS}
+                       for row in snap.get("sessions") or ()]
+    return out
+
+
 def hide_finished_hours(config):
     """`list.hide_finished_hours` from config.json; 0 (keep) when unset or bad."""
     value = ((config or {}).get("list") or {}).get("hide_finished_hours")
@@ -2355,7 +2372,7 @@ class Handler(BaseHTTPRequestHandler):
                 if gap > 0:
                     time.sleep(gap)
                 looked = time.time()
-                snap = c.sessions(max_age=self.STREAM_EVERY)
+                snap = public_snapshot(c.sessions(max_age=self.STREAM_EVERY))
                 # `at` is when the snapshot was taken, new every time; the
                 # rest is what decides whether anything changed.
                 same = json.dumps({k: v for k, v in snap.items() if k != "at"},
@@ -2398,7 +2415,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/sessions":
             # The Stream Deck surface polls this once a second; an older
             # snapshot is as good for a key colour and saves a fork.
-            self._send(200, c.sessions(max_age=self.STREAM_EVERY))
+            self._send(200, public_snapshot(c.sessions(max_age=self.STREAM_EVERY)))
         elif path == "/api/stream":
             self._stream()
         elif path == "/api/costs":
