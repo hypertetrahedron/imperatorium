@@ -496,6 +496,25 @@ fn iso_ms(ts: &str) -> Option<i64> {
 /// `datetime.fromisoformat(ts).timestamp()` for an aware timestamp (a
 /// trailing Z read as +00:00): seconds, as Python computes them.
 pub fn iso_seconds(ts: &str) -> Option<f64> {
+    iso_seconds_as(ts, false)
+}
+
+/// As `iso_seconds`, but with `naive_utc` a timestamp without an offset is
+/// read as UTC (costs._when: "naive means UTC here").
+pub fn iso_seconds_as(ts: &str, naive_utc: bool) -> Option<f64> {
+    let has_offset = {
+        let t = ts.strip_suffix('Z').unwrap_or(ts);
+        ts.ends_with('Z')
+            || t.split_once(['T', ' '])
+                .is_some_and(|(_, rest)| rest.contains(['+', '-']))
+    };
+    if !has_offset && naive_utc {
+        return iso_seconds_as(&format!("{ts}+00:00"), false);
+    }
+    iso_parse(ts)
+}
+
+fn iso_parse(ts: &str) -> Option<f64> {
     let ts = ts
         .strip_suffix('Z')
         .map(|t| format!("{t}+00:00"))

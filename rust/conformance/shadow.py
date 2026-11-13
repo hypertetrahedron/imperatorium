@@ -32,7 +32,11 @@ IGNORE = {"/api/health": ("pid", "boot"),
           # last push error: runtime state of the live process.
           "/api/settings": ("waiting", "notify_error"),
           # When each side last worked the answer out (cached 5 minutes).
-          "/api/errors": ("at",)}
+          "/api/errors": ("at",),
+          # How many transcripts the ledger holds open: which sessions were
+          # asked about before (pinned) differs by process.
+          "/api/costs": ("files",),
+          "/api/session_status": ("now",)}
 
 
 def get(base, path):
@@ -246,6 +250,9 @@ def main():
     for sid in ids:
         paths.append("/api/activity?session=" + urllib.parse.quote(sid))
     paths += ["/api/errors", "/api/errors?days=1", "/api/errors?days=bad"]
+    paths += ["/api/costs", "/api/costs?days=7", "/api/costs?days=1", "/api/costs?days=bad"]
+    for sid in ids + ["nope"]:
+        paths.append("/api/session_status?session=" + urllib.parse.quote(sid))
     # Changes and worktrees: plain git, read-only, in every project here.
     for sid in [r["sessionId"] for r in snap.get("sessions", []) if not r.get("remote")] + ["nope"]:
         paths.append("/api/changes?session=" + urllib.parse.quote(sid))

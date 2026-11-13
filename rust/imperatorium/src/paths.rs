@@ -372,3 +372,74 @@ pub fn local_stamp() -> String {
         )
     }
 }
+
+/// The local calendar date of a Unix time, as Python's
+/// `datetime.fromtimestamp(t).date()` / `astimezone()` gives it:
+/// (year, month, day).
+pub fn local_date(t: f64) -> (i64, u32, u32) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+        use windows_sys::Win32::System::Time::{
+            FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime,
+        };
+        let ticks = ((t + 11_644_473_600.0) * 1e7) as u64;
+        let ft = FILETIME {
+            dwLowDateTime: ticks as u32,
+            dwHighDateTime: (ticks >> 32) as u32,
+        };
+        unsafe {
+            let mut utc: SYSTEMTIME = std::mem::zeroed();
+            let mut local: SYSTEMTIME = std::mem::zeroed();
+            if FileTimeToSystemTime(&ft, &mut utc) == 0
+                || SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) == 0
+            {
+                return civil(t.div_euclid(86400.0) as i64);
+            }
+            (local.wYear as i64, local.wMonth as u32, local.wDay as u32)
+        }
+    }
+    #[cfg(unix)]
+    {
+        let secs = t.floor() as libc::time_t;
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        unsafe { libc::localtime_r(&secs, &mut tm) };
+        (
+            tm.tm_year as i64 + 1900,
+            tm.tm_mon as u32 + 1,
+            tm.tm_mday as u32,
+        )
+    }
+}
+
+/// The civil date of a day number (days since 1970-01-01).
+pub fn civil(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// The day number of a civil date.
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let (y, m) = if m <= 2 {
+        (y - 1, m as i64 + 9)
+    } else {
+        (y, m as i64 - 3)
+    };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+pub fn ymd(d: (i64, u32, u32)) -> String {
+    format!("{:04}-{:02}-{:02}", d.0, d.1, d.2)
+}

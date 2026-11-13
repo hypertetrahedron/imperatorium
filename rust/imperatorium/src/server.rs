@@ -28,6 +28,8 @@ use crate::{
 };
 
 pub struct Shared {
+    /// Control.cost_history: the spend ledger, read incrementally.
+    cost_history: Mutex<costs::History>,
     /// Control._errors (the whole answer, ERRORS_EVERY) and _tallies
     /// (each session's tally, until its transcript's size moves).
     errors_cache: Mutex<Option<(f64, f64, Value)>>,
@@ -157,6 +159,7 @@ impl Shared {
         };
         Shared {
             window_token: token_urlsafe(24),
+            cost_history: Mutex::new(costs::History::new()),
             errors_cache: Mutex::new(None),
             tallies: Mutex::new(HashMap::new()),
             home: home.map(str::to_string),
@@ -775,6 +778,64 @@ impl Shared {
                "tally": activity::tally(&calls), "current": null})
     }
 
+    /// Control.session_status: what the transcript and process tree add to
+    /// the row - background work, prompt cache, tokens, spend.
+    fn api_session_status(&self, session: &str) -> Value {
+        let hit = |rows: &[Row]| {
+            rows.iter()
+                .find(|r| {
+                    r.get("sessionId").and_then(Value::as_str) == Some(session)
+                        || r.get("key").and_then(Value::as_str) == Some(session)
+                })
+                .cloned()
+        };
+        let Some(row) = hit(&self.sessions(15.0)).or_else(|| hit(&self.sessions(2.0))) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let now = Self::now();
+        let sid = row
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let mut stat = self.stats.read(&sid, now);
+        if let Some(Value::Object(st)) = stat.as_mut() {
+            st.shift_remove("known_tasks");
+        }
+        let (per, _) = self
+            .cost_history
+            .lock()
+            .unwrap()
+            .sessions(std::slice::from_ref(&sid), 1.0);
+        let spend = per.get(&sid).cloned().unwrap_or(Value::Null);
+        let pid = row
+            .get("pid")
+            .filter(|p| p.is_u64() || p.is_i64())
+            .and_then(Value::as_u64);
+        let alive = pid.is_some() && truthy(row.get("status"));
+        if let (Some(Value::Object(st)), false) = (stat.as_mut(), alive) {
+            if !st.is_empty() {
+                for name in ["agents", "shells", "monitors", "wakeups"] {
+                    st.insert(name.into(), json!([]));
+                }
+            }
+        }
+        let mut out = Map::new();
+        out.insert("ok".into(), json!(true));
+        out.insert("now".into(), json!(now));
+        out.insert("stat".into(), stat.unwrap_or_else(|| json!({})));
+        out.insert("spend".into(), spend);
+        out.insert("alive".into(), json!(alive));
+        if let (true, Some(pid)) = (alive, pid) {
+            let n = procs::waiting_shells(&[pid as u32], &procs::process_table(), now)
+                .get(&(pid as u32))
+                .copied()
+                .unwrap_or(0);
+            out.insert("shell_processes".into(), json!(n));
+        }
+        Value::Object(out)
+    }
+
     /// Control.errors: tool failures across recent sessions.
     fn api_errors(&self, days: f64) -> Value {
         let now = Self::now();
@@ -1004,6 +1065,28 @@ impl Shared {
             ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue()}))),
             ("GET", "/api/changes") => (200, Body::Json(self.api_changes(&arg("session")))),
             ("GET", "/api/activity") => (200, Body::Json(self.api_activity(&arg("session")))),
+            ("GET", "/api/costs") => {
+                let raw = arg("days");
+                let raw = if raw.is_empty() {
+                    "30".to_string()
+                } else {
+                    raw
+                };
+                // int(): digits with an optional sign and surrounding space.
+                let days = crate::pyish::strip(&raw)
+                    .parse::<i64>()
+                    .map(|d| d.clamp(1, 90))
+                    .unwrap_or(30);
+                let got = self
+                    .cost_history
+                    .lock()
+                    .unwrap()
+                    .summary(days, Self::now(), 8.0);
+                (200, Body::Json(got))
+            }
+            ("GET", "/api/session_status") => {
+                (200, Body::Json(self.api_session_status(&arg("session"))))
+            }
             ("GET", "/api/errors") => {
                 let raw = arg("days");
                 let raw = if raw.is_empty() { "7".to_string() } else { raw };
