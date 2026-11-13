@@ -263,17 +263,21 @@ class Control:
         creds = self.store.credentials()
         snap = registry.snapshot(creds=creds)
         known = self.store.sessions()
+        titled = []
         for row in snap["sessions"]:
             extra = known.get(row["sessionId"])
             if not extra:
                 continue
             self._overlay(row, extra, row["sessionId"])
-            # What this session is calling itself in its title bar. The tile
-            # shows a derived name (`central-control-70`) and the window
-            # shows the conversation's summary, and nothing connected the
-            # two - so a tile could not be matched to a window by eye.
-            # 1ms per session against a 4.5MB transcript, behind a 2s cache.
-            row["window_title"] = conversation.title(row["sessionId"])
+            titled.append(row)
+        # What each session is calling itself in its title bar. The tile
+        # shows a derived name (`central-control-70`) and the window shows
+        # the conversation's summary, and nothing connected the two - so a
+        # tile could not be matched to a window by eye. One call for every
+        # tile (the binary reads 64 KiB per transcript), behind a 2s cache.
+        found = conversation.titles([row["sessionId"] for row in titled])
+        for row in titled:
+            row["window_title"] = found.get(row["sessionId"], "")
         snap["sessions"].extend(self._remote_with_hooks(known, creds))
         queued = self.store.queued()
         for row in snap["sessions"]:

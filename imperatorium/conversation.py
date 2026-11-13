@@ -25,8 +25,19 @@ drops, falling back to the public reader when the SDK's internals have moved:
 
 `to_items` is pure, so the shape the window renders can be tested without a
 session, an SDK, or a model.
+
+Since the native port's phase 2 (docs/native-port.md) the chain comes from
+the `imperatorium` binary (`imperatorium sessions chain`), a port of the
+SDK's reader checked against it on every transcript here
+(rust/conformance/sessions_compare.py). The SDK is the fallback where there
+is no binary: a remote host's reader runs this file as a bare script.
 """
 import re
+
+try:
+    from . import native as _native
+except Exception:  # a remote host runs this file as a bare script
+    _native = None
 
 TEXT, TOOL, RESULT, THINKING = "text", "tool", "result", "thinking"
 
@@ -114,7 +125,13 @@ def _guard_sdk():
     subproc.guard_sdk()
 
 
+def _native_ok():
+    return _native is not None and _native.available()
+
+
 def available():
+    if _native_ok():
+        return True
     try:
         import claude_agent_sdk  # noqa: F401
     except Exception:
@@ -378,9 +395,15 @@ def title(session_id):
     window says, which is why a window could not be found from a tile. The
     SDK's `summary` is the same string Claude Code puts in the title bar.
 
-    Read through the SDK rather than the transcript: the summary is in the
-    JSONL as an `ai-title` record, but that file's format is internal.
+    Read through the binary (or the SDK) rather than here: the summary is in
+    the JSONL as an `ai-title` record, but that file's format is internal.
     """
+    if _native_ok():
+        try:
+            info = _native.session_info(session_id) or {}
+            return info.get("custom_title") or info.get("summary") or ""
+        except Exception:
+            pass
     try:
         import claude_agent_sdk as sdk
     except Exception:
@@ -391,6 +414,18 @@ def title(session_id):
     except Exception:
         return ""
     return getattr(info, "custom_title", None) or getattr(info, "summary", None) or ""
+
+
+def titles(session_ids):
+    """{id: title(id)} for many sessions, in one call to the binary."""
+    ids = [sid for sid in session_ids if sid]
+    if ids and _native_ok():
+        try:
+            got = _native.session_titles(ids)
+            return {sid: got.get(sid) or "" for sid in ids}
+        except Exception:
+            pass
+    return {sid: title(sid) for sid in ids}
 
 
 def unwrap_peer(text):
@@ -531,8 +566,56 @@ def _messages(sdk, session_id, directory):
         return sdk.get_session_messages(session_id, **kwargs)
 
 
+class _Message:
+    """A visible transcript entry, shaped as the SDK's SessionMessage."""
+    parent_tool_use_id = None
+    parent_agent_id = None
+    system = None
+    via = None
+
+    def __init__(self, entry):
+        self.type = "user" if entry.get("type") == "user" else "assistant"
+        self.uuid = entry.get("uuid", "")
+        self.session_id = entry.get("sessionId", "")
+        self.message = entry.get("message")
+
+
+def _is_visible(entry):
+    """The SDK's `_is_visible_message`: user or assistant, not meta, not a
+    sidechain, not a team member's. Compact summaries are included."""
+    if entry.get("type") not in ("user", "assistant"):
+        return False
+    if entry.get("isMeta") or entry.get("isSidechain"):
+        return False
+    return not entry.get("teamName")
+
+
+def _native_messages(session_id):
+    """`_messages`, with the chain from the binary instead of the SDK."""
+    out = []
+    for entry in _native.session_chain(session_id):
+        if _is_visible(entry):
+            msg = _Message(entry)
+            note = _system_origin(entry)
+            if note:
+                msg.system = note
+            out.append(msg)
+        elif _is_peer_prompt(entry):
+            out.append(_Sent(entry))
+        elif _is_queued_prompt(entry):
+            out.append(_Queued(entry))
+    return out
+
+
 def read(session_id, limit=0, include_subagents=False, directory=None, merge=True):
-    """Items for one session. Raises RuntimeError when the SDK is absent."""
+    """Items for one session. Raises RuntimeError when there is no reader."""
+    if directory is None and _native_ok():
+        try:
+            messages = _native_messages(session_id)
+        except _native.Unavailable as exc:
+            raise RuntimeError(str(exc)) from exc
+        return to_items(messages, limit=limit, include_subagents=include_subagents,
+                        merge=merge)
     try:
         import claude_agent_sdk as sdk
     except Exception as exc:

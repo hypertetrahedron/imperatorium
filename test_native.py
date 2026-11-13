@@ -58,5 +58,74 @@ class NativeHooks(unittest.TestCase):
         self.assertFalse(install.is_our_statusline({"command": "imperatorium-ish thing"}))
 
 
+class NativeReader(unittest.TestCase):
+    """conversation.py and history.py on the binary, with it stubbed."""
+
+    def setUp(self):
+        from imperatorium import conversation, native
+        self.conv, self.native = conversation, native
+        self.saved = (native.available, native.session_chain, native.session_titles,
+                      native.session_info, native.session_list)
+        native.available = lambda: True
+
+    def tearDown(self):
+        n = self.native
+        (n.available, n.session_chain, n.session_titles, n.session_info,
+         n.session_list) = self.saved
+
+    def test_the_chain_is_classified_as_before(self):
+        self.native.session_chain = lambda sid: [
+            {"type": "user", "uuid": "1", "sessionId": "s",
+             "message": {"role": "user", "content": "hello"}},
+            {"type": "assistant", "uuid": "2", "sessionId": "s",
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}},
+            {"type": "user", "uuid": "3", "isMeta": True, "origin": {"kind": "peer"},
+             "message": {"role": "user", "content": "from the window"}},
+            {"type": "attachment", "uuid": "4", "attachment": {
+                "type": "queued_command", "prompt": "queued one"}},
+            {"type": "user", "uuid": "5", "isMeta": True,
+             "message": {"role": "user", "content": "hidden meta"}},
+            {"type": "user", "uuid": "6", "isCompactSummary": True,
+             "message": {"role": "user", "content": "summary"}},
+        ]
+        msgs = self.conv._native_messages("s")
+        self.assertEqual([m.uuid for m in msgs], ["1", "2", "3", "4", "6"])
+        self.assertEqual(msgs[2].via, "inbox")
+        self.assertEqual(msgs[4].system, self.conv.NOTE_SUMMARY)
+        items = self.conv.read("s")
+        self.assertTrue(items)
+
+    def test_a_failing_binary_is_an_error_not_an_empty_chat(self):
+        def boom(sid):
+            raise self.native.Unavailable("not UTF-8")
+        self.native.session_chain = boom
+        with self.assertRaises(RuntimeError):
+            self.conv.read("s")
+
+    def test_titles_take_one_call(self):
+        calls = []
+        self.native.session_titles = lambda ids: calls.append(ids) or {"a": "Alpha"}
+        self.assertEqual(self.conv.titles(["a", "b", ""]), {"a": "Alpha", "b": ""})
+        self.assertEqual(calls, [["a", "b"]])
+
+    def test_history_lists_through_the_binary(self):
+        from imperatorium import history
+        self.native.session_list = lambda: [{
+            "session_id": "x", "summary": "Sum", "custom_title": None, "first_prompt": "p",
+            "cwd": "C:/w", "git_branch": "main", "last_modified": 2000, "created_at": 1000,
+            "file_size": 10, "tag": None}]
+        rows = [history.info_dict(i) for i in history.list_sessions()]
+        self.assertEqual(rows[0]["title"], "Sum")
+        self.assertEqual(rows[0]["modified"], 2.0)
+
+    def test_the_binary_is_looked_for_where_it_is_installed(self):
+        from imperatorium import native
+        found = native.candidates({"IMPERATORIUM_BIN": "X", "LOCALAPPDATA": "L"})
+        self.assertEqual(found[0], "X")
+        if sys.platform == "win32":
+            self.assertEqual(found[1], os.path.join("L", "Programs", "imperatorium",
+                                                    "imperatorium.exe"))
+
+
 if __name__ == "__main__":
     unittest.main()

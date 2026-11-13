@@ -35,9 +35,9 @@ conformance passes; then its Python is deleted.
 | Phase | Replaces | Conformance |
 |---|---|---|
 | 1 | `hooks/cc_hook.py`, `cc_statusline.py`, `cc_permission.py`, `imperatorium/policy.py` | `test_policy.py` against the binary; an 86k-case differential corpus; black-box hook runs against a fake dispatcher, compared byte for byte |
-| 2 | `conversation.py`, `history.py`, `sessionstat.py`, `costs.py`, and the Agent SDK | the same transcripts through both readers; `test_conversation`, `test_sessionstat`, `test_costs` |
-| 3 | `dispatcher.py` and the rest of the package; UI files compiled into the binary | the HTTP-level tests in `test_dispatcher.py`/`test_features.py`, pointed at the binary |
-| 4 | `remote.py`, remote hooks and reader | the binary pushed to each host by target triple, SHA-256 checked; `test_remote` |
+| 2 | the Agent SDK, as the transcript reader under `conversation.py` and `history.py` | `sessions_compare.py`: every transcript here through the SDK and the binary, from the session list to the rendered items |
+| 3 | `dispatcher.py` and the rest of the package, `sessionstat.py` and `costs.py` included; UI files compiled into the binary | the HTTP-level tests in `test_dispatcher.py`/`test_features.py`, pointed at the binary; `sessionstat`/`costs` differential on the same transcripts |
+| 4 | `remote.py`, remote hooks and reader (the remote `sessionstat` too) | the binary pushed to each host by target triple, SHA-256 checked; `test_remote` |
 | 5 | `voice.py` (as `imperatorium-voice`, an optional download), `streamdeck_surface.py`, `hotkey.py` | the voice worker's JSON-lines protocol is kept, so either worker serves the same dispatcher |
 | 6 | `bootstrap.*`, `setup_machine.py`, `service/` | install, update, uninstall on clean VMs (never `-Yes` against this machine) |
 
@@ -86,6 +86,52 @@ Measured (this machine, release build, `rust/conformance/bench_hooks.py`):
 | permission (policy answers) | 80 ms | 15 ms |
 
 The release binary is 2.1 MB.
+
+## Phase 2, as built
+
+```
+imperatorium sessions chain <id>      # the conversation chain, compactions put back
+imperatorium sessions info <id>       # get_session_info, or null
+imperatorium sessions titles <id>...  # {id: title}, every tile in one process
+imperatorium sessions list            # list_sessions() across every project
+```
+
+`src/sessions.rs` ports what Imperatorium used of the SDK's private reader
+(0.2.155): finding the file, `_parse_transcript_entries`,
+`_build_conversation_chain`, the head/tail metadata scan behind
+`get_session_info`/`list_sessions`, plus `conversation.with_compacted`.
+`conversation.py` keeps its classification (visible, inbox, queued, notes)
+and everything after it, so the window renders exactly what it did.
+`imperatorium/native.py` finds the binary (`IMPERATORIUM_BIN`, the installed
+copy, then `rust/target/release`) and runs it through `subproc.run` (no
+console window, a job object, a timeout). With no binary, or for a
+`directory=` read, the SDK path is unchanged; remote hosts use that until
+phase 4.
+
+Verified by `rust/conformance/sessions_compare.py` on this machine: 129
+sessions, 46,081 chain entries (46 compactions restored, 535 inbox and
+queued prompts), 72 listed sessions: identical in the list, every `info`,
+every chain and every rendered item. The full Python suite passes with the
+binary in place (1,180) and also under a Python with no SDK at all.
+
+Kept faithful: numbers pass through as written (`serde_json`'s
+`arbitrary_precision`), so a big integer stays exact as in Python; `\r\n`
+and a lone `\r` split lines as Python's `read_text` does; `mtime` and
+`created_at` are computed with Python's float steps, so milliseconds agree.
+
+Speed is about the SDK's (the chain goes Rust -> JSON -> Python, which
+phase 3 removes). Titles were a regression at first: the dispatcher asks for
+every tile's title on each 2 s snapshot, and one process each cost about
+15 ms against the SDK's 1-3 ms in-process. `sessions titles` takes them all
+in one call (20 titles in about 40 ms).
+
+The SDK stays in `requirements.txt` until the installer ships the binary
+(phase 6); with the binary installed it is not imported at all.
+
+`sessionstat.py` and `costs.py` moved to phase 3. They read transcripts
+incrementally inside the dispatcher, and calling a binary from Python on
+every poll would cost a process per session per snapshot; ported, they run
+in-process once the dispatcher is Rust.
 
 ## Building
 

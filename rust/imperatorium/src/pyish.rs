@@ -156,12 +156,24 @@ fn str_repr(s: &str) -> String {
 
 fn number_repr(n: &serde_json::Number) -> String {
     if let Some(i) = n.as_i64() {
-        i.to_string()
-    } else if let Some(u) = n.as_u64() {
-        u.to_string()
-    } else {
-        float_repr(n.as_f64().unwrap_or(f64::NAN))
+        return i.to_string();
     }
+    if let Some(u) = n.as_u64() {
+        return u.to_string();
+    }
+    // With arbitrary_precision the number keeps its source text. An integer
+    // literal of any size is a Python int, printed exactly; `-0` is 0.
+    let text = n.to_string();
+    let digits = text.strip_prefix('-').unwrap_or(&text);
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        let trimmed = digits.trim_start_matches('0');
+        return match (trimmed.is_empty(), text.starts_with('-')) {
+            (true, _) => "0".into(),
+            (false, true) => format!("-{trimmed}"),
+            (false, false) => trimmed.to_string(),
+        };
+    }
+    float_repr(n.as_f64().unwrap_or(f64::NAN))
 }
 
 /// `repr(float)`: shortest round-trip digits, fixed notation for exponents

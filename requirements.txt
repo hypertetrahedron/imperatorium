@@ -1,3 +1,8 @@
-# Core: the window's conversation, history, activity and error views read
-# sessions through the Agent SDK. The dispatcher itself is standard library.
+# Core: nothing, once the `imperatorium` binary is installed - it reads the
+# sessions (rust/, `imperatorium sessions ...`) and the dispatcher itself is
+# standard library.
+#
+# The Agent SDK is the fallback reader where there is no binary, and the
+# reference rust/conformance/sessions_compare.py checks the binary against.
+# It stays here until the installer ships the binary (native port phase 6).
 claude-agent-sdk>=0.2.155

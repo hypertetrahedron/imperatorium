@@ -10,7 +10,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUST = os.path.dirname(HERE)
-PARTS = ["run_policy_tests.py", "differential.py", "hooks_blackbox.py"]
+PARTS = ["run_policy_tests.py", "differential.py", "hooks_blackbox.py", "sessions_compare.py"]
+# The reference these compare against; a part is skipped (and says so) when
+# the Python running this cannot import it.
+NEEDS = {"sessions_compare.py": "claude_agent_sdk"}
 
 
 def main():
@@ -26,6 +29,13 @@ def main():
     failed = []
     for part in PARTS:
         print("== %s" % part, flush=True)
+        need = NEEDS.get(part)
+        if need:
+            probe = subprocess.run([sys.executable, "-c", "import %s" % need],
+                                   capture_output=True)
+            if probe.returncode != 0:
+                print("SKIPPED: needs %s (run this with the .venv python)" % need)
+                continue
         if subprocess.run([sys.executable, os.path.join(HERE, part)], env=env).returncode != 0:
             failed.append(part)
     print("\nconformance: %s" % ("FAILED: " + ", ".join(failed) if failed else "all passed"))

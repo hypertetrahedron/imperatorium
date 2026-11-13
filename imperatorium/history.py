@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 import uuid
 
 from . import background, conversation
@@ -37,6 +38,18 @@ def _sdk():
         raise RuntimeError("claude-agent-sdk is not installed: %s" % exc) from exc
     conversation._guard_sdk()
     return sdk
+
+
+def list_sessions():
+    """Every session, newest first: from the binary (`imperatorium sessions
+    list`, the SDK's list_sessions ported), else from the SDK."""
+    from . import native
+    if native.available():
+        try:
+            return [types.SimpleNamespace(**row) for row in native.session_list()]
+        except native.Unavailable:
+            pass
+    return _sdk().list_sessions()
 
 
 def info_dict(info):
@@ -110,7 +123,7 @@ class Index:
         with self._lock:
             if time.time() - self._listed["at"] < max_age:
                 return list(self._listed["rows"])
-        lister = self._lister or (lambda: _sdk().list_sessions())
+        lister = self._lister or list_sessions
         rows = [info_dict(i) for i in lister()]
         rows.sort(key=lambda r: r["modified"], reverse=True)
         rows = rows[:MAX_SESSIONS]
