@@ -68,6 +68,11 @@ SELF_PROTECT = (
     _EDGE + r"hooks[\\/]cc_.*\.py" + _END,
     _EDGE + r"imperatorium[\\/]policy\.py" + _END,
     _EDGE + r"ccontrol[\\/]policy\.py" + _END,   # the package before 2026-10-20
+    # The native port (rust/imperatorium): its policy, and the installed
+    # binary that runs it. Kept in step with rust/imperatorium/src/policy.rs.
+    _EDGE + r"imperatorium[\\/]src[\\/]policy\.rs" + _END,
+    _EDGE + r"Programs[\\/]imperatorium[\\/]",
+    _EDGE + r"\.local[\\/]bin[\\/]imperatorium",
     r"--dangerously-skip-permissions",
     r"\bcrossSessionInbound\b",
 )

@@ -1,0 +1,26 @@
+[package]
+name = "imperatorium"
+version = "0.3.0-dev"
+edition = "2021"
+license = "MIT"
+description = "Imperatorium as one binary: hooks, statusline and permission policy first (see docs/native-port.md)."
+publish = false
+
+[dependencies]
+# preserve_order: Python dicts keep insertion order, and the policy's
+# "most specific project wins, first one on a tie" depends on it.
+serde_json = { version = "1", features = ["preserve_order"] }
+regex = "1"
+# Plain http to 127.0.0.1 only; no TLS needed or wanted.
+ureq = { version = "2", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemInformation",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

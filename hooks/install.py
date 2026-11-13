@@ -22,6 +22,11 @@ Two opt-in extras, off unless asked for:
                    out context use and the 5-hour / weekly rate limits. It
                    prints a compact line of its own. Refuses to replace a
                    statusline that is not ours.
+    --native BIN   point every hook at the `imperatorium` binary (the Rust
+                   port, rust/) instead of Python: `BIN hook`, `BIN
+                   statusline`, `BIN permission --home <this checkout>`, so
+                   it reads the same policy.json. Behaviour is the same, checked
+                   by rust/conformance; each hook starts in milliseconds.
     --mod          the Imperatorium mod (mod/imperatorium, Claude Code
                    2.1.287+), loaded into every session through
                    CLAUDE_CODE_PLUGIN_DIRS in the settings' `env`: prompts
@@ -33,6 +38,7 @@ Two opt-in extras, off unless asked for:
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -43,6 +49,10 @@ PERMISSION_SCRIPT = os.path.join(HERE, "cc_permission.py")
 STATUSLINE_SCRIPT = os.path.join(HERE, "cc_statusline.py")
 MOD_DIR = os.path.join(os.path.dirname(HERE), "mod", "imperatorium")
 PLUGIN_DIRS = "CLAUDE_CODE_PLUGIN_DIRS"
+# Where policy.json lives: this checkout, unless --home says otherwise (an
+# install run from another worktree must still size the permission hook's
+# timeout from, and point --native at, the live policy).
+CONFIG_HOME = os.path.dirname(HERE)
 
 # Stamped onto every entry so uninstall can find exactly what it added and
 # leave anyone else's hooks alone.
@@ -79,15 +89,30 @@ TOOL_EVENTS = {
 }
 
 
-def statusline_command(python=None):
+def statusline_command(python=None, native=None):
+    if native:
+        return '"%s" statusline' % native
     return '"%s" "%s"' % (python or sys.executable, STATUSLINE_SCRIPT)
 
 
 def is_our_statusline(value):
-    return isinstance(value, dict) and "cc_statusline.py" in str(value.get("command"))
+    if not isinstance(value, dict):
+        return False
+    command = str(value.get("command"))
+    return ("cc_statusline.py" in command
+            or re.search(r'imperatorium(\.exe)?"?\s+statusline\b', command, re.I) is not None)
 
 
-def apply_statusline(settings, uninstall=False, python=None):
+def native_args(script, home=None):
+    """The binary's subcommand for each hook script."""
+    if script == PERMISSION_SCRIPT:
+        return ["permission", "--home", home or CONFIG_HOME]
+    if script == HOOK_SCRIPT:
+        return ["hook"]
+    raise ValueError("no native form for %s" % script)
+
+
+def apply_statusline(settings, uninstall=False, python=None, native=None):
     """Install or remove our statusline. Returns [description of the change]."""
     cur = settings.get("statusLine")
     if uninstall:
@@ -99,7 +124,7 @@ def apply_statusline(settings, uninstall=False, python=None):
         return ["SKIP statusLine: one is already configured and it is not ours "
                 "(%s)" % str(cur.get("command") if isinstance(cur, dict) else cur)[:80]]
     settings["statusLine"] = {"type": "command",
-                              "command": statusline_command(python),
+                              "command": statusline_command(python, native),
                               "padding": 0}
     return ["replace statusLine" if cur else "add statusLine"]
 
@@ -150,11 +175,11 @@ def settings_path():
     return os.path.join(home, "settings.json")
 
 
-def entry(matcher, script, is_async, command=None):
+def entry(matcher, script, is_async, command=None, native=None):
     hook = {
         "type": "command",
-        "command": command or sys.executable,
-        "args": [script],
+        "command": native or command or sys.executable,
+        "args": native_args(script) if native else [script],
         # The reporters are fire-and-forget. The permission hook may block
         # while the window is offered the decision, so its budget has to
         # exceed policy.json's park wait - otherwise Claude Code gives up
@@ -176,7 +201,7 @@ def permission_timeout():
     With parking off this stays small: the hook returns immediately and a long
     budget would only delay the terminal prompt when something hangs.
     """
-    path = os.path.join(os.path.dirname(HERE), "policy.json")
+    path = os.path.join(CONFIG_HOME, "policy.json")
     try:
         with open(path, encoding="utf-8") as fh:
             park = (json.load(fh) or {}).get("park") or {}
@@ -213,7 +238,7 @@ def load(path):
         )
 
 
-def apply(settings, uninstall=False, events=None, command=None):
+def apply(settings, uninstall=False, events=None, command=None, native=None):
     """Return (settings, [description of each change])."""
     changes = []
     hooks = settings.setdefault("hooks", {})
@@ -232,7 +257,7 @@ def apply(settings, uninstall=False, events=None, command=None):
             else:
                 hooks.pop(event, None)
             continue
-        kept.append(entry(matcher, script, is_async, command))
+        kept.append(entry(matcher, script, is_async, command, native))
         hooks[event] = kept
         changes.append(
             ("replace %s" % event) if removed else ("add %s" % event)
@@ -318,6 +343,10 @@ def main():
                     help="also install the per-tool-call activity hooks")
     ap.add_argument("--statusline", action="store_true",
                     help="also install the usage-reporting statusline")
+    ap.add_argument("--home", metavar="DIR",
+                    help="the folder holding policy.json (default: this checkout)")
+    ap.add_argument("--native", metavar="BIN",
+                    help="run the hooks with the imperatorium binary instead of Python")
     ap.add_argument("--mod", action="store_true",
                     help="also load the Imperatorium mod in every session (Claude Code 2.1.287+)")
     args = ap.parse_args()
@@ -327,8 +356,16 @@ def main():
                               args.python)
 
     path = args.settings or settings_path()
+    global CONFIG_HOME
+    if args.home:
+        CONFIG_HOME = os.path.abspath(args.home)
+        if not os.path.isfile(os.path.join(CONFIG_HOME, "policy.json")):
+            raise SystemExit("no policy.json in %s" % CONFIG_HOME)
+    native = os.path.abspath(args.native) if args.native else None
+    if native and not os.path.isfile(native):
+        raise SystemExit("the binary is missing: %s" % native)
     for script in (HOOK_SCRIPT, PERMISSION_SCRIPT):
-        if not os.path.exists(script):
+        if not native and not os.path.exists(script):
             raise SystemExit("hook script is missing: %s" % script)
 
     settings = load(path)
@@ -336,18 +373,24 @@ def main():
     # Uninstall removes everything this ever added, asked for or not.
     if args.tool_hooks or args.uninstall:
         events.update(TOOL_EVENTS)
-    updated, changes = apply(settings, uninstall=args.uninstall, events=events)
+    updated, changes = apply(settings, uninstall=args.uninstall, events=events,
+                             native=native)
     if args.statusline or args.uninstall:
-        changes += apply_statusline(updated, uninstall=args.uninstall)
+        changes += apply_statusline(updated, uninstall=args.uninstall, native=native)
     if args.mod or args.uninstall:
         if not os.path.exists(os.path.join(MOD_DIR, ".claude-plugin", "plugin.json")):
             raise SystemExit("the mod is missing: %s" % MOD_DIR)
         changes += apply_mod(updated, uninstall=args.uninstall)
 
     print("settings : %s" % path)
-    print("hooks    : %s" % sys.executable)
-    print("           %s" % HOOK_SCRIPT)
-    print("           %s  (PermissionRequest, synchronous)" % PERMISSION_SCRIPT)
+    if native:
+        print("hooks    : %s hook" % native)
+        print("           %s  (PermissionRequest, synchronous)"
+              % " ".join([native] + native_args(PERMISSION_SCRIPT)))
+    else:
+        print("hooks    : %s" % sys.executable)
+        print("           %s" % HOOK_SCRIPT)
+        print("           %s  (PermissionRequest, synchronous)" % PERMISSION_SCRIPT)
     for line in changes or ["(nothing to do)"]:
         print("  %s" % line)
 

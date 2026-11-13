@@ -98,6 +98,20 @@ def audit(record):
         pass
 
 
+def _note(line):
+    """IMPERATORIUM_DEBUG_LOG, as in cc_hook.py. park() called this before
+    it existed here, so a failed park died with NameError instead of
+    falling through quietly (found by rust/conformance/hooks_blackbox.py)."""
+    path = os.environ.get("IMPERATORIUM_DEBUG_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), line))
+    except OSError:
+        pass
+
+
 def park(request, reason, detail):
     """Offer the decision to the window; return its reply, or {}.
 
