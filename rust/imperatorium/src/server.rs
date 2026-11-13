@@ -22,9 +22,14 @@ use sha1::{Digest, Sha1};
 
 use crate::pyish::{json_dumps_sorted, truthy};
 use crate::registry::Row;
-use crate::{activity, conversation, costs, paths, procs, registry, sessions, sessionstat};
+use crate::{
+    activity, conversation, costs, history, paths, procs, registry, sessions, sessionstat, ui,
+};
 
 pub struct Shared {
+    /// Handed to the pages when they load (ui._with_meta); never written down.
+    window_token: String,
+    history: history::Index,
     config: Value,
     boot: String,
     /// The dispatcher's snapshot cache: (when, rows), the rows still holding
@@ -144,6 +149,8 @@ impl Shared {
             format!("{:x}{:x}", t.as_secs(), std::process::id())
         };
         Shared {
+            window_token: token_urlsafe(24),
+            history: history::Index::new(),
             config: load_config(home),
             boot,
             snap: Mutex::new(None),
@@ -550,10 +557,70 @@ impl Shared {
         json!({"at": Self::now(), "sessions": public(rows)})
     }
 
+    /// Control.search: History, with which of its sessions are live.
+    fn api_history(&self, q: &HashMap<String, String>) -> Value {
+        let query = q.get("q").cloned().unwrap_or_default();
+        let read = |sid: &str| {
+            self.conversation(sid)
+                .map(|c| c.merged.clone())
+                .unwrap_or_default()
+        };
+        let mut got = self.history.search(&query, 40, &read);
+        let live: std::collections::HashSet<String> = self
+            .sessions(2.0)
+            .iter()
+            .filter(|r| truthy(r.get("pid")) || truthy(r.get("status")))
+            .filter_map(|r| {
+                r.get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        if let Some(Value::Array(results)) = got.get_mut("results") {
+            for r in results.iter_mut() {
+                let sid = r
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                r["live"] = json!(live.contains(&sid));
+            }
+        }
+        got["ok"] = json!(true);
+        got
+    }
+
+    fn page(&self, page: &str, token: &str, with_look: bool) -> Body {
+        let drawn = if with_look {
+            Some(look(&self.config))
+        } else {
+            None
+        };
+        Body::Text(
+            ui::with_meta(token, page, &self.boot, drawn.as_ref()),
+            "text/html; charset=utf-8",
+        )
+    }
+
     pub fn handle(&self, method: &str, url: &str) -> (u16, Body) {
-        let (path, query) = url.split_once('?').unwrap_or((url, ""));
+        let (raw_path, query) = url.split_once('?').unwrap_or((url, ""));
+        // As the Python handler does: a trailing slash is the same path.
+        let trimmed = raw_path.trim_end_matches('/');
+        let path = if trimmed.is_empty() { "/" } else { trimmed };
         let q = parse_query(query);
+        if method == "GET" {
+            if let Some(name) = path.strip_prefix("/fonts/") {
+                return match ui::font(name) {
+                    Some(bytes) => (200, Body::Bytes(bytes, "font/woff2", "max-age=86400")),
+                    None => (404, Body::Json(json!({"error": "no such font"}))),
+                };
+            }
+        }
         match (method, path) {
+            ("GET", "/") => (200, self.page(ui::SHELL, &self.window_token, true)),
+            ("GET", "/matrix") => (200, self.page(ui::MATRIX, "", true)),
+            ("GET", "/settings") => (200, self.page(ui::SETTINGS, &self.window_token, false)),
+            ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
             ("GET", "/api/health") => (
                 200,
                 Body::Json(
@@ -654,16 +721,50 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>) {
 /// A response body: a value to serialise, or JSON text already assembled.
 pub enum Body {
     Json(Value),
+    /// JSON text already assembled.
     Raw(String),
+    /// Text of another type (a page).
+    Text(String, &'static str),
+    /// Bytes served as they are (a font), with their Cache-Control.
+    Bytes(&'static [u8], &'static str, &'static str),
 }
 
 impl Body {
-    pub fn into_text(self) -> String {
+    /// (bytes, Content-Type, Cache-Control)
+    pub fn into_parts(self) -> (Vec<u8>, &'static str, &'static str) {
+        const JSON: &str = "application/json; charset=utf-8";
         match self {
-            Body::Json(v) => serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()),
-            Body::Raw(t) => t,
+            Body::Json(v) => (
+                serde_json::to_vec(&v).unwrap_or_else(|_| b"{}".to_vec()),
+                JSON,
+                "no-store",
+            ),
+            Body::Raw(t) => (t.into_bytes(), JSON, "no-store"),
+            Body::Text(t, ctype) => (t.into_bytes(), ctype, "no-store"),
+            Body::Bytes(b, ctype, cache) => (b.to_vec(), ctype, cache),
         }
     }
+}
+
+/// secrets.token_urlsafe(n): n random bytes, base64url without padding.
+fn token_urlsafe(n: usize) -> String {
+    let mut bytes = vec![0u8; n];
+    getrandom::getrandom(&mut bytes).expect("the OS random source is unavailable");
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let v = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        let take = chunk.len() + 1;
+        for i in 0..take {
+            out.push(A[((v >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+    }
+    out
 }
 
 /// parse_qs: the first value of each key, percent- and plus-decoded.
@@ -716,22 +817,18 @@ pub fn serve(host: &str, port: u16, home: Option<&str>) -> i32 {
         std::thread::spawn(move || {
             let method = request.method().as_str().to_string();
             let (code, body) = shared.handle(&method, request.url());
-            let text = body.into_text();
+            let (bytes, ctype, cache) = body.into_parts();
             // Content-Length, as the Python dispatcher sends: tiny_http goes
             // chunked above 32 KiB by default, and a conversation is often
             // several hundred.
-            let resp = tiny_http::Response::from_string(text)
+            let resp = tiny_http::Response::from_data(bytes)
                 .with_chunked_threshold(usize::MAX)
                 .with_status_code(code)
                 .with_header(
-                    tiny_http::Header::from_bytes(
-                        &b"Content-Type"[..],
-                        &b"application/json; charset=utf-8"[..],
-                    )
-                    .unwrap(),
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).unwrap(),
                 )
                 .with_header(
-                    tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap(),
+                    tiny_http::Header::from_bytes(&b"Cache-Control"[..], cache.as_bytes()).unwrap(),
                 );
             let _ = request.respond(resp);
         });

@@ -1,0 +1,199 @@
+//! The window's pages and fonts, compiled in. The pages are written from
+//! `imperatorium/ui.py` by `rust/assets/export_ui.py`; this adds what
+//! `ui._with_meta` adds per start - the window token, the boot id and
+//! `look_head` - exactly as it does.
+
+use serde_json::Value;
+
+use crate::pyish::{float_repr, truthy};
+
+pub const SHELL: &str = include_str!("../assets/shell.html");
+pub const MATRIX: &str = include_str!("../assets/matrix.html");
+pub const SETTINGS: &str = include_str!("../assets/settings.html");
+
+const FONTS: &[(&str, &[u8])] = &[
+    (
+        "mono-latin-ext.woff2",
+        include_bytes!("../../../imperatorium/fonts/mono-latin-ext.woff2"),
+    ),
+    (
+        "mono-latin.woff2",
+        include_bytes!("../../../imperatorium/fonts/mono-latin.woff2"),
+    ),
+    (
+        "next-italic-latin-ext.woff2",
+        include_bytes!("../../../imperatorium/fonts/next-italic-latin-ext.woff2"),
+    ),
+    (
+        "next-italic-latin.woff2",
+        include_bytes!("../../../imperatorium/fonts/next-italic-latin.woff2"),
+    ),
+    (
+        "next-latin-ext.woff2",
+        include_bytes!("../../../imperatorium/fonts/next-latin-ext.woff2"),
+    ),
+    (
+        "next-latin.woff2",
+        include_bytes!("../../../imperatorium/fonts/next-latin.woff2"),
+    ),
+];
+
+/// ui.font: a bundled .woff2 by its exact name.
+pub fn font(name: &str) -> Option<&'static [u8]> {
+    FONTS.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
+}
+
+const FONT_BASE: &[(&str, f64)] = &[("chat", 14.0), ("matrix", 13.0)];
+const HIGHLIGHTS_ON: &[&str] = &[
+    "code", "diffs", "prose", "tools", "signals", "mute", "guides", "shape",
+];
+
+/// Python's `$`: the end, or just before a final newline.
+fn full(s: &str, ok: impl Fn(&str) -> bool) -> bool {
+    ok(s.strip_suffix('\n').unwrap_or(s))
+}
+
+fn word(s: &str) -> bool {
+    full(s, |t| {
+        !t.is_empty() && t.bytes().all(|b| b.is_ascii_lowercase())
+    })
+}
+
+fn hex6(s: &str) -> bool {
+    full(s, |t| {
+        t.len() == 7 && t.starts_with('#') && t[1..].bytes().all(|b| b.is_ascii_hexdigit())
+    })
+}
+
+/// `round(x, 4)`, which rounds the exact binary value, as `{:.4}` does.
+fn round4(x: f64) -> f64 {
+    format!("{x:.4}").parse().unwrap_or(x)
+}
+
+/// Python's `float(value)` for a look font size: a number or numeric text.
+fn as_float(v: &Value) -> Option<f64> {
+    crate::pyish::py_float(v)
+}
+
+/// ui.look_head: text sizes, highlight colours and the html.hl-* classes.
+pub fn look_head(look: &Value) -> String {
+    let empty = serde_json::Map::new();
+    let look = look.as_object().unwrap_or(&empty);
+    let fonts = look
+        .get("fonts")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut props: Vec<String> = Vec::new();
+    for (name, base) in FONT_BASE {
+        let size = match fonts.get(*name).filter(|v| truthy(Some(v))) {
+            Some(v) => as_float(v).unwrap_or(*base),
+            None => *base,
+        };
+        props.push(format!("--{name}z:{}", float_repr(round4(size / base))));
+    }
+    let mut colors: Vec<(String, Value)> = look
+        .get("colors")
+        .and_then(Value::as_object)
+        .map(|c| c.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
+    colors.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, v) in colors {
+        let v = crate::pyish::py_str(&v);
+        if word(&name) && hex6(&v) {
+            props.push(format!("--hl-{name}:{}", v.to_lowercase()));
+        }
+    }
+    let hl = look.get("hl").filter(|h| !h.is_null());
+    let mut on: Vec<String> = HIGHLIGHTS_ON
+        .iter()
+        .filter(|n| hl.is_none() || truthy(hl.and_then(|h| h.get(**n))))
+        .map(|n| n.to_string())
+        .collect();
+    if let Some(Value::Object(h)) = hl {
+        for (n, v) in h {
+            if truthy(Some(v)) && !on.contains(n) && word(n) {
+                on.push(n.clone());
+            }
+        }
+    }
+    let classes = if on.is_empty() {
+        String::new()
+    } else {
+        let args: Vec<String> = on
+            .iter()
+            .map(|n| crate::pyish::json_dumps(&Value::String(format!("hl-{n}")), true))
+            .collect();
+        format!(
+            "<script>document.documentElement.classList.add({})</script>",
+            args.join(",")
+        )
+    };
+    format!(
+        "<style id=lookvars>html:root{{{}}}</style>{classes}",
+        props.join(";")
+    )
+}
+
+/// html.escape(s, quote=True).
+fn escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
+/// ui._with_meta: the token, the boot id and (unless `look` is None) the
+/// look, after the page's first `<meta charset=utf-8>`.
+pub fn with_meta(token: &str, page: &str, boot: &str, look: Option<&Value>) -> String {
+    let head = "<meta charset=utf-8>";
+    let extra = format!(
+        "<meta name=imp-window content=\"{}\"><meta name=imp-boot content=\"{}\">{}",
+        escape(token),
+        escape(boot),
+        look.map(look_head).unwrap_or_default()
+    );
+    page.replacen(head, &format!("{head}{extra}"), 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn look_head_matches_python() {
+        // python -c "from imperatorium import ui; print(ui.look_head(None))"
+        assert_eq!(
+            look_head(&Value::Null),
+            "<style id=lookvars>html:root{--chatz:1.0;--matrixz:1.0}</style><script>document.documentElement\
+             .classList.add(\"hl-code\",\"hl-diffs\",\"hl-prose\",\"hl-tools\",\"hl-signals\",\"hl-mute\",\
+             \"hl-guides\",\"hl-shape\")</script>"
+        );
+        let l = json!({"fonts": {"chat": 15, "matrix": 13}, "hl": {"code": true, "mute": false},
+                       "colors": {"error": "#FF0000", "Bad": "#000000"}});
+        assert_eq!(
+            look_head(&l),
+            "<style id=lookvars>html:root{--chatz:1.0714;--matrixz:1.0;--hl-error:#ff0000}</style>\
+             <script>document.documentElement.classList.add(\"hl-code\")</script>"
+        );
+    }
+
+    #[test]
+    fn meta_is_inserted_once() {
+        let page = "<html><head><meta charset=utf-8><meta charset=utf-8></head></html>";
+        let out = with_meta("t<k>", page, "b\"1", None);
+        assert_eq!(
+            out,
+            "<html><head><meta charset=utf-8><meta name=imp-window content=\"t&lt;k&gt;\">\
+             <meta name=imp-boot content=\"b&quot;1\"><meta charset=utf-8></head></html>"
+        );
+    }
+
+    #[test]
+    fn fonts_are_bundled() {
+        assert!(font("next-latin.woff2").is_some_and(|b| b.starts_with(b"wOF2")));
+        assert!(font("../secret").is_none());
+    }
+}

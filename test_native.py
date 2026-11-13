@@ -127,5 +127,18 @@ class NativeReader(unittest.TestCase):
                                                     "imperatorium.exe"))
 
 
+class EmbeddedPages(unittest.TestCase):
+    """The binary embeds the window's pages, written from ui.py by
+    rust/assets/export_ui.py. A change to ui.py must be exported, or the
+    native dispatcher would serve yesterday's window."""
+
+    def test_the_exported_pages_are_current(self):
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        done = subprocess.run([sys.executable, os.path.join(here, "rust", "assets", "export_ui.py"),
+                               "--check"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

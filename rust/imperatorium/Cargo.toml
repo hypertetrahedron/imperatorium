@@ -18,6 +18,8 @@ tiny_http = "0.12"
 sha1 = "0.10"
 # Python dict order, deletions included (sessionstat).
 indexmap = "2"
+# The window token, as secrets.token_urlsafe.
+getrandom = "0.2"
 regex = "1"
 # Plain http to 127.0.0.1 only; no TLS needed or wanted.
 ureq = { version = "2", default-features = false }

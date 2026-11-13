@@ -27,6 +27,7 @@
 mod activity;
 mod conversation;
 mod costs;
+mod history;
 mod hooks;
 mod http;
 mod paths;
@@ -37,6 +38,7 @@ mod registry;
 mod server;
 mod sessions;
 mod sessionstat;
+mod ui;
 
 use std::io::{BufRead, Write};
 

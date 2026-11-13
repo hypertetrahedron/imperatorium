@@ -38,7 +38,7 @@ def get(base, path):
 
 def compare(path):
     a, b = get(PY, path), get(RS, path)
-    route = path.split("?")[0]
+    route = path.split("?")[0].rstrip("/") or "/"
     for key in IGNORE.get(route, ()):
         for code, body in (a, b):
             if isinstance(body, dict):
@@ -102,6 +102,47 @@ def compare_sessions(counts):
     return None
 
 
+def get_raw(base, path):
+    try:
+        with urllib.request.urlopen(base + path, timeout=60) as fh:
+            return fh.status, fh.headers.get("Content-Type"), fh.headers.get("Cache-Control"), fh.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("Content-Type"), exc.headers.get("Cache-Control"), exc.read()
+
+
+# The per-start parts of a page: which window token it carries, and which
+# dispatcher start served it. Everything else must match byte for byte.
+import re  # noqa: E402
+PER_START = re.compile(rb'(<meta name=imp-(?:window|boot) content=")[^"]*(")')
+
+
+def compare_raw(path):
+    a, b = get_raw(PY, path), get_raw(RS, path)
+    if a[:3] != b[:3]:
+        return "status/type/cache %r vs %r" % (a[:3], b[:3])
+    if (a[1] or "").startswith("application/json"):
+        # A JSON answer is compared as JSON: Python puts spaces after its
+        # separators and the binary does not, which no client can see.
+        return first_difference(json.loads(a[3]), json.loads(b[3]))
+    body_a, body_b = PER_START.sub(rb"\1*\2", a[3]), PER_START.sub(rb"\1*\2", b[3])
+    if body_a != body_b:
+        at = next(i for i, (x, y) in enumerate(zip(body_a + b"\0", body_b + b"\1")) if x != y)
+        return "body differs at byte %d: %r vs %r" % (at, body_a[at - 40:at + 40], body_b[at - 40:at + 40])
+    return None
+
+
+def compare_history(query):
+    """Both sides, until both say the search was complete (a first search
+    over hundreds of sessions stops at its 8 s budget)."""
+    path = "/api/history" + ("?q=" + urllib.parse.quote(query) if query else "")
+    for _ in range(6):
+        _, a = get(PY, path)
+        _, b = get(RS, path)
+        if a.get("complete") and b.get("complete"):
+            break
+    return first_difference(ordered(a), ordered(b))
+
+
 def main():
     global PY, RS
     if "--python" in sys.argv:
@@ -109,7 +150,7 @@ def main():
     if "--rust" in sys.argv:
         RS = sys.argv[sys.argv.index("--rust") + 1]
     t0 = time.time()
-    paths = ["/api/health", "/api/no-such-thing", "/api/conversation",
+    paths = ["/api/health", "/api/health/", "/api/no-such-thing", "/api/conversation",
              "/api/conversation?session=00000000-0000-0000-0000-000000000000"]
     _, snap = get(PY, "/api/sessions")
     ids = [r["sessionId"] for r in snap.get("sessions", []) if not r.get("remote")]
@@ -135,6 +176,19 @@ def main():
                 live += 1
                 continue
             failures.append((path, diff2))
+    raw = ["/", "/matrix", "/settings", "/settings/", "/fonts/next-latin.woff2",
+           "/fonts/mono-latin.woff2", "/fonts/../config.json", "/fonts/nope.woff2"]
+    for path in raw:
+        diff = compare_raw(path)
+        if diff:
+            failures.append((path, diff))
+    queries = ["", "imperatorium", "tunnel pi", "rust port", "Reply with the single",
+               "no-such-word-anywhere-xyzzy", "  spaced   words  "]
+    for query in queries:
+        diff = compare_history(query)
+        if diff:
+            failures.append(("/api/history?q=%s" % query, diff))
+    paths_done = len(paths) + len(raw) + len(queries)
     counts = {"compared": 0, "skipped": 0}
     diff = compare_sessions(counts)
     for _ in range(4):           # tiles move: a session working, a cache expiring
@@ -147,7 +201,7 @@ def main():
         failures.append(("/api/sessions", diff))
     print("sessions: %d fields compared, %d left out as POST-fed" % (counts["compared"], counts["skipped"]))
     print("shadow: %d requests over %d sessions, %d settled on retry, %.1fs"
-          % (len(paths), len(ids), live, time.time() - t0))
+          % (paths_done, len(ids), live, time.time() - t0))
     for path, diff in failures[:25]:
         print("DIFF %s\n     %s" % (path, diff))
     print("shadow: %s" % ("%d differences" % len(failures) if failures else "identical"))
