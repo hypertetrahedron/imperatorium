@@ -231,11 +231,19 @@ pub fn float_repr(f: f64) -> String {
 /// `ensure_ascii` every character outside space..`~` escaped.
 pub fn json_dumps(v: &Value, ensure_ascii: bool) -> String {
     let mut out = String::new();
-    write_json(&mut out, v, ensure_ascii);
+    write_json(&mut out, v, ensure_ascii, false);
     out
 }
 
-fn write_json(out: &mut String, v: &Value, ascii: bool) {
+/// `json.dumps(value, sort_keys=True)`: keys in code point order, at every
+/// level. What convcache.signature hashes.
+pub fn json_dumps_sorted(v: &Value) -> String {
+    let mut out = String::new();
+    write_json(&mut out, v, true, true);
+    out
+}
+
+fn write_json(out: &mut String, v: &Value, ascii: bool, sort: bool) {
     match v {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -247,19 +255,25 @@ fn write_json(out: &mut String, v: &Value, ascii: bool) {
                 if i > 0 {
                     out.push_str(", ");
                 }
-                write_json(out, item, ascii);
+                write_json(out, item, ascii, sort);
             }
             out.push(']');
         }
         Value::Object(o) => {
             out.push('{');
-            for (i, (k, item)) in o.iter().enumerate() {
+            let mut pairs: Vec<(&String, &Value)> = o.iter().collect();
+            if sort {
+                // Rust's str order is byte order, which for UTF-8 is code
+                // point order: what Python's sort_keys uses.
+                pairs.sort_by(|a, b| a.0.cmp(b.0));
+            }
+            for (i, (k, item)) in pairs.into_iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
                 }
                 write_json_str(out, k, ascii);
                 out.push_str(": ");
-                write_json(out, item, ascii);
+                write_json(out, item, ascii, sort);
             }
             out.push('}');
         }

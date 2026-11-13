@@ -12,17 +12,26 @@
 //!     imperatorium sessions chain <id>     # the conversation chain, compactions put back
 //!     imperatorium sessions info <id>      # one session's title, prompt, branch...
 //!     imperatorium sessions titles <id>... # {id: title}, for every tile at once
+//!     imperatorium sessions items <id> [--merge]  # to_items: what the window renders
 //!     imperatorium sessions list           # every session, newest first
+//!
+//! Phase 3 is the dispatcher itself, endpoint by endpoint, as a shadow beside
+//! the Python one until the cutover:
+//!
+//!     imperatorium serve [--port 8811] [--home DIR]
 //!
 //! and, for the conformance suite only:
 //!
 //!     imperatorium policy-decide           # JSON lines {request, policy} -> [verdict, reason, tier]
 
+mod conversation;
 mod hooks;
 mod http;
 mod paths;
 mod policy;
 mod pyish;
+mod registry;
+mod server;
 mod sessions;
 
 use std::io::{BufRead, Write};
@@ -37,6 +46,20 @@ fn usage() -> i32 {
          imperatorium permission [--home DIR]\n  imperatorium policy-decide\n  imperatorium version"
     );
     2
+}
+
+/// `--name VALUE` / `--name=VALUE`, anywhere after the subcommand.
+fn flag(args: &[String], name: &str) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == name {
+            return it.next().cloned();
+        }
+        if let Some(v) = a.strip_prefix(&format!("{name}=")) {
+            return Some(v.to_string());
+        }
+    }
+    None
 }
 
 /// `--home DIR` / `--home=DIR`, anywhere after the subcommand.
@@ -86,6 +109,15 @@ fn sessions_main(args: &[String]) -> i32 {
         Some("chain") => sessions::chain_json(id),
         Some("info") => Ok(sessions::info_json(id)),
         Some("titles") => Ok(sessions::titles_json(&args[2..])),
+        Some("items") => sessions::chain_json(id).map(|chain| {
+            let chain = chain.as_array().cloned().unwrap_or_default();
+            let merge = args.iter().any(|a| a == "--merge");
+            serde_json::Value::Array(conversation::to_items(
+                &conversation::messages(&chain),
+                0,
+                merge,
+            ))
+        }),
         Some("list") => Ok(sessions::list_json()),
         _ => return usage(),
     };
@@ -113,6 +145,13 @@ fn main() {
         Some("permission") => hooks::permission_main(home.as_deref()),
         Some("policy-decide") => policy_decide(),
         Some("sessions") => sessions_main(&args),
+        Some("serve") => {
+            let port = flag(&args, "--port")
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(8811);
+            let host = flag(&args, "--host").unwrap_or_else(|| "127.0.0.1".into());
+            server::serve(&host, port, home.as_deref())
+        }
         Some("version") | Some("--version") => {
             println!("imperatorium {VERSION}");
             0

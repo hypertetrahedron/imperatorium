@@ -133,6 +133,39 @@ incrementally inside the dispatcher, and calling a binary from Python on
 every poll would cost a process per session per snapshot; ported, they run
 in-process once the dispatcher is Rust.
 
+## Phase 3, in progress
+
+The dispatcher, endpoint by endpoint. `imperatorium serve [--port 8811]
+[--home DIR]` runs beside the Python dispatcher as a **shadow**: it reads
+config.json, state.json and the transcripts, writes nothing, and
+`rust/conformance/shadow.py` sends both the same GETs and compares the JSON.
+The HTTP API stays exactly as it is, so the window, the herdr mods, the
+Stream Deck and impctl need no change at the cutover.
+
+Step 1 is the read-only endpoints. Done so far:
+
+- `src/conversation.rs`: the chain's classification (inbox and queued
+  prompts, system notes) and `to_items`, `merge_turns`, `tail_blocks`.
+  `items_compare.py`: 125 sessions, 25,133 items, identical merged and not.
+- `src/server.rs` (tiny_http, a thread per request) with `GET /api/health`
+  (`look` ported from settings.look) and `GET /api/conversation` (`limit`,
+  `blocks`, `known`; convcache's per-transcript cache and path memo; the
+  same SHA-1 signature, so "unchanged" answers match).
+- `src/registry.rs`, read-only: `claude agents --json --all`, the session
+  files and state.json's hook data, less dismissed and hidden rows - enough
+  for `_row`'s name/cwd, with its 15 s / 2 s lookup rule.
+
+`shadow.py` against the live dispatcher: 144 requests over 27 sessions
+(tiles and recent History; full, limit, blocks, known, stale known; health,
+404, missing session), identical. Answers are as fast or faster than
+Python's once warm: the full conversation is spliced in from items
+serialised once per change, and bodies carry Content-Length (tiny_http
+would otherwise go chunked above 32 KiB).
+
+Next in step 1: `/api/sessions` (the snapshot: procs, work, overlay,
+decorate, sessionstat, costs, usage), then `/api/history`, the pages
+(`/`, `/matrix`, `/settings`) and the remaining GETs.
+
 ## Building
 
 ```

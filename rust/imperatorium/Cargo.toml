@@ -13,6 +13,9 @@ publish = false
 # (Python keeps big integers exact; an f64 would not).
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 unicode-normalization = "0.1"
+# The HTTP API (phase 3): small, threaded, no async runtime.
+tiny_http = "0.12"
+sha1 = "0.10"
 regex = "1"
 # Plain http to 127.0.0.1 only; no TLS needed or wanted.
 ureq = { version = "2", default-features = false }
