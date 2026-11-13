@@ -190,12 +190,49 @@ search, snippets), `/api/stream` (the SSE feed, timing as Python's), and
 requests identical - the pages byte for byte bar the per-start token and
 boot id.
 
-Left in step 1: `/api/settings`, `/api/costs`, `/api/usage`, `/api/projects`,
-`/api/changes`, `/api/worktrees`, `/api/worktree_diff`, `/api/awaited`,
-`/api/session_status`, `/api/activity`, `/api/errors`, `/api/matrix`. Left
-for step 2 because only POSTs feed them: `/api/pending`, `/api/notify`'s
-counters, and the row fields listed in shadow.py. `/api/hosts` and
-`/api/transcribe` come with phases 4 and 5.
+Then the rest of the read side (2026-11-12/13, overnight): `/api/settings`
+and `/api/notify` (settings.describe over the exported schema),
+`/api/projects` (projects.discover), `/api/changes`, `/api/worktrees` and
+`/api/worktree_diff` (git, bounded as in changes.py), `/api/activity` and
+`/api/errors` (timeline, categories, tallies), `/api/costs` and
+`/api/session_status` (costs.History: the incremental ledger, every float
+added in Python's order - the 30-day total agrees to the last digit, $680
+over 1.6 billion tokens), and `/api/awaited` (taskout.py). shadow.py: 360
+requests identical.
+
+Two Python behaviours the shadow caught that a port has to copy:
+- Python 3.12's `sum()` of floats is Neumaier-compensated (`pyish::
+  py_fsum_builtin`); a plain fold drifted by one ulp in the cost total.
+- Answers each side caches (History 30 s, errors 5 min) differ by whatever
+  live sessions did between the two computations; the comparator matches
+  History by session id and compares errors only when both are fresh.
+
+### Step 2: the routes that change things
+
+Not testable against the live dispatcher, so `rust/conformance/twin.py`
+runs a throwaway Python dispatcher (`--state` in a temp folder, port 8813,
+no config.json) beside the binary (`serve --state ...`, port 8814), sends
+both the same POSTs for made-up session ids, and compares the answers, the
+state files and the GETs that read them. `store.rs` writes only with
+`--state`, and refuses the live state file outright; without `--state`
+the binary stays the read-only shadow and refuses POSTs.
+
+Done: `POST /hook` (store.rs, live.rs: SessionStart/End, Notification,
+StopFailure, Stop and the rest; tool events), statusline usage (usage.rs:
+readings, windows in limits.json, threshold crossings and the budget event,
+pace, plan) with `/api/usage`, spend and `/api/matrix`, and the routes that
+change only the dispatcher's own state (`/api/prefs`, `/api/notify`,
+`/api/unqueue`, `/api/dismiss`, `/api/queue`'s refusals). twin.py: 32 hook
+events, 7 refused POSTs and 13 API POSTs identical.
+
+Left in step 2, all of which act on real sessions or files and so want a
+test plan that never reaches a real one: delivery into a session's inbox
+(dispatch, the queue, Stop's drain, the idle check), the mod link
+(`/api/mod/beat|check`, its token), parked permissions (`/permission/park`,
+`/api/decide`, `/api/pending`), notifications (ntfy, speech), close /
+resume / new / fork (processes and terminals), worktree merge/PR/discard,
+saving Settings (writes config.json), focus (Win32), herdr-core hosting,
+dictation, remote hosts.
 
 ## Building
 
