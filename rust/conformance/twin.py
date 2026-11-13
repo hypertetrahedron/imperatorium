@@ -172,11 +172,47 @@ def main():
                 outs.append(post(port, path, body, ctype, o, raw))
             if outs[0] != outs[1]:
                 failures.append(("refused %s %r" % (ctype, raw or body), "%r vs %r" % tuple(outs)))
+        # The routes that change only the dispatcher's own state. A real
+        # session's row is used for dismiss: each twin writes only its own
+        # temporary state, so nothing outside them moves.
+        rows = get(PY_PORT, "/api/sessions")["sessions"]
+        finished = next((r["sessionId"] for r in rows if not r.get("pid") and not r.get("remote")), None)
+        running = next((r["sessionId"] for r in rows if r.get("pid")), None)
+        api = [
+            ("/api/prefs", {"pinned": ["p1"], "group": "folder", "bogus": 1}),
+            ("/api/prefs", {"group": None}),
+            ("/api/notify", {"channel": "speak", "enabled": True}),
+            ("/api/notify", {"channel": "nope", "enabled": True}),
+            ("/api/notify", {"enabled": True}),
+            ("/api/unqueue", {"session": A, "id": "nothing"}),
+            ("/api/queue", {"session_id": A, "prompt": "  "}),
+            ("/api/queue", {"session_id": "no-such-session", "prompt": "hello"}),
+            ("/api/dismiss", {"session_id": "no-such-session"}),
+            ("/api/dismiss", {}),
+            ("/api/prefs", [1]),
+        ]
+        if running:
+            api.append(("/api/dismiss", {"session_id": running}))
+        if finished:
+            api.append(("/api/dismiss", {"session_id": finished}))
+        for path, body in api:
+            a, b = post(PY_PORT, path, body), post(RS_PORT, path, body)
+            if a != b:
+                failures.append(("POST %s %r" % (path, body), "%r vs %r" % (a, b)))
+        ids = [sorted(r["sessionId"] for r in get(port, "/api/sessions")["sessions"] if not r.get("remote"))
+               for port in (PY_PORT, RS_PORT)]
+        if ids[0] != ids[1]:
+            failures.append(("/api/sessions after dismiss", "%r vs %r" % tuple(ids)))
+        print("api: %d POSTs; dismissed a finished session: %s; session lists agree: %s"
+              % (len(api), bool(finished) and finished not in ids[0], ids[0] == ids[1]))
         # What the events left behind.
         states = []
         for side in ("py", "rs"):
             with open(os.path.join(root, side, "state.json"), encoding="utf-8") as fh:
-                states.append(masked(json.load(fh)))
+                state = json.load(fh)
+            # `dismissed` is {key: when}: the values are clocks.
+            state["dismissed"] = {k: "<clock>" for k in state.get("dismissed") or {}}
+            states.append(masked(state))
         print("state: %d sessions (%s), %d tokens, %d events; attention on C: %r"
               % (len(states[0]["sessions"]), ", ".join(sorted(states[0]["sessions"]))[:60],
                  len(states[0]["tokens"]), len(states[0]["events"]),

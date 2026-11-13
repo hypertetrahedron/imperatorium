@@ -215,6 +215,67 @@ impl Store {
         })
     }
 
+    /// Store.dismiss: hide a tile with no process until it starts again;
+    /// it leaves the archive too.
+    pub fn dismiss(&self, key: &str) {
+        self.with(|data| {
+            Self::table(data, "dismissed").insert(key.into(), json!(now()));
+            let prefs = Self::table(data, "prefs");
+            if let Some(Value::Array(archived)) = prefs.get("archived") {
+                if archived.iter().any(|k| k.as_str() == Some(key)) {
+                    let kept: Vec<Value> = archived
+                        .iter()
+                        .filter(|k| k.as_str() != Some(key))
+                        .cloned()
+                        .collect();
+                    prefs.insert("archived".into(), Value::Array(kept));
+                }
+            }
+            ((), true)
+        })
+    }
+
+    /// Store.set_prefs: None removes a key.
+    pub fn set_prefs(&self, changes: &Map<String, Value>) -> Value {
+        self.with(|data| {
+            let prefs = Self::table(data, "prefs");
+            for (k, v) in changes {
+                if v.is_null() {
+                    prefs.shift_remove(k);
+                } else {
+                    prefs.insert(k.clone(), v.clone());
+                }
+            }
+            (Value::Object(prefs.clone()), true)
+        })
+    }
+
+    /// Store.unqueue: drop one queued prompt; whether it was there.
+    pub fn unqueue(&self, sid: &str, item_id: &Value) -> bool {
+        self.with(|data| {
+            let queue = Self::table(data, "queue");
+            let q = queue
+                .get(sid)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let kept: Vec<Value> = q
+                .iter()
+                .filter(|i| i.get("id") != Some(item_id))
+                .cloned()
+                .collect();
+            if kept.len() == q.len() {
+                return (false, false);
+            }
+            if kept.is_empty() {
+                queue.shift_remove(sid);
+            } else {
+                queue.insert(sid.into(), Value::Array(kept));
+            }
+            (true, true)
+        })
+    }
+
     pub fn undismiss(&self, key: &str) {
         self.with(|data| {
             let gone = Self::table(data, "dismissed")

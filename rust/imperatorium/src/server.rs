@@ -669,6 +669,99 @@ impl Shared {
         out
     }
 
+    /// Handler._post_api, for the routes that change only the dispatcher's
+    /// own state. The rest (resume, new, close, worktree, settings, remote)
+    /// act on sessions, terminals or files and come later in step 2.
+    fn post_api(&self, store: &crate::store::Store, path: &str, p: &Map<String, Value>) -> Value {
+        match path {
+            "/api/prefs" => {
+                let allowed: Map<String, Value> = ["pinned", "archived", "group", "filter"]
+                    .iter()
+                    .filter_map(|k| p.get(*k).map(|v| (k.to_string(), v.clone())))
+                    .collect();
+                json!({"ok": true, "prefs": store.set_prefs(&allowed)})
+            }
+            "/api/notify" => {
+                let channel = p.get("channel").cloned().unwrap_or(Value::Null);
+                let name = channel.as_str().unwrap_or("");
+                if name != "ntfy" && name != "speak" {
+                    return json!({"ok": false, "error": format!("no such channel: {}",
+                        if channel.is_null() { "None".to_string() } else { crate::pyish::py_str(&channel) })});
+                }
+                let mut saved = self
+                    .state()
+                    .get("prefs")
+                    .and_then(|x| x.get("notify"))
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                saved.insert(name.into(), json!(truthy(p.get("enabled"))));
+                let mut change = Map::new();
+                change.insert("notify".into(), Value::Object(saved));
+                store.set_prefs(&change);
+                let mut out = self.api_notify();
+                out["ok"] = json!(true);
+                out
+            }
+            "/api/unqueue" => {
+                let sid = p
+                    .get("session")
+                    .map(crate::pyish::py_str)
+                    .unwrap_or_default();
+                let ok = store.unqueue(&sid, p.get("id").unwrap_or(&Value::Null));
+                self.invalidate();
+                json!({"ok": ok})
+            }
+            "/api/dismiss" => self.dismiss_session(store, p.get("session_id")),
+            "/api/queue" => {
+                let prompt = p.get("prompt").and_then(Value::as_str).unwrap_or("");
+                if crate::pyish::strip(prompt).is_empty() {
+                    return json!({"ok": false, "error": "no prompt"});
+                }
+                let sid = p.get("session_id").and_then(Value::as_str).unwrap_or("");
+                if self.row(sid).is_none() {
+                    return json!({"ok": false, "error": "no such session"});
+                }
+                // Queueing for a live session delivers at once when it is idle:
+                // that needs the inbox, which is not ported yet. Refused rather
+                // than half done.
+                json!({"ok": false, "error": "queueing is not ported yet"})
+            }
+            _ => json!({"ok": false, "error": "no such path"}),
+        }
+    }
+
+    /// Control.dismiss_session: take a session with no process off the list.
+    fn dismiss_session(&self, store: &crate::store::Store, session_id: Option<&Value>) -> Value {
+        let id = session_id
+            .filter(|v| truthy(Some(v)))
+            .map(crate::pyish::py_str)
+            .unwrap_or_default();
+        let Some(row) = (if id.is_empty() { None } else { self.row(&id) }) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        if truthy(row.get("pid")) {
+            return json!({"ok": false, "error": "that session is still running - close it instead"});
+        }
+        let key = row
+            .get("key")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let sid = row
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        store.dismiss(&key);
+        store.forget(&sid);
+        let e = json!({"kind": "dismiss", "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
+                       "session_id": sid, "name": row.get("name").cloned().unwrap_or(Value::Null)});
+        store.add_event(e.as_object().unwrap().clone());
+        self.invalidate();
+        json!({"ok": true, "how": "dismissed"})
+    }
+
     /// Control.invalidate: the next look rebuilds the snapshot.
     fn invalidate(&self) {
         *self.snap.lock().unwrap() = None;
@@ -712,13 +805,37 @@ impl Shared {
         else {
             return (400, Body::Json(json!({"error": "body is not JSON"})));
         };
+        let empty = Map::new();
+        let object = payload.as_object();
+        const API: &[&str] = &[
+            "/api/queue",
+            "/api/unqueue",
+            "/api/worktree",
+            "/api/resume",
+            "/api/new",
+            "/api/close",
+            "/api/dismiss",
+            "/api/prefs",
+            "/api/notify",
+            "/api/settings",
+            "/api/remote/refresh",
+        ];
+        if API.contains(&path) && object.is_none() {
+            return (400, Body::Json(json!({"error": "expected an object"})));
+        }
+        let p = object.unwrap_or(&empty);
         match path {
-            "/hook" => {
-                let empty = Map::new();
-                (
-                    200,
-                    Body::Json(self.on_hook(payload.as_object().unwrap_or(&empty))),
-                )
+            "/hook" => (200, Body::Json(self.on_hook(p))),
+            "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/queue" => {
+                let Some(store) = &self.store else {
+                    return (
+                        200,
+                        Body::Json(
+                            json!({"ok": false, "error": "a read-only shadow changes nothing"}),
+                        ),
+                    );
+                };
+                (200, Body::Json(self.post_api(store, path, p)))
             }
             _ => (404, Body::Json(json!({"error": "no such path"}))),
         }
