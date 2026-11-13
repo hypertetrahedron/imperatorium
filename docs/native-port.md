@@ -261,13 +261,29 @@ can reach a real one:
   into temporary homes, answers / config.json / .bak / the GETs after
   identical. The shadow refuses to save.
 
+- Worktree merge / PR / discard (`changes::finish`, `/api/worktree`).
+  `worktree_twin.py`: each twin on its own copy of a throwaway project with
+  a local bare origin; `gh` gets an empty config folder and no token, so a
+  PR's push lands locally and `gh pr create` stops at "gh auth login". 18
+  actions, the repositories left behind and the events identical.
+- Resume / fork / new / close (launch.rs, background.rs, closing.rs with
+  an `imperatorium type-into` child that types Ctrl+C, `/exit`, Enter).
+  `rust/conformance/fakecli` stands in for `claude.exe` and `wt.exe` on the
+  twins' PATH, logging what it is asked, and can be a raw console that
+  leaves on `/exit` (or a stubborn one that must be killed).
+  `session_twin.py`: 17 actions, launches, keystrokes and events
+  identical. It found a Python bug, fixed on this branch: `claude --bg`
+  inherited the dispatcher's session variables. Then one real smoke test
+  (2026-11-13, binary only, user-approved): a new Windows Terminal tab with
+  a fresh `claude`, registered in 9 s, closed by `/exit` in 2.8 s, tab gone.
+- Release builds unwind rather than abort, so a panic in one thread of
+  `serve` costs only that thread; start time unchanged (~6 ms).
+
 Not ported yet: slash commands typed into a terminal and Send As Typed
-(keystrokes into a console: `/api/typed`, a queued `/command`, both
-refused as "not ported yet"), close / resume / new / fork (processes and
-terminals), `/api/dispatch` (starts sessions), worktree merge/PR/discard,
-focus (Win32), herdr-core hosting, dictation, remote hosts. All of these
-start, stop or type into real processes, so testing them needs throwaway
-`claude` sessions (or terminals) of their own - a decision for the user.
+(`/api/typed`, a queued `/command`; refused as "not ported yet" - the
+typing itself now exists in closing.rs), `/api/dispatch` (starts
+sessions), focus (Win32), herdr-core hosting (hc terminals: refused as not
+ported), dictation, remote hosts.
 
 ## Building
 
