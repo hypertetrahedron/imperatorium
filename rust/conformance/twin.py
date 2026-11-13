@@ -31,7 +31,7 @@ A = "11111111-1111-4111-8111-111111111111"
 B = "22222222-2222-4222-8222-222222222222"
 C = "33333333-3333-4333-8333-333333333333"
 # Fields that hold a clock reading, masked before comparing.
-CLOCKS = {"seen_at", "last_event_at", "attention_since", "at", "start", "end", "since"}
+CLOCKS = {"seen_at", "last_event_at", "attention_since", "at", "start", "end", "since", "now"}
 
 
 def env():
@@ -127,6 +127,21 @@ SCRIPT = [
     hook("PreToolUse", C, tool_name="Grep", tool_use_id="c2", tool_input={"pattern": "TODO", "path": "src"}),
     hook("Notification", C, notification_type="permission_prompt"),
     hook("StopFailure", C, error="rate_limit"),
+    # Statusline readings: thresholds crossed (80 then 95, one announced
+    # per jump), the same window again, then a new window.
+    {"hook_event_name": "imperatorium_statusline", "session_id": C,
+     "model": {"display_name": "Opus 5.5", "id": "claude-opus-5-5"},
+     "context_window": {"used_percentage": 23.5, "context_window_size": 200000},
+     "cost": {"total_cost_usd": 1.25, "total_duration_ms": 9000},
+     "rate_limits": {"five_hour": {"used_percentage": 81, "resets_at": 4102444800},
+                     "seven_day": {"used_percentage": 12, "resets_at": 4102531200}}},
+    {"hook_event_name": "imperatorium_statusline", "session_id": C,
+     "rate_limits": {"five_hour": {"used_percentage": 96, "resets_at": 4102444860}}},
+    {"hook_event_name": "imperatorium_statusline", "session_id": C,
+     "rate_limits": {"five_hour": {"used_percentage": 97, "resets_at": 4102444800}}},
+    {"hook_event_name": "imperatorium_statusline", "session_id": B,
+     "imperatorium_provider": "bedrock", "model": {"id": "us.anthropic.claude-opus"},
+     "rate_limits": {"five_hour": {"used_percentage": 3, "resets_at": 4102462800}}},
 ]
 
 # Malformed or refused POSTs: (path, body, ctype, origin, raw)
@@ -169,6 +184,19 @@ def main():
         diff = first_difference(states[0], states[1], "state")
         if diff:
             failures.append(("state.json", diff))
+        # The meters and the spend: live sessions write while this runs, so
+        # one retry for a cost that moved between the two reads.
+        for _ in range(3):
+            ua, ub = masked(get(PY_PORT, "/api/usage")), masked(get(RS_PORT, "/api/usage"))
+            diff = first_difference(ua, ub, "$")
+            if not diff:
+                break
+            time.sleep(2)
+        print("usage: windows %s, plan %r, %d spend windows, %d current sessions"
+              % (sorted(ua.get("limits") or {}), ua.get("plan"),
+                 len(ua["spend"]["global"]["windows"]), ua["spend"]["current"]["sessions"]))
+        if diff:
+            failures.append(("/api/usage", diff))
         for path in ("/api/events", "/api/queue", "/api/prefs",
                      "/api/activity?session=" + A, "/api/activity?session=" + B,
                      "/api/activity?session=" + C):

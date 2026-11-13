@@ -28,6 +28,8 @@ use crate::{
 };
 
 pub struct Shared {
+    /// Statusline readings and the account's windows (usage.Usage).
+    usage: crate::usage::Usage,
     /// The state this dispatcher writes, when it was given one (`--state`);
     /// None is the read-only shadow, which reads the live state file.
     store: Option<crate::store::Store>,
@@ -173,6 +175,30 @@ impl Shared {
         };
         Shared {
             window_token: token_urlsafe(24),
+            usage: {
+                let cfg = load_config(home);
+                let thresholds: Vec<f64> = cfg
+                    .get("budget")
+                    .and_then(|b| b.get("thresholds"))
+                    .and_then(Value::as_array)
+                    .filter(|a| !a.is_empty())
+                    .map(|a| a.iter().filter_map(Value::as_f64).collect())
+                    .unwrap_or_else(|| crate::usage::DEFAULT_THRESHOLDS.to_vec());
+                let dir = match &store {
+                    Some(s) => s
+                        .path
+                        .parent()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from(".")),
+                    None => paths::state_dir(),
+                };
+                crate::usage::Usage::new(
+                    thresholds,
+                    Some(dir.join("limits.json")),
+                    store.is_some(),
+                    Self::now(),
+                )
+            },
             store,
             live: crate::live::Live::default(),
             cost_history: Mutex::new(costs::History::new()),
@@ -226,7 +252,10 @@ impl Shared {
             .map(crate::pyish::py_str);
         if let Some(sid) = &sid {
             if event == "imperatorium_statusline" || event == "ccontrol_statusline" {
-                // Several a minute per session: memory only (usage, step 2).
+                // Several a minute per session: memory only, never the store.
+                if let Some(crossing) = self.usage.ingest(sid, payload, Self::now()) {
+                    self.budget_crossed(&crossing);
+                }
                 return json!({"ok": true});
             }
             if crate::live::TOOL_EVENTS.contains(&event.as_str()) {
@@ -288,6 +317,7 @@ impl Shared {
                 let gone = store.session(&key).unwrap_or_default();
                 store.forget(&key);
                 self.live.forget(&key);
+                self.usage.forget(&key);
                 self.invalidate();
                 let cwd = if truthy(Some(&cwd)) {
                     cwd.clone()
@@ -386,6 +416,157 @@ impl Shared {
             }
         }
         json!({"ok": true})
+    }
+
+    /// Control._budget_crossed: a usage threshold was crossed. Notifications
+    /// come with the notifier's port; the event is recorded as Python does.
+    fn budget_crossed(&self, crossing: &Value) {
+        let window = crossing["window"].as_str().unwrap_or("");
+        let label = match window {
+            "five_hour" => "5-hour",
+            "seven_day" => "weekly",
+            "spend_limit" => "spend",
+            other => other,
+        };
+        let used = crossing["used"].as_f64().unwrap_or(0.0);
+        let mut text = format!("{label} limit at {}%", crate::pyish::py_round(used));
+        if let Some(r) = crossing["resets_at"].as_f64().filter(|r| *r != 0.0) {
+            text.push_str(&format!(", resets {}", paths::local_hm(r)));
+        }
+        if let Some(store) = &self.store {
+            let e = json!({"kind": "budget", "summary": text, "window": window, "used": crossing["used"]});
+            store.add_event(e.as_object().unwrap().clone());
+        }
+    }
+
+    /// Control._global_windows: [(name, since, resets_at)] the global
+    /// spend is counted over.
+    fn global_windows(&self, limits: &Value, now: f64) -> Vec<(String, f64, Value)> {
+        let spans = [("five_hour", 5.0 * 3600.0), ("seven_day", 7.0 * 86400.0)];
+        if spans.iter().any(|(n, _)| truthy(limits.get(*n))) || crate::usage::subscription() {
+            return spans
+                .iter()
+                .map(|(name, span)| {
+                    let w = limits.get(*name).cloned().unwrap_or(json!({}));
+                    match w
+                        .get("resets_at")
+                        .and_then(Value::as_f64)
+                        .filter(|r| *r != 0.0)
+                    {
+                        Some(r) => (name.to_string(), r - span, json!(r)),
+                        None if truthy(w.get("waiting")) => (
+                            name.to_string(),
+                            w["reset_at"].as_f64().unwrap_or(0.0),
+                            Value::Null,
+                        ),
+                        None => (
+                            name.to_string(),
+                            ((now - span) / 60.0).floor() * 60.0,
+                            Value::Null,
+                        ),
+                    }
+                })
+                .collect();
+        }
+        vec![("month".into(), paths::local_month_start(now), Value::Null)]
+    }
+
+    /// Control.spend: tokens and estimated cost, global and current.
+    fn spend(&self, now: f64, budget: f64, limits: &Value) -> Value {
+        let mut complete = true;
+        let mut windows = Vec::new();
+        for (name, since, resets) in self.global_windows(limits, now) {
+            let mut got = self
+                .cost_history
+                .lock()
+                .unwrap()
+                .totals(since, None, now, budget);
+            complete = complete && got["complete"].as_bool().unwrap_or(true);
+            got.as_object_mut().unwrap().shift_remove("complete");
+            got["name"] = json!(name);
+            got["since"] = json!(since);
+            got["resets_at"] = resets;
+            windows.push(got);
+        }
+        let rows: Vec<Row> = self
+            .sessions(2.0)
+            .into_iter()
+            .filter(matrix_active)
+            .collect();
+        let local: Vec<String> = rows
+            .iter()
+            .filter(|r| !truthy(r.get("remote")))
+            .filter_map(|r| {
+                r.get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let (per, ok) = self.cost_history.lock().unwrap().sessions(&local, budget);
+        complete = complete && ok;
+        let mut tokens: indexmap::IndexMap<String, i64> = indexmap::IndexMap::new();
+        let mut models: indexmap::IndexMap<String, (i64, i64, f64)> = indexmap::IndexMap::new();
+        let (mut cost, mut each) = (0.0f64, Vec::new());
+        for row in &rows {
+            let sid = row.get("sessionId").and_then(Value::as_str).unwrap_or("");
+            let got = if truthy(row.get("remote")) {
+                None
+            } else {
+                per.get(sid)
+            };
+            let usd = match got {
+                Some(g) => g["cost_usd"].clone(),
+                None => self
+                    .usage
+                    .session(sid)
+                    .and_then(|u| u.get("cost_usd").cloned())
+                    .unwrap_or(Value::Null),
+            };
+            let tk = got.map(|g| g["tokens"].clone()).unwrap_or(Value::Null);
+            for (k, v) in tk.as_object().into_iter().flatten() {
+                *tokens.entry(k.clone()).or_insert(0) += v.as_i64().unwrap_or(0);
+            }
+            for (name, m) in got
+                .and_then(|g| g["models"].as_object())
+                .into_iter()
+                .flatten()
+            {
+                let into = models.entry(name.clone()).or_insert((0, 0, 0.0));
+                into.0 += m["output"].as_i64().unwrap_or(0);
+                into.1 += m["total_tokens"].as_i64().unwrap_or(0);
+                into.2 += m["cost_usd"].as_f64().unwrap_or(0.0);
+            }
+            if let Some(u) = usd.as_f64() {
+                cost += u;
+            }
+            each.push(json!({"key": row.get("key").cloned().unwrap_or(Value::Null), "sessionId": sid,
+                             "name": row.get("name").cloned().unwrap_or(Value::Null), "tokens": tk,
+                             "total_tokens": got.map(|g| g["total_tokens"].clone()).unwrap_or(json!(0)),
+                             "cost_usd": usd}));
+        }
+        each.sort_by(|a, b| {
+            let c = |e: &Value| -(e["cost_usd"].as_f64().filter(|c| *c != 0.0).unwrap_or(0.0));
+            c(a).partial_cmp(&c(b)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let total_tokens: i64 = tokens.values().sum();
+        let tokens: Map<String, Value> = tokens.into_iter().map(|(k, v)| (k, json!(v))).collect();
+        json!({
+            "global": {"windows": windows},
+            "current": {"sessions": rows.len(), "tokens": tokens, "total_tokens": total_tokens,
+                        "cost_usd": cost,
+                        "models": models.into_iter().map(|(k, (o, t, c))| (k, json!({"output": o, "total_tokens": t, "cost_usd": c}))).collect::<Map<String, Value>>(),
+                        "each": each},
+            "estimated": true, "complete": complete, "now": now,
+        })
+    }
+
+    /// GET /api/usage: Control.usage_summary - the meters and the spend.
+    fn api_usage(&self) -> Value {
+        let now = Self::now();
+        let mut out = self.usage.summary(now);
+        let limits = out["limits"].clone();
+        out["spend"] = self.spend(now, 1.0, &limits);
+        out
     }
 
     /// Control.invalidate: the next look rebuilds the snapshot.
@@ -736,6 +917,23 @@ impl Shared {
         } else if !ended {
             let line = self.doing_line(&sid);
             row.insert("doing".into(), json!(line));
+        }
+        if let Some(got) = self.usage.session(&sid) {
+            let mut u = Map::new();
+            for k in [
+                "context_pct",
+                "context_size",
+                "cost_usd",
+                "model",
+                "at",
+                "duration_ms",
+                "api_duration_ms",
+                "lines_added",
+                "lines_removed",
+            ] {
+                u.insert(k.into(), got.get(k).cloned().unwrap_or(Value::Null));
+            }
+            row.insert("usage".into(), Value::Object(u));
         }
         if let Some(Value::Array(q)) = queue.get(&sid) {
             if !q.is_empty() {
@@ -1388,6 +1586,7 @@ impl Shared {
                     .unwrap_or(json!({}));
                 (200, Body::Json(json!({"prefs": prefs})))
             }
+            ("GET", "/api/usage") => (200, Body::Json(self.api_usage())),
             ("GET", "/api/decisions") => (
                 200,
                 Body::Json(json!({"decisions": decisions(&self.state_dir(), 60)})),
@@ -1487,6 +1686,16 @@ const STREAM_SECONDS: f64 = 600.0;
 const STREAM_EVERY: f64 = 5.0;
 const STREAM_MIN_GAP: f64 = 2.0;
 const STREAM_KEEPALIVE: f64 = 15.0;
+
+/// matrix.active: whether a session gets a tile - its process is up and it
+/// has not ended.
+fn matrix_active(row: &Row) -> bool {
+    truthy(row.get("status"))
+        && !matches!(
+            row.get("state").and_then(Value::as_str),
+            Some("done") | Some("failed") | Some("stopped")
+        )
+}
 
 /// Row fields that never leave the process (dispatcher.PRIVATE_ROW_FIELDS).
 const PRIVATE_ROW_FIELDS: &[&str] = &["token"];

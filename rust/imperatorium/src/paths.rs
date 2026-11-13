@@ -443,3 +443,79 @@ pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 pub fn ymd(d: (i64, u32, u32)) -> String {
     format!("{:04}-{:02}-{:02}", d.0, d.1, d.2)
 }
+
+/// `datetime.fromtimestamp(now).replace(day=1, hour=0, minute=0, second=0,
+/// microsecond=0).timestamp()`: local midnight on the 1st of this month.
+pub fn local_month_start(now: f64) -> f64 {
+    let (y, m, _) = local_date(now);
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+        use windows_sys::Win32::System::Time::{
+            SystemTimeToFileTime, TzSpecificLocalTimeToSystemTime,
+        };
+        let local = SYSTEMTIME {
+            wYear: y as u16,
+            wMonth: m as u16,
+            wDayOfWeek: 0,
+            wDay: 1,
+            wHour: 0,
+            wMinute: 0,
+            wSecond: 0,
+            wMilliseconds: 0,
+        };
+        unsafe {
+            let mut utc: SYSTEMTIME = std::mem::zeroed();
+            let mut ft: FILETIME = std::mem::zeroed();
+            if TzSpecificLocalTimeToSystemTime(std::ptr::null(), &local, &mut utc) != 0
+                && SystemTimeToFileTime(&utc, &mut ft) != 0
+            {
+                let ticks = ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64;
+                return ticks as f64 / 1e7 - 11_644_473_600.0;
+            }
+        }
+        days_from_civil(y, m, 1) as f64 * 86400.0
+    }
+    #[cfg(unix)]
+    {
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        tm.tm_year = (y - 1900) as i32;
+        tm.tm_mon = m as i32 - 1;
+        tm.tm_mday = 1;
+        tm.tm_isdst = -1;
+        unsafe { libc::mktime(&mut tm) as f64 }
+    }
+}
+
+/// `time.strftime("%H:%M", time.localtime(t))`.
+pub fn local_hm(t: f64) -> String {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+        use windows_sys::Win32::System::Time::{
+            FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime,
+        };
+        let ticks = ((t + 11_644_473_600.0) * 1e7) as u64;
+        let ft = FILETIME {
+            dwLowDateTime: ticks as u32,
+            dwHighDateTime: (ticks >> 32) as u32,
+        };
+        unsafe {
+            let mut utc: SYSTEMTIME = std::mem::zeroed();
+            let mut local: SYSTEMTIME = std::mem::zeroed();
+            if FileTimeToSystemTime(&ft, &mut utc) != 0
+                && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0
+            {
+                return format!("{:02}:{:02}", local.wHour, local.wMinute);
+            }
+        }
+        String::new()
+    }
+    #[cfg(unix)]
+    {
+        let secs = t.floor() as libc::time_t;
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        unsafe { libc::localtime_r(&secs, &mut tm) };
+        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+    }
+}

@@ -45,6 +45,7 @@ mod settings;
 mod store;
 mod taskout;
 mod ui;
+mod usage;
 
 use std::io::{BufRead, Write};
 

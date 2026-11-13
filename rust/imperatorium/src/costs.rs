@@ -491,6 +491,30 @@ impl History {
         out
     }
 
+    /// History.totals: tokens and estimated cost of every message sent in
+    /// [since, until), across all transcripts here.
+    pub fn totals(&mut self, since: f64, until: Option<f64>, now: f64, budget: f64) -> Value {
+        let until = until.unwrap_or(now);
+        // Not pruned: a short window must not drop files a longer one wants.
+        let complete = self.scan(since - SLACK, budget, false);
+        let (mut vec, mut cost, mut unpriced) = ([0i64; 5], 0.0f64, 0i64);
+        let mut models: indexmap::IndexMap<String, (i64, i64, f64)> = indexmap::IndexMap::new();
+        for (_, model, v, at) in self.messages() {
+            if since <= at && at < until {
+                add_vec(&mut vec, &v);
+                if model.starts_with('?') {
+                    unpriced += v.iter().sum::<i64>();
+                } else {
+                    cost += price(&model, &v);
+                }
+                by_model(&mut models, &model, &v);
+            }
+        }
+        let mut out = shape(&vec, cost, unpriced, &models);
+        out["complete"] = json!(complete);
+        out
+    }
+
     /// History.sessions: {id: totals} over each session's whole life.
     pub fn sessions(
         &mut self,
