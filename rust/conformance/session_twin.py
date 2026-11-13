@@ -20,11 +20,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import RUST  # noqa: E402
-from inbox_twin import record  # noqa: E402
+from inbox_twin import record, window_token  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
 
@@ -73,11 +76,15 @@ def main():
     os.makedirs(work)
     logs = {side: os.path.join(root, "%s-launches.jsonl" % side) for side in SIDES}
     consoles, ids, sessions = [], {GONE: "<gone>"}, {}
+    roles = {}
     for side in SIDES:
-        for role, stubborn in (("leaves", False), ("stubborn", True), ("replaced", False)):
+        for role, stubborn in (("leaves", False), ("stubborn", True), ("replaced", False),
+                               ("typing", False), ("busy", False)):
             p = console(bin_dir, logs[side], stubborn)
             consoles.append(p)
-            sid = "%s%s-1111-4111-8111-111111111111" % ({"leaves": "1", "stubborn": "2", "replaced": "3"}[role] * 4,
+            roles[p.pid] = role
+            sid = "%s%s-1111-4111-8111-111111111111" % ({"leaves": "1", "stubborn": "2", "replaced": "3",
+                                                          "typing": "4", "busy": "5"}[role] * 4,
                                                            {"py": "aaaa", "rs": "bbbb"}[side])
             sessions[(side, role)] = sid
             ids[sid] = "<%s>" % role
@@ -86,7 +93,7 @@ def main():
             os.makedirs(folder, exist_ok=True)
             with open(os.path.join(folder, sid + ".json"), "w", encoding="utf-8") as fh:
                 json.dump({"pid": p.pid, "sessionId": sid, "cwd": work, "name": "twin-" + role,
-                           "kind": "interactive", "status": "idle"}, fh)
+                           "kind": "interactive", "status": "busy" if role == "busy" else "idle"}, fh)
     record(root, GONE, "", None, "twin-gone")  # a record whose process is gone
     with open(os.path.join(root, "claude", "sessions", GONE + ".json"), "r+", encoding="utf-8") as fh:
         rec = json.load(fh)
@@ -100,7 +107,8 @@ def main():
                 # A session's own variables, which must not reach what it launches.
                 "AI_AGENT": "claude-code", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_PID": "1"}
 
-    procs = start(root, extra_config={"background": {"model": "sonnet", "permission_mode": "plan"}},
+    procs = start(root, extra_config={"background": {"model": "sonnet", "permission_mode": "plan"},
+                                      "chat": {"send_as_typed": True}},
                   extra_env=env)
     failures, steps = [], []
     try:
@@ -133,6 +141,65 @@ def main():
             steps.append((label, json.loads(got["py"])[1]))
             if got["py"] != got["rs"]:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
+        # Typing: Send As Typed and slash commands, into each twin's own
+        # idle console; the busy one and a parked request refuse it.
+        tokens = {port: window_token(port) for port in (PY_PORT, RS_PORT)}
+
+        def typed(port, body, window=True):
+            req = urllib.request.Request("http://127.0.0.1:%d/api/typed" % port,
+                                         data=json.dumps(body).encode(), method="POST")
+            req.add_header("Content-Type", "application/json")
+            if window:
+                req.add_header("Origin", "http://127.0.0.1:%d" % port)
+                req.add_header("X-Imperatorium-Window", tokens[port])
+            try:
+                with urllib.request.urlopen(req, timeout=60) as fh:
+                    return fh.status, json.loads(fh.read())
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read() or b"null")
+
+        def parked(port, sid):
+            box = {}
+            t = threading.Thread(target=lambda: box.update(r=post(port, "/permission/park", {
+                "session_id": sid, "tool_name": "Bash", "tool_input": {"command": "ls"}, "wait": 4})))
+            t.start()
+            time.sleep(0.5)
+            return t
+
+        typing_cases = [
+            ("typed, not from the window", lambda s, port: typed(port, {"session_id": sessions[(s, "typing")],
+                                                                        "prompt": "hi"}, window=False)),
+            ("typed", lambda s, port: typed(port, {"session_id": sessions[(s, "typing")],
+                                                   "prompt": "hello\nworld  !"})),
+            ("typed, a command", lambda s, port: typed(port, {"session_id": sessions[(s, "typing")],
+                                                              "prompt": "/model opus"})),
+            ("typed, /exit", lambda s, port: typed(port, {"session_id": sessions[(s, "typing")], "prompt": "/exit"})),
+            ("typed, a menu", lambda s, port: typed(port, {"session_id": sessions[(s, "typing")], "prompt": "/help"})),
+            ("typed, shell mode", lambda s, port: typed(port, {"session_id": sessions[(s, "typing")],
+                                                               "prompt": "!rm -rf build"})),
+            ("typed, blank", lambda s, port: typed(port, {"session_id": sessions[(s, "typing")], "prompt": " \n "})),
+            ("typed, busy", lambda s, port: typed(port, {"session_id": sessions[(s, "busy")], "prompt": "hi"})),
+            ("typed, nobody", lambda s, port: typed(port, {"session_id": "nobody", "prompt": "hi"})),
+            ("typed, parked", lambda s, port: (lambda t: (typed(port, {"session_id": sessions[(s, "typing")],
+                                                                        "prompt": "hi"}), t.join())[0])(
+                                                   parked(port, sessions[(s, "typing")]))),
+            ("queue /exit", lambda s, port: post(port, "/api/queue", {"session_id": sessions[(s, "typing")],
+                                                                       "prompt": "/exit"})),
+            ("queue /compact", lambda s, port: post(port, "/api/queue", {"session_id": sessions[(s, "typing")],
+                                                                          "prompt": "/compact"})),
+        ]
+        for label, call in typing_cases:
+            got = {}
+            for side, port in (("py", PY_PORT), ("rs", RS_PORT)):
+                got[side] = neutral(json.dumps(list(call(side, port)), sort_keys=True), ids)
+            answer = json.loads(got["py"])[1]
+            if isinstance(answer, dict) and "queued" in answer:
+                answer = dict(answer, queued="<item>")
+            steps.append((label, answer))
+            a, b = (re.sub(r'"(id|at)": [^,}]+', r'"\1": 0', got[k]) for k in ("py", "rs"))
+            if a != b:
+                failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
+
         time.sleep(1.5)  # a launch is fire-and-forget: let the last ones log
         for label, answer in steps:
             print("  %-28s %s" % (label, answer.get("error") or "ok: %s" % {
@@ -159,10 +226,16 @@ def main():
                                                   for e in json.load(fh).get("events") or []]), ids))
         if events[0] != events[1]:
             failures.append(("events", "%s\n  vs %s" % tuple(events)))
-        alive = [c.pid for c in consoles if c.poll() is None]
-        print("consoles still running: %d of %d" % (len(alive), len(consoles)))
+        closed = [c for c in consoles if roles[c.pid] in ("leaves", "stubborn", "replaced")]
+        alive = [c.pid for c in closed if c.poll() is None]
+        print("closed consoles still running: %d of %d" % (len(alive), len(closed)))
         if alive:
             failures.append(("consoles", "still running: %r" % alive))
+        lines = [e.get("line") for e in read_log(logs["py"]) if "line" in e]
+        want = ["hello world !", "/model opus", "rm -rf build"]
+        if [l for l in lines if l in want] != want:
+            failures.append(("typed lines", "%r, expected %r among them" % (lines, want)))
+        print("typed into the idle console: %r" % [l for l in lines if l != "/exit"])
     finally:
         for p in procs:
             p.terminate()

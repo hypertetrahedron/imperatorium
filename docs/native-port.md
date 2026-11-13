@@ -279,9 +279,16 @@ can reach a real one:
 - Release builds unwind rather than abort, so a panic in one thread of
   `serve` costs only that thread; start time unchanged (~6 ms).
 
-Not ported yet: slash commands typed into a terminal and Send As Typed
-(`/api/typed`, a queued `/command`; refused as "not ported yet" - the
-typing itself now exists in closing.rs), `/api/dispatch` (starts
+- Slash commands and Send As Typed (slash.rs: refusal, unreachable,
+  blocked, clean_typed with Python 3.12's Unicode 15 format characters,
+  typed_refusal; run_command, send_typed, `/api/typed` only from the
+  window, a queued `/command` typed when its turn comes).
+  `slash_compare.py`: 127 texts identical. `session_twin.py` now 29
+  actions: text cleaned and typed, a command typed, refusals (menus,
+  `/exit`, blank, busy, a parked permission), the queue's - identical, and
+  the console received exactly what was meant.
+
+Not ported yet: `/api/dispatch` (routes an utterance, may start
 sessions), focus (Win32), herdr-core hosting (hc terminals: refused as not
 ported), dictation, remote hosts.
 

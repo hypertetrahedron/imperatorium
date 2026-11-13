@@ -1351,8 +1351,13 @@ impl Shared {
             return json!({"ok": false, "error": "no such session"});
         };
         if crate::slash::is_command(prompt) {
-            // Typing into a terminal comes with close/resume (step 2, later).
-            return json!({"ok": false, "error": "slash commands are not ported yet"});
+            // Refuse now what could never be typed, rather than leave it at
+            // the head of the queue failing on every sweep.
+            if let Some(why) =
+                crate::slash::refusal(prompt).or_else(|| crate::slash::unreachable(&row))
+            {
+                return json!({"ok": false, "error": why});
+            }
         }
         let key = row
             .get("key")
@@ -1388,7 +1393,12 @@ impl Shared {
         let item = store.take_queued(key)?;
         let prompt = item.get("prompt").and_then(Value::as_str).unwrap_or("");
         let error = if crate::slash::is_command(prompt) {
-            Some("slash commands are not ported yet".to_string())
+            let got = self.run_command(store, &row, prompt);
+            if got["ok"] == json!(true) {
+                None
+            } else {
+                Some(crate::pyish::py_str(&got["error"]))
+            }
         } else {
             self.deliver(store, &row, prompt, truthy(item.get("as_user")))
         };
@@ -1478,6 +1488,116 @@ impl Shared {
                        "cwd": row.get("cwd").cloned().unwrap_or(Value::Null), "summary": summary});
         store.add_event(e.as_object().unwrap().clone());
         None
+    }
+
+    /// Control.run_command: type slash command `text` at the row's prompt.
+    fn run_command(&self, store: &crate::store::Store, row: &Row, text: &str) -> Value {
+        if let Some(why) = crate::slash::refusal(text) {
+            return json!({"ok": false, "error": why});
+        }
+        // Status moves under us: decide on a fresh look.
+        self.invalidate();
+        let row = self.fresh_row(row);
+        if let Some(why) = crate::slash::blocked(&row, &self.pending.waiting()) {
+            return json!({"ok": false, "error": why});
+        }
+        if !self.type_into(&row, text) {
+            return json!({"ok": false, "error": "could not type into its terminal"});
+        }
+        let sid = row.get("sessionId").cloned().unwrap_or(Value::Null);
+        let t = crate::pyish::strip(text);
+        let e = json!({"kind": "command", "session_id": sid,
+                       "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
+                       "summary": crate::pyish::take(t, 280)});
+        store.add_event(e.as_object().unwrap().clone());
+        self.invalidate();
+        json!({"ok": true, "action": "command", "command": t, "session": sid,
+               "session_name": row.get("name").cloned().unwrap_or(Value::Null)})
+    }
+
+    /// The row again, from a fresh look; the old one if it has gone.
+    fn fresh_row(&self, row: &Row) -> Row {
+        let id = row
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|k| !k.is_empty())
+            .or_else(|| row.get("sessionId").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string();
+        self.row(&id).unwrap_or_else(|| row.clone())
+    }
+
+    /// Control._type_into: one line and Enter at the row's prompt. (A
+    /// herdr-core terminal is typed into through hc, which comes with
+    /// herdr-core hosting.)
+    fn type_into(&self, row: &Row, text: &str) -> bool {
+        let hosted = row
+            .get("hc")
+            .and_then(|h| h.get("address"))
+            .is_some_and(|a| truthy(Some(a)));
+        if hosted && !truthy(row.get("remote")) {
+            return false;
+        }
+        crate::slash::type_command(row.get("pid").unwrap_or(&Value::Null), text)
+    }
+
+    /// Control.send_typed: Send As Typed - the text typed at the session's
+    /// prompt as one line, with the authority of the person at the
+    /// terminal. Off until Settings turns it on; only from the window.
+    fn send_typed(
+        &self,
+        store: &crate::store::Store,
+        session_id: Option<&Value>,
+        text: Option<&Value>,
+    ) -> Value {
+        if !truthy(Some(&settings::value(&self.config(), "chat.send_as_typed"))) {
+            return json!({"ok": false, "error": "Send As Typed is off - turn it on in Settings, under Chat"});
+        }
+        let id = session_id
+            .filter(|v| truthy(Some(v)))
+            .map(crate::pyish::py_str);
+        let Some(row) = id.and_then(|i| self.row(&i)) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let raw = text.and_then(Value::as_str).unwrap_or("");
+        let (clean, changed) = crate::slash::clean_typed(raw);
+        if let Some(why) = crate::slash::typed_refusal(&clean) {
+            return json!({"ok": false, "error": why});
+        }
+        if crate::slash::is_command(&clean) {
+            let mut got = self.run_command(store, &row, &clean);
+            got["cleaned"] = json!(changed);
+            return got;
+        }
+        let sid = row
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let name = row.get("name").cloned().unwrap_or(Value::Null);
+        let mod_live = self
+            .modlink
+            .as_ref()
+            .is_some_and(|l| l.live(&sid, Self::now()));
+        if !truthy(row.get("remote")) && mod_live {
+            self.deliver(store, &row, &clean, true);
+            return json!({"ok": true, "action": "typed", "via": "mod", "cleaned": changed,
+                          "session": sid, "session_name": name});
+        }
+        self.invalidate();
+        let row = self.fresh_row(&row);
+        if let Some(why) = crate::slash::blocked(&row, &self.pending.waiting()) {
+            return json!({"ok": false, "error": why});
+        }
+        if !self.type_into(&row, &clean) {
+            return json!({"ok": false, "error": "could not type into its terminal"});
+        }
+        let e = json!({"kind": "typed", "session_id": sid,
+                       "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
+                       "summary": crate::pyish::take(&clean, 280)});
+        store.add_event(e.as_object().unwrap().clone());
+        self.invalidate();
+        json!({"ok": true, "action": "typed", "cleaned": changed, "session": sid, "session_name": name})
     }
 
     /// Control.dismiss_session: take a session with no process off the list.
@@ -1626,6 +1746,30 @@ impl Shared {
         }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p))),
+            "/api/typed" => {
+                if object.is_none() {
+                    return (400, Body::Json(json!({"error": "expected an object"})));
+                }
+                if !from_window {
+                    return (
+                        403,
+                        Body::Json(json!({"ok": false,
+                        "error": "Send As Typed is only available from the Imperatorium window"})),
+                    );
+                }
+                let Some(store) = &self.store else {
+                    return (
+                        200,
+                        Body::Json(
+                            json!({"ok": false, "error": "a read-only shadow changes nothing"}),
+                        ),
+                    );
+                };
+                (
+                    200,
+                    Body::Json(self.send_typed(store, p.get("session_id"), p.get("prompt"))),
+                )
+            }
             "/api/resume" | "/api/new" | "/api/close" => {
                 let Some(store) = &self.store else {
                     return (

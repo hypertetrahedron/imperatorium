@@ -46,7 +46,7 @@ pub fn tab_shell(pid: u32, table: &[crate::procs::Proc]) -> Option<u32> {
 }
 
 /// closing._type: the child types `chunks` into `pid`'s console.
-fn type_keys(pid: u32, chunks: &[&str]) -> bool {
+pub fn type_keys(pid: u32, chunks: &[&str]) -> bool {
     let Ok(me) = std::env::current_exe() else {
         return false;
     };

@@ -174,6 +174,7 @@ fn main() {
         Some("policy-decide") => policy_decide(),
         // Conformance only: settings.check over JSON lines.
         Some("settings-check") => settings::check_lines(),
+        Some("slash-check") => slash::check_lines(),
         // Internal: closing.rs types into a session's console through this.
         Some("type-into") => closing::type_into_main(&args[1..]),
         Some("sessions") => sessions_main(&args),
