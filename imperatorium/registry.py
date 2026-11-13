@@ -206,6 +206,21 @@ def attach_credentials(rows, creds):
         row["dispatchable"] = bool(row.get("socket") and row.get("token"))
 
 
+def finished(row):
+    """A background job that ran to completion and has no process left.
+
+    `claude agents --json` goes on listing a finished `claude --bg` job as
+    `state: done` until it is opened or dismissed in Claude Code's agent
+    view, sometimes for weeks. Nothing about it can be waiting for anyone:
+    a job that stopped on a question or an error is `blocked` or `failed`,
+    not `done`. A tile saying "waiting for you" over one (2026-11-12: a
+    17-day-old probe, flagged by an `idle_prompt` from before it finished)
+    sends a person to a session that is not there.
+    """
+    return row.get("kind") == "background" and row.get("state") == "done" \
+        and not row.get("pid")
+
+
 def moved_on(row, since):
     """Has this session resumed work since `since` raised attention?
 

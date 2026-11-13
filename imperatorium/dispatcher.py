@@ -127,6 +127,26 @@ IDLE_AFTER = 60.0
 BY_NOTIFICATION, BY_FAILURE = "notification", "failure"
 
 
+def hide_finished_hours(config):
+    """`list.hide_finished_hours` from config.json; 0 (keep) when unset or bad."""
+    value = ((config or {}).get("list") or {}).get("hide_finished_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return 0
+    return value
+
+
+def finished_at(row):
+    """When a finished job last did anything: its last hook event, else when
+    it started (`claude agents` gives startedAt in ms). 0 if neither."""
+    at = row.get("last_event_at")
+    if isinstance(at, (int, float)) and not isinstance(at, bool) and at > 0:
+        return at
+    started = row.get("startedAt")
+    if isinstance(started, (int, float)) and not isinstance(started, bool) and started > 0:
+        return started / 1000.0
+    return 0
+
+
 def remote_key(host, session_id):
     """Where a remote session's hook records live in the store."""
     return "%s/%s" % (host, session_id)
@@ -157,6 +177,7 @@ class Control:
         self.roots = roots or projects.DEFAULT_ROOTS
         # model / permission_mode / agent for `claude --bg`, from config.json.
         self.background_options = background_options or {}
+        self.hide_finished_hours = hide_finished_hours(config)
         self._cache = {"at": 0.0, "snapshot": None}
         self._lock = threading.Lock()
         self._changed = threading.Condition()
@@ -282,10 +303,20 @@ class Control:
         queued = self.store.queued()
         for row in snap["sessions"]:
             self._decorate(row, queued)
-        snap["sessions"] = self._undismissed(snap["sessions"])
+        snap["sessions"] = self._unhidden(self._undismissed(snap["sessions"]))
         with self._lock:
             self._cache = {"at": time.time(), "snapshot": snap}
         return snap
+
+    def _unhidden(self, rows, now=None):
+        """Rows less finished background jobs quiet for longer than
+        `list.hide_finished_hours` (0: none hidden). A filter, not a
+        dismissal: lowering the setting brings them back."""
+        hours = self.hide_finished_hours
+        if not hours:
+            return rows
+        cutoff = (now or time.time()) - hours * 3600
+        return [r for r in rows if not (registry.finished(r) and finished_at(r) < cutoff)]
 
     def _undismissed(self, rows):
         """Rows less the ones dismissed from the window. A dismissed session
@@ -412,6 +443,14 @@ class Control:
         # `permission_prompt` at a session already working.
         since = extra.get("attention_since")
         kind = extra.get("attention_kind")
+        # A finished background job waits for nobody, whatever its last hook
+        # said (see registry.finished). Cleared, not just hidden: if the job
+        # is resumed it reports again.
+        if registry.finished(row):
+            if since:
+                self.store.clear_attention(key)
+            row["dispatchable"] = bool(row.get("socket") and row.get("token"))
+            return
         # Only a notification is settled by the session working again. A
         # failed turn is not: the retry that follows a 529 would otherwise
         # wipe the very flag the failure just raised, which is the "tile says
@@ -1006,6 +1045,9 @@ class Control:
                     float(t) for t in (config.get("budget") or {}).get("thresholds") or ()))
         if any(k.startswith("background.") for k in changes):
             self.background_options = dict(config.get("background") or {})
+        if "list.hide_finished_hours" in changes:
+            self.hide_finished_hours = hide_finished_hours(config)
+            self.invalidate()
 
     def usage_summary(self):
         """`GET /api/usage`: the meters, with the spend beside them."""

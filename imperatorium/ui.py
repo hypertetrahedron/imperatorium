@@ -890,6 +890,8 @@ function stateOf(s){
   if (s.attention) return [s.attention_kind === "failure" ? "d-fail" : "d-attn",
     s.attention_reason || s.waitingFor ||
     WAITING[s.last_notification] || s.last_notification || "waiting for you"];
+  // `done` is a background job that ran to completion: nothing to wait for.
+  if (s.state === "done") return ["d-done", "finished"];
   if (s.state && s.state !== "working") return ["d-done", s.state];
   if (RUNNING[s.status] || s.state === "working")
     return ["d-busy", RUNNING[s.status] || "working"];
@@ -1492,10 +1494,17 @@ function tile(s, short){
   const doing = s.doing ? `<div class="d${title ? " x" : ""}" title="${esc(s.doing)}">${esc(s.doing)}${
       s.doing_since ? " · " + age(s.doing_since) : ""}</div>` : "";
   const lines = title + doing || `<div class="w" title="${esc(s.cwd || "")}">${esc(s.cwd || "")}</div>`;
+  // ✕ closes a session with a process; with none (a finished background job,
+  // a crashed session's leftover file) it takes the tile off the list. Any
+  // tile, not only archived ones: a finished job that is not archived used to
+  // have no way off the list at all.
+  // A job still working but not yet matched to its process gets neither.
+  const x = s.remote ? ""
+    : s.pid ? `<span data-close="${esc(key(s))}" title="close this session and its window (the conversation stays resumable)">✕</span>`
+    : s.state === "working" || RUNNING[s.status] ? ""
+    : `<span data-dismiss="${esc(key(s))}" title="nothing is running: take it off the list (the conversation stays resumable)">✕</span>`;
   const acts = `<span data-pin="${esc(pkey(s))}" title="${pinned?"unpin":"pin to top"}">${
-      pinned ? "★" : "☆"}</span>${archived ? `<span data-arch="${esc(pkey(s))}" title="unarchive">↩</span>${
-        !s.pid && !s.remote ? `<span data-dismiss="${esc(key(s))}" title="nothing is running: take it off the list (the conversation stays resumable)">✕</span>` : ""}`
-      : s.pid && !s.remote ? `<span data-close="${esc(key(s))}" title="close this session and its window (the conversation stays resumable)">✕</span>` : ""}`;
+      pinned ? "★" : "☆"}</span>${archived ? `<span data-arch="${esc(pkey(s))}" title="unarchive">↩</span>` : ""}${x}`;
   const spend = open && statusFor === key(s) && statusData ? statusData.spend : null;
   const details = `<div class="m"><span class="det">${tileDetails(s, now, spend).map(p =>
     `<span class="${p.cls || ""}" title="${esc(p.title)}">${esc(p.text)}</span>`).join(" · ")}${
@@ -3025,8 +3034,8 @@ async function closeSession(k){
     : "closed " + nameOf(s);
 }
 
-// An archived tile's ✕ when nothing is running: no process to end, so the
-// dispatcher only takes it off the list until it starts again.
+// A tile's ✕ when nothing is running: no process to end, so the dispatcher
+// only takes it off the list until it starts again.
 async function dismissSession(k){
   const s = sessions.find(x => key(x) === k);
   if (!s || !confirm("Remove " + nameOf(s) + " from the list? Nothing is running, so there is " +

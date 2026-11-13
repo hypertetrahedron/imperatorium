@@ -299,14 +299,18 @@ class SessionTree(unittest.TestCase):
         self.assertIn('<span class="acts">${acts}</span></div>`;', ui.SCRIPT)
 
     def test_tile_x_closes_a_running_local_session_rather_than_archiving(self):
-        for needle in ('data-close="${esc(key(s))}"', "s.pid && !s.remote",
+        for needle in ('data-close="${esc(key(s))}"', 's.remote ? ""',
+                       ': s.pid ? `<span data-close=',
                        'post("/api/close"', "closeSession(el.dataset.close)",
                        "famClicked(el.dataset.fam)"):
             self.assertIn(needle, ui.SCRIPT)
         self.assertNotIn('archived ? "↩" : "✕"', ui.SCRIPT)
 
-    def test_an_archived_tile_with_nothing_running_can_be_dismissed(self):
-        for needle in ('data-dismiss="${esc(key(s))}"', "!s.pid && !s.remote",
+    def test_a_tile_with_nothing_running_can_be_dismissed(self):
+        # Any tile, archived or not (2026-11-12: a finished background job
+        # that was not archived had no way off the list). Not one still
+        # working before its process is matched (test_finished.Window).
+        for needle in ('data-dismiss="${esc(key(s))}"', ': s.state === "working" || RUNNING[s.status] ? ""',
                        'post("/api/dismiss"', "dismissSession(el.dataset.dismiss)"):
             self.assertIn(needle, ui.SCRIPT)
 

@@ -123,6 +123,14 @@ FIELDS = [
          applies=LIVE, help="e.g. opus, sonnet, or a full model id. Blank uses your default."),
     dict(key="background.agent", section="background", label="Agent", type="name", default="",
          applies=LIVE, help="A subagent to run the session as. Blank for none."),
+    # Not under `background`: that block is handed to `claude --bg` as options.
+    dict(key="list.hide_finished_hours", section="background",
+         label="Hide finished sessions after (hours)", type="int", min=0, max=8760,
+         default=0, applies=LIVE,
+         help="Claude Code keeps listing a background session that has finished until "
+              "you open it in its agent view. After this many hours without activity it "
+              "leaves the list here too; its conversation stays in History. 0 keeps it "
+              "until you take it off with its ✕."),
     dict(key="notify.ntfy.enabled", section="notify", label="Push to phone (ntfy)", type="bool",
          default=False, applies=LIVE,
          help="When a session is still waiting on you after the delay. Sends only "
