@@ -18,7 +18,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The same tests as every push (check.yml): a tag whose commit fails them
+  # builds and publishes nothing.
+  check:
+    uses: ./.github/workflows/check.yml
+
   windows:
+    needs: check
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +58,7 @@ jobs:
           path: win/
 
   linux:
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +79,7 @@ jobs:
             rust/target/aarch64-unknown-linux-musl/release/imperatorium
 
   macos:
+    needs: check
     runs-on: macos-latest
     # Built but never run on a Mac yet: a failure here does not hold back
     # the Windows and Linux assets.
