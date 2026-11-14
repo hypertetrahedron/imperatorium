@@ -41,6 +41,7 @@ mod launch;
 mod live;
 mod matrix;
 mod modlink;
+mod models;
 mod notify;
 mod paths;
 mod pending;
@@ -204,6 +205,7 @@ fn main() {
         Some("install-hooks") => install::install_hooks_main(&args[1..]),
         Some("hotkey") => hotkey::main(&args[1..], home.as_deref()),
         Some("update") => update::main(&args[1..]),
+        Some("voice") => models::main(&args[1..], home.as_deref()),
         #[cfg(feature = "streamdeck")]
         Some("streamdeck") => streamdeck::main(&args[1..], home.as_deref()),
         Some("serve") => {

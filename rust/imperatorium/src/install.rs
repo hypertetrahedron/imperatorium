@@ -1009,7 +1009,7 @@ pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
         None => say(format!("   dispatcher is not answering yet on 127.0.0.1:{port}")),
     }
     if voice {
-        say("Dictation: run `imperatorium voice fetch` to download the model (or it is fetched on first use).".into());
+        say("Dictation: `imperatorium voice fetch` downloads the worker and the model (~1.6 GB), SHA-256 checked.".into());
     }
     say("Restart running Claude Code sessions so they pick up the hooks.".into());
     0
