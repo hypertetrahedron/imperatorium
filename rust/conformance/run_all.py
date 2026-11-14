@@ -7,8 +7,10 @@ A part that cannot run here (a missing module, or the wrong OS) is skipped
 and says why; --require-all turns every such skip into a failure.
 """
 import os
+import socket
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUST = os.path.dirname(HERE)
@@ -30,6 +32,24 @@ NEEDS = {"sessions_compare.py": "claude_agent_sdk"}
 # (The others are portable as far as their own code goes; none has been run
 # off Windows yet.)
 WINDOWS_ONLY = ["inbox_twin.py", "bg_worktree_twin.py", "session_twin.py", "focus_compare.py"]
+
+# Every port a twin binds; a part starts only once the last one's are free.
+TWIN_PORTS = range(8812, 8821)
+
+
+def wait_ports_free(timeout=60):
+    """Wait for the previous part's dispatchers to finish exiting."""
+    deadline = time.time() + timeout
+    while True:
+        busy = []
+        for port in TWIN_PORTS:
+            with socket.socket() as s:
+                s.settimeout(0.2)
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    busy.append(port)
+        if not busy or time.time() > deadline:
+            return busy
+        time.sleep(0.5)
 
 
 def main():
@@ -60,6 +80,9 @@ def main():
                 if require_all:
                     failed.append(part + " (skipped)")
                 continue
+        busy = wait_ports_free()
+        if busy:
+            print("ports still in use after 60 s: %s" % busy)
         if subprocess.run([sys.executable, os.path.join(HERE, part)], env=env).returncode != 0:
             failed.append(part)
     print("\nconformance: %s" % ("FAILED: " + ", ".join(failed) if failed else "all passed"))
