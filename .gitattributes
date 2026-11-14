@@ -3,3 +3,5 @@
 *.sh text eol=lf
 *.ps1 text eol=crlf
 *.dll binary
+# cmd.exe misreads labels and long lines in LF batch files.
+*.cmd text eol=crlf
