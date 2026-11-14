@@ -8,10 +8,12 @@
 //! with `shift_remove` does the same, so every list comes out in Python's
 //! order. Numbers stay ints until a float joins them, as in Python.
 
+use crate::locks::LockExt;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
@@ -526,8 +528,13 @@ impl Fold {
             }
             let mut item = task.clone();
             item.insert("id".into(), json!(tid));
+            // The fold only ever files a task under one of the four kinds;
+            // anything else (Python would raise KeyError and lose the whole
+            // summary) is left out rather than panicking.
             let kind = task["kind"].as_str().unwrap_or("shells");
-            running.get_mut(kind).unwrap().push(Value::Object(item));
+            if let Some(list) = running.get_mut(kind) {
+                list.push(Value::Object(item));
+            }
         }
         for (id, name, input, at) in self.calls.values() {
             let group = match name.as_str() {
@@ -629,16 +636,45 @@ pub fn parse(text: &str) -> Vec<Map<String, Value>> {
         .collect()
 }
 
+/// How long a found transcript path is trusted (while it still exists)
+/// before the folders are looked through again, and how long a miss is.
+const PATH_TRUSTED: Duration = Duration::from_secs(30);
+const MISS_TRUSTED: Duration = Duration::from_secs(2);
+
 /// sessionstat.transcript_path: the newest projects/*/<id>.jsonl.
+///
+/// Remembered, so a poll does not list every project folder: a path found
+/// is used again while it exists, for up to PATH_TRUSTED, and a miss is
+/// believed for MISS_TRUSTED. The look itself, and so which copy wins when
+/// an id is in two folders, is Python's.
 pub fn transcript_path(sid: &str) -> Option<PathBuf> {
+    type Memo = HashMap<(PathBuf, String), (Instant, Option<PathBuf>)>;
+    static MEMO: OnceLock<Mutex<Memo>> = OnceLock::new();
     if sid.len() != 36 || !sid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
         return None;
     }
+    let root = crate::sessions::projects_dir();
+    let key = (root, sid.to_string());
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some((at, known)) = memo.lk().get(&key) {
+        match known {
+            Some(p) if at.elapsed() < PATH_TRUSTED && p.exists() => return Some(p.clone()),
+            None if at.elapsed() < MISS_TRUSTED => return None,
+            _ => {}
+        }
+    }
+    let found = look_for_transcript(&key.0, sid);
+    let mut m = memo.lk();
+    if m.len() >= 1024 {
+        m.retain(|_, (at, _)| at.elapsed() < PATH_TRUSTED);
+    }
+    m.insert(key, (Instant::now(), found.clone()));
+    found
+}
+
+fn look_for_transcript(root: &std::path::Path, sid: &str) -> Option<PathBuf> {
     let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
-    for dir in std::fs::read_dir(crate::sessions::projects_dir())
-        .ok()?
-        .flatten()
-    {
+    for dir in std::fs::read_dir(root).ok()?.flatten() {
         let p = dir.path().join(format!("{sid}.jsonl"));
         let Ok(m) = std::fs::metadata(&p).and_then(|m| m.modified()) else {
             continue;
@@ -665,12 +701,12 @@ impl Reader {
     }
 
     pub fn read(&self, sid: &str, now: f64) -> Option<Value> {
-        let known = self.cache.lock().unwrap().get(sid).map(|h| h.0.clone());
+        let known = self.cache.lk().get(sid).map(|h| h.0.clone());
         let path = match known.filter(|p| p.exists()) {
             Some(p) => p,
             None => transcript_path(sid)?,
         };
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lk();
         let mut hit = match cache.shift_remove(sid) {
             Some(h) if h.0 == path => h,
             _ => (path.clone(), 0, Fold::new()),
@@ -724,9 +760,6 @@ pub fn summarise_file(sid: &str, now: f64) -> Option<Value> {
     fold.feed(&parse(&String::from_utf8_lossy(&text[..end])));
     Some(fold.summary(now))
 }
-
-#[allow(dead_code)]
-fn _unused(_: HashMap<(), ()>) {}
 
 #[cfg(test)]
 mod tests {
