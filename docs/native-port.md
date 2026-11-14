@@ -437,6 +437,41 @@ press to focus. `elgato-streamdeck` over hidapi's `windows-native` backend
 `conhost --headless`; its Python definition is in `cutover\`, and
 `rollback-to-python.ps1` restores it.
 
+## Phase 6, in progress (2026-11-13)
+
+The user's decisions: build and test everything against a local mock
+release server and publish nothing until reviewed; releases use Vulkan for
+GPU dictation (the CUDA build needs ~770 MB of cuBLAS DLLs beside it).
+Signing is deferred until there is a certificate.
+
+**6a `imperatorium install | uninstall | status`** (`install.rs`): the
+binary sets a machine up alone - prerequisites, choices (flags, else asked
+at a terminal, else defaults), the binary placed in
+`%LOCALAPPDATA%\Programs\imperatorium` or `~/.local/bin`, `config.json` and
+`policy.json` from the embedded examples, the mod's files written to the
+state folder, settings.json edited exactly as `hooks/install.py --native`
+does (`install_compare.py`: 80 cases identical, line endings aside), and the
+service: scheduled tasks shaped as `service/tasks.ps1` shapes them (under a
+headless conhost), systemd user units, launchd agents. `--dry-run`,
+`--task-prefix`, `--port`, `--state` and `--settings` let a test install a
+separate copy beside the real one.
+
+**6b `imperatorium hotkey`** (`hotkey.rs`): `hotkey.py` without Python.
+
+**6c releases and self-update** (`update.rs`, `rust/release/`,
+`install.ps1`, `install.cmd`, `install.sh`, `.github/workflows/release.yml`).
+A release is a folder of assets named by target triple, `SHA256SUMS` and
+`manifest.json`; stable reads `releases/latest/download`, preview a rolling
+`preview` release; `--from` or `IMPERATORIUM_RELEASES` point anywhere.
+`update` checks SHA-256, renames the running exe aside, refreshes the voice
+worker and the hosts' builds, and restarts only processes started from its
+own exe path. The Windows exe links the C runtime statically. A local
+release: `powershell -File rust\release\build.ps1 -Version 0.3.1-preview.1`,
+then serve `dist\` over HTTP.
+
+**6d** (Vulkan dictation, models fetched when dictation is turned on) waits
+on the Vulkan SDK.
+
 ## Building
 
 ```
