@@ -345,8 +345,12 @@ fn ntfy_topic() -> String {
 /// setup_machine.default_roots: where repositories usually live.
 fn default_roots() -> Vec<String> {
     let home = home_dir();
-    for name in ["src", "code", "projects", "repos", "dev", "github_src", "source/repos"] {
-        let p = home.join(name);
+    let places: &[&[&str]] = &[
+        &["src"], &["code"], &["projects"], &["repos"], &["dev"], &["github_src"],
+        &["Desktop", "github_src"], &["source", "repos"],
+    ];
+    for parts in places {
+        let p = parts.iter().fold(home.clone(), |p, part| p.join(part));
         if p.is_dir() {
             return vec![p.to_string_lossy().into_owned()];
         }
@@ -856,7 +860,7 @@ pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
     let o = opts(args, home);
     let mut say = |s: String| println!("{s}");
     let step = |s: &str| println!("\n== {s}");
-    println!("Imperatorium {} setup{}", env!("CARGO_PKG_VERSION"), if o.dry { " (dry run: nothing is changed)" } else { "" });
+    println!("Imperatorium {} setup{}", crate::update::version(), if o.dry { " (dry run: nothing is changed)" } else { "" });
 
     step("1/7 Prerequisites");
     let ver = claude_version();
@@ -1119,7 +1123,7 @@ pub fn install_hooks_main(args: &[String]) -> i32 {
 /// `imperatorium status`.
 pub fn status_main(args: &[String], home: Option<&str>) -> i32 {
     let o = opts(args, home);
-    println!("imperatorium {}  {}", env!("CARGO_PKG_VERSION"), std::env::current_exe().unwrap_or_default().display());
+    println!("imperatorium {}  {}", crate::update::version(), std::env::current_exe().unwrap_or_default().display());
     println!("config home   {}", o.home.display());
     println!("state         {}", crate::paths::state_dir().display());
     let settings = load_settings(&o.settings).unwrap_or_default();

@@ -5,3 +5,11 @@ linker = "rust-lld"
 
 [target.aarch64-unknown-linux-musl]
 linker = "rust-lld"
+
+# Windows: the C runtime linked in, so the exe needs no Visual C++
+# redistributable on the machine it is downloaded to (phase 6).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -61,6 +61,7 @@ mod store;
 mod streamdeck;
 mod taskout;
 mod ui;
+mod update;
 mod usage;
 mod voice;
 mod winfocus;
@@ -69,7 +70,10 @@ use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = match option_env!("IMPERATORIUM_BUILD_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 fn usage() -> i32 {
     eprintln!(
@@ -199,6 +203,7 @@ fn main() {
         Some("status") => install::status_main(&args[1..], home.as_deref()),
         Some("install-hooks") => install::install_hooks_main(&args[1..]),
         Some("hotkey") => hotkey::main(&args[1..], home.as_deref()),
+        Some("update") => update::main(&args[1..]),
         #[cfg(feature = "streamdeck")]
         Some("streamdeck") => streamdeck::main(&args[1..], home.as_deref()),
         Some("serve") => {

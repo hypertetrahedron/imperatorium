@@ -13,6 +13,9 @@ publish = false
 [features]
 default = ["cuda"]
 cuda = ["whisper-rs/cuda"]
+# Releases: any GPU through the driver's Vulkan, nothing large to ship
+# (the CUDA build needs ~770 MB of cuBLAS DLLs beside it).
+vulkan = ["whisper-rs/vulkan"]
 
 [dependencies]
 whisper-rs = "0.16"
