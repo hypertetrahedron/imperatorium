@@ -708,6 +708,45 @@ impl Service {
         }
     }
 
+    /// The `--home` the registered dispatcher was installed with, if any:
+    /// what `status` reports when it is given none, since that is the
+    /// config home actually in use.
+    pub fn installed_home(&self) -> Option<PathBuf> {
+        #[cfg(windows)]
+        {
+            let task = format!("{}Dispatcher", self.prefix);
+            let (ok, xml) = run("schtasks", &["/Query", "/TN", &task, "/XML"]);
+            if !ok {
+                return None;
+            }
+            let start = xml.find("<Arguments>")? + "<Arguments>".len();
+            let end = start + xml[start..].find("</Arguments>")?;
+            let args = xml[start..end]
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&");
+            home_arg(&args).map(PathBuf::from)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let unit = format!("{}-dispatcher.service", self.prefix.to_lowercase());
+            let file = crate::paths::env_nonempty("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home_dir().join(".config"))
+                .join("systemd/user")
+                .join(unit);
+            let text = std::fs::read_to_string(file).ok()?;
+            let line = text.lines().find_map(|l| l.strip_prefix("ExecStart="))?;
+            home_arg(&line.replace("\\\"", "\u{0}")).map(|h| PathBuf::from(h.replace('\u{0}', "\"")))
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            None
+        }
+    }
+
     /// Each unit: registered, and its state.
     pub fn status(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
@@ -842,6 +881,36 @@ fn wait_for_dispatcher(port: &str, seconds: u64) -> Option<Value> {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
+}
+
+/// The value after `--home` in a command line, quoted or not.
+fn home_arg(cmdline: &str) -> Option<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let (mut quoted, mut any) = (false, false);
+    for ch in cmdline.chars() {
+        match ch {
+            '"' => {
+                quoted = !quoted;
+                any = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if any {
+                    words.push(std::mem::take(&mut cur));
+                    any = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                any = true;
+            }
+        }
+    }
+    if any {
+        words.push(cur);
+    }
+    let i = words.iter().position(|w| w == "--home")?;
+    words.get(i + 1).filter(|w| !w.is_empty()).cloned()
 }
 
 fn service_for(o: &Opts, exe: PathBuf) -> Service {
@@ -1122,9 +1191,23 @@ pub fn install_hooks_main(args: &[String]) -> i32 {
 
 /// `imperatorium status`.
 pub fn status_main(args: &[String], home: Option<&str>) -> i32 {
-    let o = opts(args, home);
+    let mut o = opts(args, home);
     println!("imperatorium {}  {}", crate::update::version(), std::env::current_exe().unwrap_or_default().display());
-    println!("config home   {}", o.home.display());
+    // Without --home (or IMPERATORIUM_HOME), the home that matters is the
+    // one the installed dispatcher was given, not the platform default.
+    let chosen = home.is_some_and(|h| !h.is_empty()) || crate::paths::env_nonempty("IMPERATORIUM_HOME").is_some();
+    let installed = if chosen {
+        None
+    } else {
+        service_for(&o, std::env::current_exe().unwrap_or_default()).installed_home()
+    };
+    match installed {
+        Some(h) => {
+            o.home = h;
+            println!("config home   {}  (the installed dispatcher's)", o.home.display());
+        }
+        None => println!("config home   {}", o.home.display()),
+    }
     println!("state         {}", crate::paths::state_dir().display());
     let settings = load_settings(&o.settings).unwrap_or_default();
     let hooks = settings.get("hooks").and_then(Value::as_object).map(|h| {
@@ -1153,6 +1236,18 @@ pub fn status_main(args: &[String], home: Option<&str>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_from_a_command_line() {
+        assert_eq!(
+            home_arg(r#"--headless "C:\P\imperatorium.exe" serve --live --home "C:\Users\A B\imp""#).as_deref(),
+            Some(r"C:\Users\A B\imp")
+        );
+        assert_eq!(home_arg(r#""/u/bin/imperatorium" "serve" "--live" "--home" "/home/a/imp""#).as_deref(), Some("/home/a/imp"));
+        assert_eq!(home_arg("imperatorium serve --home /x/y --port 1").as_deref(), Some("/x/y"));
+        assert_eq!(home_arg("imperatorium serve --live"), None);
+        assert_eq!(home_arg("imperatorium serve --home"), None);
+    }
 
     #[test]
     fn versions() {

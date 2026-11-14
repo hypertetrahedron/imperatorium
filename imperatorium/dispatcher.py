@@ -1736,6 +1736,12 @@ class Control:
             if slash.is_command(prompt):
                 return self.run_command(row, prompt)
             if not row.get("dispatchable"):
+                # Claude Code relaunching a session (its daemon does, on an
+                # update) gives it a new inbox without a hook to say so.
+                if row.get("stale_credential"):
+                    return {"ok": False, "error":
+                            "that session is not reachable (Claude Code restarted it, so its "
+                            "credential is out of date - it registers again on its next hook event)"}
                 return {"ok": False, "error":
                         "that session is not reachable (no credential yet - it "
                         "registers on its next hook event)"}

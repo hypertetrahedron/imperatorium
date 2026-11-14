@@ -94,7 +94,12 @@ impl Transcriber {
             Err("no GPU device".into())
         };
         match first {
-            Ok(c) => self.ctx = Some(c),
+            Ok(c) => {
+                self.ctx = Some(c);
+                // The settings' "cuda" only means "a GPU"; report the one
+                // this build really runs on (nothing reads more than "cpu").
+                self.device = gpu_backend().into();
+            }
             Err(e) if want_gpu => {
                 eprintln!("imperatorium-voice: {e}; falling back to the CPU");
                 let cpu = s(&self.settings, "cpu_model", "small").to_string();
@@ -167,6 +172,17 @@ impl Transcriber {
 /// Is there a GPU to use? whisper.cpp would quietly run on the CPU without
 /// one, and the window says which it is. Asked of ggml's own device list,
 /// so it is the same question for the CUDA build and the Vulkan one.
+/// The GPU backend this build was compiled with ("cpu": none).
+fn gpu_backend() -> &'static str {
+    if cfg!(feature = "vulkan") {
+        "vulkan"
+    } else if cfg!(feature = "cuda") {
+        "cuda"
+    } else {
+        "cpu"
+    }
+}
+
 fn gpu_present() -> bool {
     if std::env::var_os("IMPERATORIUM_VOICE_CPU").is_some() {
         return false;
@@ -372,8 +388,7 @@ fn main() {
         }
         Some("--devices") => {
             // What a load would run on: {"gpu": "<name>" | null, "backend": ...}.
-            let backend = if cfg!(feature = "vulkan") { "vulkan" } else if cfg!(feature = "cuda") { "cuda" } else { "cpu" };
-            println!("{}", json!({"gpu": if gpu_present() { gpu_name() } else { None }, "backend": backend}));
+            println!("{}", json!({"gpu": if gpu_present() { gpu_name() } else { None }, "backend": gpu_backend()}));
             0
         }
         Some("--transcribe") => {
