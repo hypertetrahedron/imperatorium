@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import RUST  # noqa: E402
+from common import RUST, stand_in_path  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
 
@@ -91,7 +91,7 @@ def main():
                        "name": "twin-feat", "kind": "interactive", "status": "idle"}, fh)
 
     def env(side):
-        return {"PATH": bin_dir + os.pathsep + os.environ["PATH"], "FAKE_LOG": logs[side]}
+        return {"PATH": stand_in_path(bin_dir), "FAKE_LOG": logs[side]}
 
     def neutral(text, side):
         main, feat = repos[side]
