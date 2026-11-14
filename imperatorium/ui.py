@@ -698,8 +698,8 @@ table.t td.n{text-align:right;font-variant-numeric:tabular-nums}
 #queued .qi span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #queued .qi.err span{color:var(--fail)}
 label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
-#decide{background:var(--warnbg);border-bottom:1px solid var(--warn);padding:8px 16px;
-  font-size:13px}
+#decide{background:var(--warnbg);border-top:1px solid var(--warn);padding:8px 16px;
+  font-size:13px;flex:none;max-height:45vh;overflow:auto}
 #decide .dq{display:flex;gap:8px;align-items:center;margin:3px 0}
 #decide .dq span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #decide .dqq{display:block;margin:4px 0 8px}
@@ -2145,23 +2145,44 @@ const logAtEnd = log => log.scrollHeight - log.scrollTop - log.clientHeight <= L
 function markAway(){
   const log = $("#log");
   log.classList.toggle("away", !logAtEnd(log));
-  maybeReviewed();
 }
 
 // -- reviewed -----------------------------------------------------------------
-// A session waiting on you whose chat you have read to its end - its current
-// conversation, in a window that has focus - is reviewed: the dispatcher stops
-// flagging it (diamond, bar, Matrix outline, Stream Deck, notifications) until
-// it next needs you. Sent once per wait.
+// A session waiting on you is reviewed once you have done something in its
+// chat - a click, a press, a turn of the wheel - with its current
+// conversation shown to the end: the dispatcher stops flagging it (diamond,
+// bar, Matrix outline, Stream Deck, notifications) until it next needs you.
+// Sent once per wait.
+// Only something you did counts. The log following new text to the end,
+// the window coming back into focus or a redraw do not, or a session left
+// open on a desk you walked away from would read as reviewed.
+// And only finished work: a session working, waiting on its own tasks
+// (shells, monitors, subagents, wakeups) or blocked on a permission or a
+// question cannot be reviewed yet - the dispatcher refuses it too.
 let logFresh = null;
 const reviewedSent = {};
-// Guarded: markAway can run while the script is still loading, before
-// `view` and `tab` exist.
+const TOUCH_MS = 1000;  // a scroll this soon after your input is still yours
+let touchedAt = 0, touchedKey = null;
+function inProgress(s){
+  return ["busy", "shell", "waiting"].includes(s.status) || s.state === "blocked" ||
+    !!s.waitingFor || (s.waiting_tasks || 0) > 0 ||
+    pendingNow.some(p => p.session_id === key(s) || p.session_id === s.sessionId);
+}
+function touched(){
+  const s = current();
+  touchedAt = Date.now(); touchedKey = s ? key(s) : null;
+  // After the event has had its effect (a click on Show Most Recent, a wheel
+  // turn that reaches the end).
+  setTimeout(maybeReviewed, 150);
+}
+function recentlyTouched(s){ return touchedKey === key(s) && Date.now() - touchedAt < TOUCH_MS; }
+// Guarded: it can run while the script is still loading, before `view` and
+// `tab` exist.
 function maybeReviewed(){ try { reviewedCheck(); } catch (e) {} }
 function reviewedCheck(){
   const s = current();
-  if (!s || !s.attention || logFresh !== key(s)) return;
-  if (view !== "session" || tab !== "log" || document.hidden || !document.hasFocus()) return;
+  if (!s || !s.attention || logFresh !== key(s) || !recentlyTouched(s) || inProgress(s)) return;
+  if (view !== "session" || tab !== "log" || document.hidden) return;
   if (!logAtEnd($("#log"))) return;
   const k = key(s), since = s.attention_since || s.status_changed_at || 0;
   if (reviewedSent[k] === since) return;
@@ -2172,9 +2193,6 @@ function reviewedCheck(){
     if (row && row.attention){ row.attention = false; row.reviewed = true; drawSessions(); }
   }).catch(() => { delete reviewedSent[k]; });
 }
-// Coming back to the window with a waiting session open is looking at it.
-addEventListener("focus", () => maybeReviewed());
-document.addEventListener("visibilitychange", () => maybeReviewed());
 function showNewest(){
   const log = $("#log");
   logFollow = true;
@@ -4774,10 +4792,10 @@ async function loadWorktrees(){
       <h3>${esc(w.branch || "(detached)")}</h3>
       <small>${esc(w.path)}</small>
       <div class="kv" style="margin:4px 0 0">${w.agent ? "background session" : "made by hand - not managed here"} · ${
-        w.ahead || 0} ahead of ${esc(d.base)}${w.behind ? " · " + w.behind + " behind" : ""}${w.dirty ? " · <b>uncommitted changes</b>" : ""}${
+        w.ahead || 0} ahead of ${esc(w.base || d.base)}${w.base_recorded ? " (made from it)" : ""}${w.behind ? " · " + w.behind + " behind" : ""}${w.dirty ? " · <b>uncommitted changes</b>" : ""}${
         w.subject ? " · last: " + esc(w.subject) : ""}</div>
       <div class="btns"><button class="sm ghost" data-wd="${esc(w.path)}">Diff</button>${w.agent ? `
-        <button class="sm" data-wa="merge" data-wp="${esc(w.path)}" ${w.ahead && !w.dirty ? "" : "disabled"}>Merge into ${esc(d.base)}</button>
+        <button class="sm" data-wa="merge" data-wp="${esc(w.path)}" ${w.ahead && !w.dirty ? "" : "disabled"}>Merge into ${esc(w.base || d.base)}</button>
         <button class="sm ghost" data-wa="pr" data-wp="${esc(w.path)}" ${w.dirty ? "disabled" : ""}>Push + open PR</button>
         <button class="sm danger" data-wa="discard" data-wp="${esc(w.path)}">Discard</button>` : ""}</div>
       <div class="wdiff" data-for="${esc(w.path)}"></div></div>`).join("");
@@ -5000,7 +5018,8 @@ function outcome(r){
     return "delivered to the inbox of " + (r.session_name || "the session") +
            where + " - it runs once the session accepts it";
   if (r.action === "remote") return "started in the background" + where + id;
-  if (r.action === "background") return "started in the background" + id;
+  if (r.action === "background") return "started in the background" + id +
+    (r.branch ? " · worktree " + r.branch + " from " + r.base : "");
   if (r.action === "launch") return "opened a new session window";
   if (r.action === "typed")
     return "typed into " + (r.session_name || "the session") + "'s prompt" +
@@ -5378,7 +5397,11 @@ $("#log").addEventListener("click", e => {
 $("#log").addEventListener("scroll", () => {
   logFollow = logAtEnd($("#log"));
   markAway();
+  maybeReviewed();
 }, {passive: true});
+// What you do in the chat, as opposed to what it does on its own.
+["pointerdown", "wheel", "touchstart", "keydown"].forEach(t =>
+  $("#log").addEventListener(t, touched, {passive: true}));
 // The log resized - the drawer, status panel or prompt box changed, the
 // window did, or the tab came back into view: stay at the end if following.
 new ResizeObserver(() => { if (logFollow) showNewest(); else markAway(); }).observe($("#log"));
@@ -5649,7 +5672,7 @@ def render_shell(token="", boot="", look=None):
         '<div id=picker hidden><input id=find placeholder="project…" autocomplete=off>'
         '<div id=projects></div></div>'
         '<div id=sessions></div></div>'
-        '<div id=main><div id=decide hidden></div>'
+        '<div id=main>'
         '<div id=head><div id=headrow><div id=headtext><div id=title>loading…</div><div id=sub></div></div>'
         '<div id=headctl>'
         '<select id=tabpick class=tiny title="what the session pane shows">'
@@ -5697,6 +5720,9 @@ def render_shell(token="", boot="", look=None):
         '<div class=card><h3>Tool failures <select id=days class=tiny>'
         '<option value=1>last day</option><option value=7 selected>last 7 days</option>'
         '<option value=30>last 30 days</option></select></h3><div id=errs></div></div></div>'
+        # Parked permission requests sit where the session's newest news
+        # does: at the foot of the chat, just above the prompt box.
+        '<div id=decide hidden></div>'
         '<div id=ask><textarea id=prompt placeholder="message this session…"></textarea>'
         '<div id=bar><span class=split><button id=send title="Enter">Send</button>'
         '<details id=sendmore class=menu><summary title="more ways to send" aria-label="more ways to send"></summary>'

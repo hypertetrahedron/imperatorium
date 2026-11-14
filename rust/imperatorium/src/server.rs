@@ -847,6 +847,11 @@ impl Shared {
                 if !truthy(row.get("attention")) {
                     return json!({"ok": true, "reviewed": truthy(row.get("reviewed"))});
                 }
+                if registry::in_progress(&row) {
+                    // Work still going cannot have been reviewed; the window
+                    // checks too, but its copy of the row can be a second old.
+                    return json!({"ok": true, "reviewed": false, "in_progress": true});
+                }
                 store.mark_reviewed(sid, Self::now());
                 self.invalidate();
                 json!({"ok": true, "reviewed": true})
@@ -1774,18 +1779,58 @@ impl Shared {
             return out;
         }
         if mode == "background" {
+            // In a worktree of its own, made here from the branch the chosen
+            // session has checked out (else the project's): left to Claude
+            // Code it would branch from the remote's default branch, which on
+            // a long-lived feature branch is the wrong code.
             let options = background_options();
-            match crate::background::start(&prompt, &path, &options) {
-                Err(e) => set(&mut out, json!({"ok": false, "error": e})),
+            let mut source = path.clone();
+            if let Some(row) = session_id.as_deref().and_then(|sid| self.row(sid)) {
+                let cwd = row.get("cwd").and_then(Value::as_str).unwrap_or("");
+                if !truthy(row.get("remote")) && !cwd.is_empty() && std::path::Path::new(cwd).is_dir() {
+                    source = cwd.to_string();
+                }
+            }
+            let name = crate::background::short_name(&prompt)
+                .or_else(|| options.get("name").filter(|v| truthy(Some(v))).map(crate::pyish::py_str))
+                .unwrap_or_else(|| "bg".into());
+            let made = match crate::changes::make_worktree(&source, &name) {
+                Ok(m) => m,
+                Err(e) => {
+                    set(&mut out, json!({"ok": false, "error": format!("could not make its worktree: {e}")}));
+                    return out;
+                }
+            };
+            let run_in = made
+                .as_ref()
+                .and_then(|m| m["path"].as_str())
+                .unwrap_or(&path)
+                .to_string();
+            match crate::background::start(&prompt, &run_in, &options) {
+                Err(e) => {
+                    if let Some(m) = &made {
+                        crate::changes::drop_worktree(m);
+                    }
+                    set(&mut out, json!({"ok": false, "error": e}));
+                }
                 Ok(started) => {
-                    let e = json!({"kind": "dispatch_background", "cwd": path,
+                    let mut e = json!({"kind": "dispatch_background", "cwd": path,
                                    "summary": crate::pyish::take(&prompt, 280), "bg_id": started["id"]});
+                    let mut done = json!({"ok": true, "action": "background", "bg_id": started["id"]});
+                    if let Some(m) = &made {
+                        let base = match m["base"].as_str() {
+                            Some(b) => b.to_string(),
+                            None => m["start"].as_str().unwrap_or("").chars().take(12).collect(),
+                        };
+                        let extra = json!({"worktree": m["path"], "branch": m["branch"], "base": base});
+                        for (k, v) in extra.as_object().unwrap() {
+                            e[k] = v.clone();
+                            done[k] = v.clone();
+                        }
+                    }
                     store.add_event(e.as_object().unwrap().clone());
                     self.invalidate();
-                    set(
-                        &mut out,
-                        json!({"ok": true, "action": "background", "bg_id": started["id"]}),
-                    );
+                    set(&mut out, done);
                 }
             }
             return out;

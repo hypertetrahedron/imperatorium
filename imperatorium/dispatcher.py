@@ -1692,6 +1692,10 @@ class Control:
             return {"ok": False, "error": "no such session"}
         if not row.get("attention"):
             return {"ok": True, "reviewed": bool(row.get("reviewed"))}
+        if registry.in_progress(row):
+            # Work still going cannot have been reviewed; the window checks
+            # too, but its copy of the row can be a second old.
+            return {"ok": True, "reviewed": False, "in_progress": True}
         self.store.mark_reviewed(session_id)
         self.invalidate()
         return {"ok": True, "reviewed": True}
@@ -1862,24 +1866,46 @@ class Control:
 
         if mode == "background":
             # Work you want done, rather than a window you want to sit in.
-            # Claude Code isolates it in a worktree on its own.
+            # It runs in a worktree of its own, made here from the branch the
+            # session you chose has checked out (else the project's): left to
+            # Claude Code, it would branch from the remote's default branch,
+            # which on a long-lived feature branch is the wrong code.
+            source = match["path"]
+            if session_id:
+                row = self._row(session_id)
+                if row and not row.get("remote") and row.get("cwd")                         and os.path.isdir(row["cwd"]):
+                    source = row["cwd"]
+            options = dict(self.background_options or {})
+            try:
+                made = changes.make_worktree(source, background.short_name(prompt)
+                                             or options.get("name") or "bg")
+            except changes.GitError as exc:
+                out.update(ok=False, error="could not make its worktree: %s" % exc)
+                return out
             try:
                 started = background.start(
-                    prompt, match["path"], **(self.background_options or {})
+                    prompt, made["path"] if made else match["path"], **options
                 )
             except background.BackgroundError as exc:
+                if made:
+                    changes.drop_worktree(made)
                 out.update(ok=False, error=str(exc))
                 return out
-            self.store.add_event(
-                {
-                    "kind": "dispatch_background",
-                    "cwd": match["path"],
-                    "summary": prompt[:280],
-                    "bg_id": started["id"],
-                }
-            )
+            event = {
+                "kind": "dispatch_background",
+                "cwd": match["path"],
+                "summary": prompt[:280],
+                "bg_id": started["id"],
+            }
+            if made:
+                event.update(worktree=made["path"], branch=made["branch"],
+                             base=made["base"] or made["start"][:12])
+            self.store.add_event(event)
             self.invalidate()
             out.update(ok=True, action="background", bg_id=started["id"])
+            if made:
+                out.update(worktree=made["path"], branch=made["branch"],
+                           base=made["base"] or made["start"][:12])
             return out
 
         if mode in ("auto", "inject"):

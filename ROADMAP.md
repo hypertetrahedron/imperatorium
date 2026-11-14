@@ -1,7 +1,7 @@
 # Roadmap
 
 Status legend: Not Started · In Progress · Complete · Deferred
-Last updated: 2026-11-11
+Last updated: 2026-11-14
 
 Imperatorium (package `imperatorium`): a single input
 surface for dispatching prompts to, and tracking attention across, ~20
@@ -10,6 +10,9 @@ https://github.com/hypertetrahedron/imperatorium (MIT).
 
 | Feature | Status | Notes |
 |---|---|---|
+| Background worktrees branch from the selected session's branch | In Progress | 2026-11-14 (user report: a Background prompt's worktree came from `origin/main`, not `rust`). Cause: dispatch ran `claude --bg` in the project root, and Claude Code bases its worktrees on the remote default branch (`worktree.baseRef` "fresh"). Now `changes.make_worktree` (Python and Rust) makes `.claude/worktrees/<name>` on `worktree-<name>` from the branch checked out in the chosen session's folder (else the project's; a detached HEAD gives its commit), notes it as `branch.<b>.imperatoriumBase`, and starts the session there (removed again if it never starts). Worktrees tab: ahead/behind, Diff, Merge and PR use that base; Merge runs in whichever checkout has it; Discard deletes the branch with -D after its own unmerged check (-d had kept branches made from another branch). Tests: `test_features.MadeWorktrees`, dispatcher tests (with worktree creation stubbed: their fake project is a real folder), `changes.rs`, new `bg_worktree_twin.py`; Python 1234 pass, Rust 96, conformance all identical. Not yet deployed or tried with a real `claude --bg`. |
+| Permission requests at the foot of the chat | In Progress | 2026-11-14 (user request): `#decide` (parked permission requests and questions) moved from the top of `#main` to just above the prompt box, capped at 45% of the window and scrolled. Test in `test_ui.py`, exported to the binary; suites pass (Python 1222, Rust 95). Not yet built, deployed or seen in the window. |
+| Reviewed: only by your own input, only for finished work | In Progress | 2026-11-14 (user report): reviewed was set by the log auto-following to the end and by the window regaining focus, and could be set on work in progress. Now it takes a click, press or wheel turn in the chat (or a scroll within 1 s of one) with the end in view, and never while the session is working, waiting on its own tasks or blocked on a permission/question (`registry.in_progress`, Python and Rust; the dispatcher refuses `/api/reviewed` and ignores an old mark then). Selecting a tile alone no longer reviews. Tests in `test_ui.py`, `test_core.py`, `registry.rs`; suites pass. Not yet built, deployed or tried in the window. |
 | herdr integration (herdr-app windowing + Imperatorium chat) | In Progress | Branch `herdr`, plan in `docs/herdr-integration-plan.md`; option A chosen by the user 2026-11-09. Rows below track the parts. Status and what to check by hand: `docs/herdr-status.md`. |
 | herdr fix: chat header without the session picker | Complete | 2026-11-11: removed; header keeps title, state, work line and mode chips. Seen in the test window. |
 | herdr fix: divider + heading between Spaces and Imperatorium in the sidebar | Complete | 2026-11-11: layout divider on the sidebar column, heading styled like herdr's "Spaces". Seen in the user's window after install. |

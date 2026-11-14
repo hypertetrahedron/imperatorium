@@ -202,24 +202,31 @@ def worktrees(project):
         return {"ok": True, "repo": True, "worktrees": []}
     main = listed[0]
     base = main.get("branch")
+    recorded = recorded_bases(project)
     out = []
     for wt in listed[1:]:
         entry = dict(wt, agent=is_agent_worktree(main["path"], wt["path"]),
                      exists=os.path.isdir(wt["path"]))
+        # The branch it was made from, when Imperatorium made it; otherwise
+        # the main checkout's, which is what Claude Code's own come from.
+        own = recorded.get(wt.get("branch")) if wt.get("branch") else None
+        entry["base"] = own or base
+        entry["base_recorded"] = bool(own)
         if entry["exists"]:
             try:
                 entry["dirty"] = bool(git(wt["path"], "status", "--porcelain").strip())
-                if base and wt.get("branch"):
+                if entry["base"] and wt.get("branch"):
                     entry["ahead"] = int(git(project, "rev-list", "--count",
-                                             "%s..%s" % (base, wt["branch"])).strip() or 0)
+                                             "%s..%s" % (entry["base"], wt["branch"])).strip() or 0)
                     entry["behind"] = int(git(project, "rev-list", "--count",
-                                              "%s..%s" % (wt["branch"], base)).strip() or 0)
+                                              "%s..%s" % (wt["branch"], entry["base"])).strip() or 0)
                 entry["subject"] = git(wt["path"], "log", "-1", "--format=%s",
                                        check=False).strip()
             except (GitError, ValueError) as exc:
                 entry["error"] = str(exc)
         out.append(entry)
     return {"ok": True, "repo": True, "base": base, "main": main["path"],
+            "checkouts": {w["branch"]: w["path"] for w in listed if w.get("branch")},
             "worktrees": out}
 
 
@@ -228,7 +235,7 @@ def worktree_diff(project, path, max_diff=MAX_DIFF):
     found = _find(project, path)
     if isinstance(found, dict) and not found.get("ok", True):
         return found
-    wt, base = found
+    wt, base, _ = found
     if not base or not wt.get("branch"):
         return {"ok": False, "error": "no branch to compare"}
     try:
@@ -250,11 +257,77 @@ def _find(project, path):
     want = _norm(path)
     for wt in listed.get("worktrees", []):
         if _norm(wt["path"]) == want:
-            return wt, listed.get("base")
+            return wt, wt.get("base") or listed.get("base"), listed.get("checkouts") or {}
     return {"ok": False, "error": "no such worktree in %s" % project}
 
 
 ACTIONS = ("merge", "pr", "discard")
+
+# Where Imperatorium notes the branch a worktree was made from:
+# `branch.<worktree branch>.imperatoriumBase` in the repository's config.
+# Deleting the branch (`git branch -d`) removes it with the rest of its section.
+BASE_KEY = "imperatoriumbase"
+
+
+def recorded_bases(project):
+    """{worktree branch: the branch it was made from}, as noted at creation."""
+    got = git(project, "config", "--get-regexp", r"^branch\..*\.%s$" % BASE_KEY, check=False)
+    out = {}
+    for line in got.splitlines():
+        key, _, value = line.partition(" ")
+        if key.startswith("branch.") and key.endswith("." + BASE_KEY) and value.strip():
+            out[key[len("branch."):-len("." + BASE_KEY)]] = value.strip()
+    return out
+
+
+def _branch_exists(project, branch):
+    return bool(git(project, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch,
+                    check=False).strip())
+
+
+def make_worktree(source, name):
+    """A worktree for a background session, made from what `source` has
+    checked out rather than from the remote's default branch, which is
+    where Claude Code would branch its own.
+
+    It goes where Claude Code puts its own, `.claude/worktrees/<name>` in
+    the main checkout, on branch `worktree-<name>`, so the Worktrees tab
+    manages it the same way; a session started inside it does not make
+    another. The source's branch is noted as the worktree's base, which
+    is what Diff, Merge and PR then compare with and go into. A source on
+    a detached HEAD gives that commit, with no base noted.
+
+    Returns {path, branch, base, start, main}, or None when `source` is not in a
+    git repository (the session then runs there, as before). Raises
+    GitError when git refuses.
+    """
+    if not is_repo(source):
+        return None
+    listed = parse_worktrees(git(source, "worktree", "list", "--porcelain"))
+    if not listed or listed[0].get("bare"):
+        return None
+    main = listed[0]["path"]
+    base = git(source, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip() or None
+    start = base or git(source, "rev-parse", "HEAD").strip()
+    stem = re.sub(r"[^A-Za-z0-9-]+", "-", name or "").strip("-").lower()[:40] or "bg"
+    root = os.path.join(main, WORKTREE_DIR)
+    for n in range(1, 100):
+        leaf = stem if n == 1 else "%s-%d" % (stem, n)
+        path, branch = os.path.join(root, leaf), "worktree-" + leaf
+        if not os.path.exists(path) and not _branch_exists(main, branch):
+            break
+    else:
+        raise GitError("no free worktree name for %s" % stem)
+    git(main, "worktree", "add", "-b", branch, path, start)
+    if base:
+        git(main, "config", "branch.%s.%s" % (branch, BASE_KEY), base)
+    return {"path": path, "branch": branch, "base": base, "start": start, "main": main}
+
+
+def drop_worktree(made):
+    """Undo make_worktree when the session it was for never started."""
+    git(made["main"], "worktree", "remove", "--force", made["path"], check=False)
+    git(made["main"], "branch", "-D", made["branch"], check=False)
 
 
 def finish(project, path, action, force=False, runner=None):
@@ -263,7 +336,9 @@ def finish(project, path, action, force=False, runner=None):
     Refusals are the point of this function, not an afterthought:
     - only worktrees Claude Code made under `.claude/worktrees/` are touched,
       so a worktree you made by hand is never removed from here;
-    - merge needs the main checkout clean, on its branch, and the worktree
+    - merge goes into the worktree's base branch (the branch it was made
+      from when Imperatorium made it, else the main checkout's), in whichever
+      checkout has it, and needs that checkout clean and the worktree
       committed - a merge that stops half way in a checkout you are working
       in is worse than not merging;
     - discard of a worktree with uncommitted or unmerged work needs `force`,
@@ -276,7 +351,7 @@ def finish(project, path, action, force=False, runner=None):
     found = _find(project, path)
     if isinstance(found, dict):
         return found
-    wt, base = found
+    wt, base, checkouts = found
     # `agent` was worked out against git's own path for the main checkout.
     # Comparing with `project` instead fails on a mapped drive: git reports
     # the Y: drive as //server/share, so nothing would ever match.
@@ -290,19 +365,26 @@ def finish(project, path, action, force=False, runner=None):
         if action == "merge":
             if wt.get("dirty"):
                 return {"ok": False, "error": "the worktree has uncommitted changes"}
-            if git(project, "status", "--porcelain", "--untracked-files=no").strip():
-                return {"ok": False, "error": "the main checkout has uncommitted changes"}
+            # Into its base branch, wherever that is checked out: the main
+            # checkout, or another worktree (a long-lived feature branch).
+            into = checkouts.get(base)
+            if not into:
+                return {"ok": False, "error": "%s is not checked out anywhere - check it "
+                        "out to merge into it" % (base,)}
+            if git(into, "status", "--porcelain", "--untracked-files=no").strip():
+                return {"ok": False, "error": "the checkout of %s has uncommitted changes"
+                        % (base,)}
             if not wt.get("ahead"):
                 return {"ok": False, "error": "nothing to merge - %s is not ahead of %s"
                         % (branch, base)}
             try:
-                out = git(project, "merge", "--no-ff", "--no-edit", branch)
+                out = git(into, "merge", "--no-ff", "--no-edit", branch)
             except GitError as exc:
                 # A conflict and a refusal (unrelated histories, a hook) both
                 # land here; either way the checkout goes back as it was.
-                conflicted = bool(git(project, "diff", "--name-only",
+                conflicted = bool(git(into, "diff", "--name-only",
                                       "--diff-filter=U", check=False).strip())
-                git(project, "merge", "--abort", check=False)
+                git(into, "merge", "--abort", check=False)
                 return {"ok": False, "error": "merge conflicts - aborted, nothing changed"
                         if conflicted else "merge refused: %s" % exc}
             return {"ok": True, "action": "merge", "branch": branch, "base": base,
@@ -329,7 +411,11 @@ def finish(project, path, action, force=False, runner=None):
                         else "%d unmerged commit(s)" % wt["ahead"])}
         args = ["worktree", "remove"] + (["--force"] if force else []) + [wt["path"]]
         git(project, *args)
-        git(project, "branch", "-D" if force else "-d", branch, check=False)
+        # -D: what is unmerged was checked above, against the worktree's own
+        # base; -d would check against the main checkout's branch instead and
+        # keep a branch made from another one.
+        git(project, "branch", "-D", branch, check=False)
+        git(project, "config", "--unset", "branch.%s.%s" % (branch, BASE_KEY), check=False)
         return {"ok": True, "action": "discard", "branch": branch}
     except GitError as exc:
         return {"ok": False, "error": str(exc)}

@@ -314,6 +314,7 @@ pub fn worktrees(project: &str) -> Value {
         .get("branch")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let recorded = recorded_bases(project);
     let mut out = Vec::new();
     for wt in &listed[1..] {
         let path = wt["path"].as_str().unwrap_or("").to_string();
@@ -321,12 +322,26 @@ pub fn worktrees(project: &str) -> Value {
         entry.insert("agent".into(), json!(is_agent_worktree(&main_path, &path)));
         let exists = std::path::Path::new(&path).is_dir();
         entry.insert("exists".into(), json!(exists));
+        // The branch it was made from, when Imperatorium made it; otherwise
+        // the main checkout's, which is what Claude Code's own come from.
+        let own = wt
+            .get("branch")
+            .and_then(Value::as_str)
+            .filter(|b| !b.is_empty())
+            .and_then(|b| recorded.get(b))
+            .cloned();
+        let base = own.clone().or_else(|| base.clone());
+        entry.insert("base".into(), json!(base));
+        entry.insert("base_recorded".into(), json!(own.is_some()));
         if exists {
             let run = |entry: &mut Map<String, Value>| -> Result<(), String> {
                 let dirty =
                     !crate::pyish::strip(&git(&path, &["status", "--porcelain"], true)?).is_empty();
                 entry.insert("dirty".into(), json!(dirty));
-                if let (Some(b), Some(br)) = (&base, wt.get("branch").and_then(Value::as_str)) {
+                if let (Some(b), Some(br)) = (
+                    base.as_ref().filter(|b| !b.is_empty()),
+                    wt.get("branch").and_then(Value::as_str).filter(|b| !b.is_empty()),
+                ) {
                     let count = |range: String| -> Result<i64, String> {
                         let t = git(project, &["rev-list", "--count", &range], true)?;
                         let t = crate::pyish::strip(&t);
@@ -349,7 +364,108 @@ pub fn worktrees(project: &str) -> Value {
         }
         out.push(Value::Object(entry));
     }
-    json!({"ok": true, "repo": true, "base": base, "main": main_path, "worktrees": out})
+    let checkouts: Map<String, Value> = listed
+        .iter()
+        .filter_map(|w| {
+            let b = w.get("branch").and_then(Value::as_str).filter(|b| !b.is_empty())?;
+            Some((b.to_string(), w["path"].clone()))
+        })
+        .collect();
+    json!({"ok": true, "repo": true, "base": base, "main": main_path,
+           "checkouts": checkouts, "worktrees": out})
+}
+
+// -- worktrees Imperatorium makes for background sessions ---------------------
+
+/// changes.BASE_KEY: `branch.<worktree branch>.imperatoriumBase` notes the
+/// branch a worktree was made from. `git branch -D` removes it with the rest.
+const BASE_KEY: &str = "imperatoriumbase";
+
+/// changes.recorded_bases: {worktree branch: the branch it was made from}.
+pub fn recorded_bases(project: &str) -> std::collections::HashMap<String, String> {
+    let pattern = format!(r"^branch\..*\.{BASE_KEY}$");
+    let got = git(project, &["config", "--get-regexp", &pattern], false).unwrap_or_default();
+    let suffix = format!(".{BASE_KEY}");
+    let mut out = std::collections::HashMap::new();
+    for line in splitlines(&got) {
+        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+        let value = crate::pyish::strip(value);
+        if let Some(b) = key.strip_prefix("branch.").and_then(|k| k.strip_suffix(&suffix)) {
+            if !value.is_empty() {
+                out.insert(b.to_string(), value.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn branch_exists(project: &str, branch: &str) -> bool {
+    let r = format!("refs/heads/{branch}");
+    git(project, &["rev-parse", "--verify", "--quiet", &r], false)
+        .map(|t| !crate::pyish::strip(&t).is_empty())
+        .unwrap_or(false)
+}
+
+/// changes.make_worktree: a worktree for a background session made from
+/// what `source` has checked out - not from the remote's default branch,
+/// where Claude Code would branch its own - at `.claude/worktrees/<name>`
+/// in the main checkout, on `worktree-<name>`, with the source's branch
+/// noted as its base. Ok(None) when `source` is not in a git repository.
+pub fn make_worktree(source: &str, name: &str) -> Result<Option<Value>, String> {
+    if !is_repo(source) {
+        return Ok(None);
+    }
+    let listed = parse_worktrees(&git(source, &["worktree", "list", "--porcelain"], true)?);
+    let Some(first) = listed.first().filter(|m| !crate::pyish::truthy(m.get("bare"))) else {
+        return Ok(None);
+    };
+    let main = first["path"].as_str().unwrap_or("").to_string();
+    let base = git(source, &["symbolic-ref", "--quiet", "--short", "HEAD"], false)
+        .map(|t| crate::pyish::strip(&t).to_string())
+        .unwrap_or_default();
+    let base = (!base.is_empty()).then_some(base);
+    let start = match &base {
+        Some(b) => b.clone(),
+        None => crate::pyish::strip(&git(source, &["rev-parse", "HEAD"], true)?).to_string(),
+    };
+    let stem: String = Regex::new("[^A-Za-z0-9-]+")
+        .unwrap()
+        .replace_all(name, "-")
+        .trim_matches('-')
+        .to_lowercase()
+        .chars()
+        .take(40)
+        .collect();
+    let stem = if stem.is_empty() { "bg".to_string() } else { stem };
+    let root = std::path::Path::new(&main).join(".claude").join("worktrees");
+    let mut found = None;
+    for n in 1..100 {
+        let leaf = if n == 1 { stem.clone() } else { format!("{stem}-{n}") };
+        let path = root.join(&leaf).to_string_lossy().into_owned();
+        let branch = format!("worktree-{leaf}");
+        if !std::path::Path::new(&path).exists() && !branch_exists(&main, &branch) {
+            found = Some((path, branch));
+            break;
+        }
+    }
+    let Some((path, branch)) = found else {
+        return Err(format!("no free worktree name for {stem}"));
+    };
+    git(&main, &["worktree", "add", "-b", &branch, &path, &start], true)?;
+    if let Some(b) = &base {
+        let key = format!("branch.{branch}.{BASE_KEY}");
+        git(&main, &["config", &key, b], true)?;
+    }
+    Ok(Some(json!({"path": path, "branch": branch, "base": base, "start": start, "main": main})))
+}
+
+/// changes.drop_worktree: undo make_worktree when its session never started.
+pub fn drop_worktree(made: &Value) {
+    let main = made["main"].as_str().unwrap_or("");
+    let path = made["path"].as_str().unwrap_or("");
+    let branch = made["branch"].as_str().unwrap_or("");
+    let _ = git(main, &["worktree", "remove", "--force", path], false);
+    let _ = git(main, &["branch", "-D", branch], false);
 }
 
 /// changes.worktree_diff(project, path): what the branch would bring.
@@ -369,7 +485,8 @@ pub fn worktree_diff(project: &str, path: &str) -> Value {
     let Some(wt) = found else {
         return json!({"ok": false, "error": format!("no such worktree in {project}")});
     };
-    let (Some(base), Some(branch)) = (listed["base"].as_str(), wt["branch"].as_str()) else {
+    let own = wt["base"].as_str().or(listed["base"].as_str());
+    let (Some(base), Some(branch)) = (own, wt["branch"].as_str()) else {
         return json!({"ok": false, "error": "no branch to compare"});
     };
     let three = format!("{base}...{branch}");
@@ -424,6 +541,84 @@ mod tests {
         assert_eq!(w[1]["detached"], true);
         assert!(is_agent_worktree("C:/r", "C:/r/.claude/worktrees/x"));
     }
+
+    fn sh(cwd: &str, args: &[&str]) {
+        git(cwd, args, true).unwrap();
+    }
+
+    /// A repository on `main` with a long-lived `feat` beside it, ahead.
+    fn repo_with_feature() -> (std::path::PathBuf, String, String) {
+        let top = std::env::temp_dir().join(format!(
+            "imp-wt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let main = top.join("r");
+        std::fs::create_dir_all(&main).unwrap();
+        let m = main.to_string_lossy().into_owned();
+        sh(&m, &["init", "-q", "-b", "main"]);
+        sh(&m, &["config", "user.email", "t@example.invalid"]);
+        sh(&m, &["config", "user.name", "t"]);
+        std::fs::write(main.join("f.txt"), "one\n").unwrap();
+        sh(&m, &["add", "f.txt"]);
+        sh(&m, &["commit", "-q", "-m", "init"]);
+        let feat = top.join("feat").to_string_lossy().into_owned();
+        sh(&m, &["worktree", "add", "-q", "-b", "feat", &feat]);
+        std::fs::write(std::path::Path::new(&feat).join("feat.txt"), "x\n").unwrap();
+        sh(&feat, &["add", "feat.txt"]);
+        sh(&feat, &["commit", "-q", "-m", "feat work"]);
+        (top, m, feat)
+    }
+
+    #[test]
+    fn made_worktrees_branch_from_the_source_and_merge_back_into_it() {
+        let (top, main, feat) = repo_with_feature();
+        let made = make_worktree(&feat, "Fix The Thing").unwrap().unwrap();
+        assert_eq!(made["branch"], "worktree-fix-the-thing");
+        assert_eq!(made["base"], "feat");
+        let path = made["path"].as_str().unwrap().to_string();
+        assert!(std::path::Path::new(&path).join("feat.txt").is_file());
+        let again = make_worktree(&feat, "Fix The Thing").unwrap().unwrap();
+        assert_eq!(again["branch"], "worktree-fix-the-thing-2");
+        drop_worktree(&again);
+        assert!(!std::path::Path::new(again["path"].as_str().unwrap()).exists());
+
+        let listed = worktrees(&main);
+        let wt = listed["worktrees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["branch"] == "worktree-fix-the-thing")
+            .unwrap()
+            .clone();
+        assert_eq!((wt["base"].clone(), wt["base_recorded"].clone()), (json!("feat"), json!(true)));
+
+        std::fs::write(std::path::Path::new(&path).join("bg.txt"), "bg\n").unwrap();
+        sh(&path, &["add", "bg.txt"]);
+        sh(&path, &["commit", "-q", "-m", "bg change"]);
+        let diff = worktree_diff(&main, &path);
+        assert_eq!(diff["base"], "feat");
+        assert!(!diff["stat"].as_str().unwrap().contains("feat.txt"));
+
+        std::fs::write(std::path::Path::new(&feat).join("feat.txt"), "edited\n").unwrap();
+        let refused = finish(&main, &path, "merge", false);
+        assert!(refused["error"].as_str().unwrap().contains("checkout of feat has uncommitted"));
+        sh(&feat, &["checkout", "-q", "--", "feat.txt"]);
+
+        let merged = finish(&main, &path, "merge", false);
+        assert_eq!(merged["ok"], json!(true), "{merged}");
+        assert!(std::path::Path::new(&feat).join("bg.txt").is_file());
+        assert!(!std::path::Path::new(&main).join("bg.txt").exists());
+
+        let gone = finish(&main, &path, "discard", false);
+        assert_eq!(gone["ok"], json!(true), "{gone}");
+        assert!(!recorded_bases(&main).contains_key("worktree-fix-the-thing"));
+        assert!(!branch_exists(&main, "worktree-fix-the-thing"));
+        let _ = std::fs::remove_dir_all(top);
+    }
 }
 
 // -- finishing a worktree: changes.finish -------------------------------------
@@ -431,7 +626,7 @@ mod tests {
 pub const ACTIONS: &[&str] = &["merge", "pr", "discard"];
 
 /// changes._find: the worktree at `path` under `project`, and the base branch.
-fn find(project: &str, path: &str) -> Result<(Map<String, Value>, Value), Value> {
+fn find(project: &str, path: &str) -> Result<(Map<String, Value>, Value, Map<String, Value>), Value> {
     let listed = worktrees(project);
     if listed["ok"] != json!(true) {
         return Err(listed);
@@ -439,9 +634,14 @@ fn find(project: &str, path: &str) -> Result<(Map<String, Value>, Value), Value>
     let want = norm(path);
     for wt in listed["worktrees"].as_array().into_iter().flatten() {
         if norm(wt["path"].as_str().unwrap_or("")) == want {
+            let base = match &wt["base"] {
+                Value::String(b) if !b.is_empty() => wt["base"].clone(),
+                _ => listed["base"].clone(),
+            };
             return Ok((
                 wt.as_object().cloned().unwrap_or_default(),
-                listed["base"].clone(),
+                base,
+                listed["checkouts"].as_object().cloned().unwrap_or_default(),
             ));
         }
     }
@@ -513,7 +713,7 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
     if !ACTIONS.contains(&action) {
         return json!({"ok": false, "error": format!("action must be one of {}", ACTIONS.join(", "))});
     }
-    let (wt, base) = match find(project, path) {
+    let (wt, base, checkouts) = match find(project, path) {
         Ok(f) => f,
         Err(e) => return e,
     };
@@ -546,21 +746,26 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
                         json!({"ok": false, "error": "the worktree has uncommitted changes"}),
                     );
                 }
-                let main = git(
-                    project,
-                    &["status", "--porcelain", "--untracked-files=no"],
-                    true,
-                )?;
-                if !crate::pyish::strip(&main).is_empty() {
-                    return Ok(
-                        json!({"ok": false, "error": "the main checkout has uncommitted changes"}),
-                    );
+                // Into its base branch, wherever that is checked out.
+                let Some(into) = checkouts
+                    .get(&base_s)
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                else {
+                    return Ok(json!({"ok": false, "error": format!(
+                        "{base_s} is not checked out anywhere - check it out to merge into it")}));
+                };
+                let status = git(&into, &["status", "--porcelain", "--untracked-files=no"], true)?;
+                if !crate::pyish::strip(&status).is_empty() {
+                    return Ok(json!({"ok": false, "error": format!(
+                        "the checkout of {base_s} has uncommitted changes")}));
                 }
                 if ahead == 0 {
                     return Ok(json!({"ok": false, "error": format!(
                         "nothing to merge - {branch} is not ahead of {base_s}")}));
                 }
-                match git(project, &["merge", "--no-ff", "--no-edit", &branch], true) {
+                match git(&into, &["merge", "--no-ff", "--no-edit", &branch], true) {
                     Ok(out) => Ok(
                         json!({"ok": true, "action": "merge", "branch": branch, "base": base,
                                          "output": tail(crate::pyish::strip(&out), 400)}),
@@ -569,12 +774,12 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
                         // A conflict or a refusal: either way the checkout
                         // goes back as it was.
                         let conflicted = !crate::pyish::strip(&git(
-                            project,
+                            &into,
                             &["diff", "--name-only", "--diff-filter=U"],
                             false,
                         )?)
                         .is_empty();
-                        git(project, &["merge", "--abort"], false)?;
+                        git(&into, &["merge", "--abort"], false)?;
                         Ok(json!({"ok": false, "error": if conflicted {
                             "merge conflicts - aborted, nothing changed".to_string()
                         } else {
@@ -632,11 +837,11 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
                 }
                 args.push(&wt_path);
                 git(project, &args, true)?;
-                git(
-                    project,
-                    &["branch", if force { "-D" } else { "-d" }, &branch],
-                    false,
-                )?;
+                // -D: what is unmerged was checked above, against the
+                // worktree's own base; -d would check the main checkout's.
+                git(project, &["branch", "-D", &branch], false)?;
+                let key = format!("branch.{branch}.{BASE_KEY}");
+                git(project, &["config", "--unset", &key], false)?;
                 Ok(json!({"ok": true, "action": "discard", "branch": branch}))
             }
         }

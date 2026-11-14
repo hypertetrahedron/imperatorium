@@ -1614,3 +1614,63 @@ class LookHead(unittest.TestCase):
     def test_settings_page_has_no_look(self):
         self.assertNotIn("<style id=lookvars", ui.render_settings("t", "b"))
         self.assertIn("<style id=lookvars", ui.render_matrix("b"))
+
+
+def reviewed_run(steps):
+    """The window's reviewed logic (its own section of SCRIPT) in node, with
+    the page around it stubbed: `steps` is JS run against it; returns the
+    session ids posted to /api/reviewed."""
+    sec = ui.SCRIPT[ui.SCRIPT.index("// -- reviewed --"):ui.SCRIPT.index("function showNewest")]
+    js = """
+let posted = [], now = 1e6;
+Date.now = () => now;
+globalThis.setTimeout = f => f();
+const document = {hidden: false, hasFocus: () => false};
+let view = "session", tab = "log", atEnd = true, pendingNow = [];
+let row = {sessionId: "a", attention: true, attention_since: 1, status: "idle"};
+const sessions = [row];
+const current = () => row, key = s => s.sessionId, $ = () => ({});
+const logAtEnd = () => atEnd, drawSessions = () => {};
+const post = (u, b) => { posted.push(b.session_id); return Promise.resolve({ok: false}); };
+""" + sec + "\nlogFresh = 'a';\n" + steps + "\nprocess.stdout.write(JSON.stringify(posted));"
+    out = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True,
+                         encoding="utf-8", timeout=30)
+    if out.returncode:
+        raise AssertionError(out.stderr)
+    return json.loads(out.stdout)
+
+
+@unittest.skipUnless(NODE, "node not installed")
+class ReviewedTests(unittest.TestCase):
+    """Reviewed takes something you did at the end of a finished session."""
+
+    def test_following_the_end_alone_is_not_reviewing(self):
+        # The log scrolled itself to the end, the window came back: no input.
+        self.assertEqual(reviewed_run("maybeReviewed(); maybeReviewed();"), [])
+
+    def test_input_at_the_end_reviews(self):
+        self.assertEqual(reviewed_run("touched();"), ["a"])
+
+    def test_input_away_from_the_end_does_not(self):
+        self.assertEqual(reviewed_run("atEnd = false; touched();"), [])
+
+    def test_input_long_ago_does_not_count(self):
+        self.assertEqual(reviewed_run(
+            "atEnd = false; touched(); now += 5000; atEnd = true; maybeReviewed();"), [])
+
+    def test_scrolling_to_the_end_with_your_wheel_reviews(self):
+        self.assertEqual(reviewed_run(
+            "atEnd = false; touched(); now += 300; atEnd = true; maybeReviewed();"), ["a"])
+
+    def test_work_in_progress_is_not_reviewed(self):
+        for busy in ('row.status = "busy"', 'row.status = "shell"', 'row.status = "waiting"',
+                     "row.waiting_tasks = 2", 'row.state = "blocked"',
+                     'pendingNow = [{session_id: "a"}]'):
+            self.assertEqual(reviewed_run(busy + "; touched();"), [], busy)
+
+
+class PermissionCardPlacementTests(unittest.TestCase):
+    def test_parked_requests_sit_at_the_foot_of_the_chat(self):
+        page = ui.render_shell()
+        self.assertLess(page.index("id=log"), page.index("id=decide"))
+        self.assertLess(page.index("id=decide"), page.index("id=ask"))

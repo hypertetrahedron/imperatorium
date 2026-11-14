@@ -325,6 +325,41 @@ class Reviewed(unittest.TestCase):
         self.assertNotIn("reviewed", rows[2])
         self.assertNotIn("reviewed", rows[3])
 
+    def test_work_in_progress_is_never_reviewed(self):
+        # Working, waiting on its own tasks, or blocked on a permission or a
+        # question: nothing there is finished enough to have been reviewed.
+        for busy in ({"status": "busy"}, {"status": "shell"}, {"status": "waiting"},
+                     {"state": "blocked"}, {"waitingFor": "permission"},
+                     {"status": "idle", "waiting_tasks": 1},
+                     {"status": "idle", "work": {"agents": 1}}):
+            row = dict(busy, sessionId="a", attention=True, attention_since=100.0)
+            self.assertTrue(registry.in_progress(row), busy)
+            registry.apply_reviewed([row], {"a": 150.0})
+            self.assertTrue(row["attention"], busy)
+            self.assertNotIn("reviewed", row)
+        self.assertFalse(registry.in_progress({"status": "idle", "work": {}}))
+
+    def test_mark_reviewed_refuses_work_in_progress(self):
+        from imperatorium.dispatcher import Control
+
+        class Fake:
+            def __init__(self, row):
+                self.row, self.marked = row, []
+                self.store = self
+            def _row(self, sid):
+                return self.row
+            def mark_reviewed(self, sid):
+                self.marked.append(sid)
+            def invalidate(self):
+                pass
+
+        busy = Fake({"sessionId": "a", "attention": True, "status": "idle", "waiting_tasks": 2})
+        got = Control.mark_reviewed(busy, "a")
+        self.assertEqual((got["reviewed"], busy.marked), (False, []))
+        done = Fake({"sessionId": "a", "attention": True, "status": "idle", "work": {}})
+        self.assertTrue(Control.mark_reviewed(done, "a")["reviewed"])
+        self.assertEqual(done.marked, ["a"])
+
     def test_store_keeps_when(self):
         d = tempfile.mkdtemp()
         try:

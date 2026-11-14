@@ -1,10 +1,10 @@
 {
   "matrix.html": {
-    "sha256": "6ca7d08795013cf668c193970e160634f56ea950b466ede3c71cacf6cc74b096",
+    "sha256": "406288603cf1cc49f582b92e83c5ead5a1548216f1e824f5ded9d5d0ef74429c",
     "look": true
   },
   "settings.html": {
-    "sha256": "e68da7e99146e37a56205d703ba560af2cf338220fc150bf3d5f4daa56c6532c",
+    "sha256": "1eab70e0f578fa54929d39d6d835b6ec45b8ef4cf20a3524cca2699aeb29e49a",
     "look": false
   },
   "settings_fields.json": {
@@ -12,7 +12,7 @@
     "look": null
   },
   "shell.html": {
-    "sha256": "de6b026045cd083f7ba86532c3e01e10ed87c920b66a02409528668fc4b24ad7",
+    "sha256": "69cfdfb402a9f5c3d0e153ee79e2835f9e8638e9f5c9b89d3355c853ece8f839",
     "look": true
   }
 }

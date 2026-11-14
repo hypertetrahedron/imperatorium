@@ -12,7 +12,7 @@ import tempfile
 import time
 import unittest
 
-from imperatorium import (background, closing, conversation, costs, deeplink, dispatcher,
+from imperatorium import (background, changes, closing, conversation, costs, deeplink, dispatcher,
                       hcore, inbox, procs, projects, registry, remote, slash, winfocus)
 from imperatorium.store import Store
 
@@ -70,6 +70,13 @@ class Base(unittest.TestCase):
         # hands the Control a fake core.
         self._orig_find_hc = hcore.find_exe
         hcore.find_exe = lambda: None
+        # Nor a real repository: CWD is a real folder on this machine, and a
+        # Background dispatch makes a worktree in it. Tests that want one
+        # replace this.
+        self._orig_make_wt = (changes.make_worktree, changes.drop_worktree)
+        self.made, self.dropped = [], []
+        changes.make_worktree = lambda source, name: self.made.append((source, name))
+        changes.drop_worktree = lambda made: self.dropped.append(made)
         registry.agents = lambda *a, **k: list(self.agent_rows)
         registry.session_files = lambda *a, **k: dict(self.files)
         inbox.send = lambda sock, tok, content, *a, **k: self.sent.append(
@@ -94,6 +101,7 @@ class Base(unittest.TestCase):
             background.start,
         ) = self._orig
         hcore.find_exe = self._orig_find_hc
+        changes.make_worktree, changes.drop_worktree = self._orig_make_wt
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def live(self, status="idle", sid=SID, cwd=CWD):
@@ -793,6 +801,39 @@ class Routing(Base):
         self.control.dispatch(project="laser-ledger", prompt="go", mode="background")
         self.assertEqual(seen.get("model"), "sonnet")
         self.assertEqual(seen.get("permission_mode"), "acceptEdits")
+
+    def test_background_runs_in_a_worktree_of_the_chosen_sessions_branch(self):
+        # The session picked lives in a feature-branch checkout beside the
+        # project; its worktree is made from there, and the session runs in it.
+        feat = os.path.join(self.dir, "ll-feat")
+        os.makedirs(feat)
+        self.live(cwd=feat)
+        self.control.invalidate()
+        made = {"path": os.path.join(self.dir, "wt"), "branch": "worktree-do-the-thing",
+                "base": "feat", "start": "feat", "main": CWD}
+        changes.make_worktree = lambda source, name: self.made.append((source, name)) or made
+        started = []
+        background.start = lambda prompt, cwd, **kw: (
+            started.append(cwd) or {"id": "abc12345", "command": [], "output": ""})
+        out = self.control.dispatch(project="laser-ledger", prompt="do the thing",
+                                    mode="background", session_id=SID)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(self.made, [(feat, "do-the-thing")])
+        self.assertEqual(started, [made["path"]])
+        self.assertEqual((out["branch"], out["base"]), ("worktree-do-the-thing", "feat"))
+
+    def test_a_worktree_whose_session_never_started_is_removed(self):
+        made = {"path": os.path.join(self.dir, "wt"), "branch": "worktree-go",
+                "base": "main", "start": "main", "main": CWD}
+        changes.make_worktree = lambda source, name: made
+
+        def boom(prompt, cwd, **kw):
+            raise background.BackgroundError("claude is not on PATH")
+
+        background.start = boom
+        out = self.control.dispatch(project="laser-ledger", prompt="go", mode="background")
+        self.assertFalse(out["ok"])
+        self.assertEqual(self.dropped, [made])
 
     def test_a_failed_background_start_is_reported_not_swallowed(self):
         def boom(prompt, cwd, **kw):

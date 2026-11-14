@@ -1,6 +1,7 @@
 //! Hand work to a background session, from `imperatorium/background.py`:
 //! `claude --bg "<prompt>"` starts a session with no terminal, prints a
-//! short id and returns. Claude Code isolates it in a worktree itself.
+//! short id and returns. A dispatch makes its worktree first
+//! (changes::make_worktree, from the chosen session's branch).
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

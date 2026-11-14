@@ -395,15 +395,28 @@ def attention_start(row):
     return row.get("attention_since") or row.get("status_changed_at") or 0
 
 
+def in_progress(row):
+    """True while there is still work going that nobody can review yet: the
+    session is working, waiting on tasks it started (shells, monitors,
+    subagents, wakeups), or blocked on a permission prompt or a question."""
+    return bool(row.get("status") in ACTIVE_STATUSES
+                or row.get("status") in ATTENTION_STATUSES
+                or row.get("state") == "blocked"
+                or row.get("waitingFor")
+                or row.get("waiting_tasks")
+                or pending_tasks(row))
+
+
 def apply_reviewed(rows, reviewed):
     """Rows whose wait you have already looked at stop asking for you.
 
     A row in attention whose session was reviewed at or after that attention
     began is `reviewed` instead; attention that starts later shows again.
+    Never while work is in progress (`in_progress`).
     """
     for row in rows:
         at = reviewed.get(row.get("sessionId")) if reviewed else None
-        if row.get("attention") and at and at >= attention_start(row):
+        if row.get("attention") and at and at >= attention_start(row)                 and not in_progress(row):
             row["attention"] = False
             row["reviewed"] = True
             row["reviewed_at"] = at

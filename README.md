@@ -182,8 +182,8 @@ only those additions go missing.
 
 Tabs above the conversation show the session's **Changes** (git status and
 diff), its **Activity** (every tool call, what failed and why) and the
-project's **Worktrees** (the branches background sessions leave, with merge,
-PR and discard). The header offers Fork, and Resume for a session that has
+project's **Worktrees** (the branches background sessions leave, each with
+the branch it was made from, and merge into that branch, PR and discard). The header offers Fork, and Resume for a session that has
 finished. **Queue** (alt+Enter) holds a prompt until the session's current
 turn ends. The sidebar groups by state or folder, pins, archives and
 filters; each tile says what the session is doing now, its context use and
@@ -464,9 +464,15 @@ python -m imperatorium.deeplink Y:/projects-software/gem-trip "fix it"
 `mode` is `auto` (inject if a session is live, else launch), `inject`, `launch`,
 `background`, or `dry-run`.
 
-`background` runs `claude --bg` in the project instead of opening a window -
-work you want done rather than a window you want to sit in. Claude Code
-isolates it in a worktree and commits on delete by itself. It still reports
+`background` runs `claude --bg` instead of opening a window - work you want
+done rather than a window you want to sit in. It runs in a worktree made
+here, at `.claude/worktrees/<name>` on branch `worktree-<name>`, from the
+branch checked out where the chosen session (`session_id`) works, else the
+project's; that branch is noted in git config
+(`branch.<worktree branch>.imperatoriumBase`), and the Worktrees tab diffs
+against it and merges into it, in whichever checkout has it. Left to Claude
+Code, the worktree would come from the remote's default branch. A folder
+that is not a git repository runs the session in place. It still reports
 through the same hooks, so it shows on the board and turns its key orange if
 it gets blocked. Options for it live under `background` in `config.json`.
 

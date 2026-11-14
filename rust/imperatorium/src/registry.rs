@@ -220,8 +220,19 @@ pub fn attention_start(row: &Row) -> f64 {
     0.0
 }
 
+/// registry.in_progress: work still going that nobody can review yet -
+/// working, waiting on its own tasks, or blocked on a permission or question.
+pub fn in_progress(row: &Row) -> bool {
+    s(row, "status").is_some_and(|x| ACTIVE_STATUSES.contains(&x) || ATTENTION_STATUSES.contains(&x))
+        || s(row, "state") == Some("blocked")
+        || truthy(row.get("waitingFor"))
+        || truthy(row.get("waiting_tasks"))
+        || !pending_tasks(row).is_empty()
+}
+
 /// registry.apply_reviewed: a row whose wait you have already looked at is
 /// `reviewed` rather than in attention; attention that starts later shows.
+/// Never while work is in progress.
 pub fn apply_reviewed(rows: &mut [Row], reviewed: &Map<String, Value>) {
     for row in rows.iter_mut() {
         let Some(at) = row
@@ -232,7 +243,9 @@ pub fn apply_reviewed(rows: &mut [Row], reviewed: &Map<String, Value>) {
         else {
             continue;
         };
-        if truthy(row.get("attention")) && at > 0.0 && at >= attention_start(row) {
+        if truthy(row.get("attention")) && at > 0.0 && at >= attention_start(row)
+            && !in_progress(row)
+        {
             row.insert("attention".into(), json!(false));
             row.insert("reviewed".into(), json!(true));
             row.insert("reviewed_at".into(), json!(at));
@@ -281,6 +294,32 @@ mod reviewed_tests {
         assert_eq!(rows[1]["reviewed"], json!(true));
         assert_eq!(rows[2]["attention"], json!(true));
         assert!(!rows[2].contains_key("reviewed"));
+    }
+
+    #[test]
+    fn work_in_progress_is_never_reviewed() {
+        let seen = json!({"a": 150.0});
+        for busy in [
+            json!({"status": "busy"}),
+            json!({"status": "shell"}),
+            json!({"status": "waiting"}),
+            json!({"state": "blocked"}),
+            json!({"waitingFor": "permission"}),
+            json!({"status": "idle", "waiting_tasks": 1}),
+            json!({"status": "idle", "work": {"agents": 1}}),
+        ] {
+            let mut row = busy.as_object().unwrap().clone();
+            row.insert("sessionId".into(), json!("a"));
+            row.insert("attention".into(), json!(true));
+            row.insert("attention_since".into(), json!(100.0));
+            assert!(in_progress(&row), "{busy}");
+            let mut rows = vec![row];
+            apply_reviewed(&mut rows, seen.as_object().unwrap());
+            assert_eq!(rows[0]["attention"], json!(true), "{busy}");
+            assert!(!rows[0].contains_key("reviewed"), "{busy}");
+        }
+        let idle = json!({"status": "idle", "work": {}}).as_object().unwrap().clone();
+        assert!(!in_progress(&idle));
     }
 }
 

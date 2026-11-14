@@ -1,9 +1,9 @@
 """Hand work to a background session instead of opening a window.
 
 `claude --bg "<prompt>"` starts a session with no terminal, prints a short id,
-and returns. Claude Code isolates it in a git worktree under `.claude/` before
-it edits anything, and on delete it commits and pushes rather than losing
-work. None of that is ours to build.
+and returns. A dispatch makes its worktree first (changes.make_worktree, from
+the chosen session's branch) and starts it there; on delete Claude Code
+commits and pushes rather than losing work.
 
 This is the right shape for "project: laser ledger, implement the new feature
 as recommended" - work you want done, not a window you want to sit in. The

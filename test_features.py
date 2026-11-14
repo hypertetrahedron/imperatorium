@@ -185,7 +185,7 @@ class Finish(ChangesRepo):
         write(os.path.join(self.dir, "f.txt"), "one\nmain change\n")
         out = changes.finish(self.dir, wt, "merge")
         self.assertFalse(out["ok"])
-        self.assertIn("main checkout has uncommitted changes", out["error"])
+        self.assertIn("checkout of main has uncommitted changes", out["error"])
 
     def test_merge_refuses_when_the_worktree_is_dirty(self):
         wt = add_agent_worktree(self.dir, name="x", branch="feature")
@@ -288,6 +288,110 @@ class Finish(ChangesRepo):
                              runner=lambda cmd, cwd=None: called.append(1))
         self.assertFalse(out["ok"])
         self.assertEqual(called, [])
+
+
+class MadeWorktrees(ChangesRepo):
+    """Background worktrees Imperatorium makes from the chosen session's
+    branch - here a long-lived `feat` checked out in a sibling worktree,
+    with `main` behind it."""
+
+    def setUp(self):
+        super().setUp()
+        self.feat = os.path.join(self.dir, "..", os.path.basename(self.dir) + "-feat")
+        run_git(self.dir, "worktree", "add", self.feat, "-b", "feat", "-q")
+        write(os.path.join(self.feat, "feat.txt"), "feature work\n")
+        run_git(self.feat, "add", "feat.txt")
+        run_git(self.feat, "commit", "-q", "-m", "feat work")
+
+    def tearDown(self):
+        shutil.rmtree(self.feat, ignore_errors=True)
+        super().tearDown()
+
+    def commit_in(self, path, name="bg.txt"):
+        write(os.path.join(path, name), "bg\n")
+        run_git(path, "add", name)
+        run_git(path, "commit", "-q", "-m", "bg change")
+
+    def test_made_from_the_sources_branch_not_main(self):
+        made = changes.make_worktree(self.feat, "Fix The Thing")
+        self.assertEqual((made["branch"], made["base"]), ("worktree-fix-the-thing", "feat"))
+        norm = lambda p: os.path.normcase(os.path.abspath(p))  # noqa: E731
+        self.assertEqual(norm(made["path"]),
+                         norm(os.path.join(self.dir, ".claude", "worktrees", "fix-the-thing")))
+        # It carries the feature branch's work, which main does not have.
+        self.assertTrue(os.path.isfile(os.path.join(made["path"], "feat.txt")))
+        wt = next(w for w in changes.worktrees(self.dir)["worktrees"]
+                  if w["branch"] == made["branch"])
+        self.assertTrue(wt["agent"] and wt["base_recorded"])
+        self.assertEqual((wt["base"], wt["ahead"], wt["behind"]), ("feat", 0, 0))
+
+    def test_names_do_not_collide(self):
+        a = changes.make_worktree(self.feat, "same")
+        b = changes.make_worktree(self.feat, "same")
+        self.assertEqual((a["branch"], b["branch"]), ("worktree-same", "worktree-same-2"))
+
+    def test_a_detached_source_gives_its_commit_and_no_base(self):
+        head = run_git(self.feat, "rev-parse", "HEAD").strip()
+        run_git(self.feat, "checkout", "-q", "--detach")
+        made = changes.make_worktree(self.feat, "d")
+        self.assertEqual((made["base"], made["start"]), (None, head))
+        wt = next(w for w in changes.worktrees(self.dir)["worktrees"]
+                  if w["branch"] == made["branch"])
+        self.assertEqual((wt["base"], wt["base_recorded"]), ("main", False))
+
+    def test_not_a_repo_is_none(self):
+        other = tempfile.mkdtemp()
+        try:
+            self.assertIsNone(changes.make_worktree(other, "x"))
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+
+    def test_merge_goes_into_its_base_where_that_is_checked_out(self):
+        made = changes.make_worktree(self.feat, "m")
+        self.commit_in(made["path"])
+        main_before = run_git(self.dir, "rev-parse", "HEAD").strip()
+        out = changes.finish(self.dir, made["path"], "merge")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["base"], "feat")
+        self.assertTrue(os.path.isfile(os.path.join(self.feat, "bg.txt")))
+        self.assertEqual(run_git(self.dir, "rev-parse", "HEAD").strip(), main_before)
+
+    def test_merge_refuses_a_dirty_base_checkout(self):
+        made = changes.make_worktree(self.feat, "m")
+        self.commit_in(made["path"])
+        write(os.path.join(self.feat, "feat.txt"), "edited\n")
+        out = changes.finish(self.dir, made["path"], "merge")
+        self.assertFalse(out["ok"])
+        self.assertIn("checkout of feat has uncommitted changes", out["error"])
+
+    def test_merge_refuses_a_base_checked_out_nowhere(self):
+        made = changes.make_worktree(self.feat, "m")
+        self.commit_in(made["path"])
+        run_git(self.feat, "checkout", "-q", "--detach")
+        out = changes.finish(self.dir, made["path"], "merge")
+        self.assertFalse(out["ok"])
+        self.assertIn("feat is not checked out anywhere", out["error"])
+
+    def test_diff_is_against_its_base(self):
+        made = changes.make_worktree(self.feat, "m")
+        self.commit_in(made["path"])
+        got = changes.worktree_diff(self.dir, made["path"])
+        self.assertEqual(got["base"], "feat")
+        self.assertIn("bg.txt", got["stat"])
+        self.assertNotIn("feat.txt", got["stat"])
+
+    def test_discard_forgets_the_base(self):
+        made = changes.make_worktree(self.feat, "m")
+        self.assertIn(made["branch"], changes.recorded_bases(self.dir))
+        out = changes.finish(self.dir, made["path"], "discard")
+        self.assertTrue(out["ok"], out)
+        self.assertNotIn(made["branch"], changes.recorded_bases(self.dir))
+
+    def test_drop_worktree_undoes_it(self):
+        made = changes.make_worktree(self.feat, "m")
+        changes.drop_worktree(made)
+        self.assertFalse(os.path.isdir(made["path"]))
+        self.assertEqual(run_git(self.dir, "branch", "--list", made["branch"]).strip(), "")
 
 
 def read_file(path):
