@@ -32,6 +32,7 @@ mod conversation;
 mod costs;
 mod deeplink;
 mod history;
+mod hotkey;
 mod hooks;
 mod http;
 mod inbox;
@@ -197,6 +198,7 @@ fn main() {
         Some("uninstall") => install::uninstall_main(&args[1..], home.as_deref()),
         Some("status") => install::status_main(&args[1..], home.as_deref()),
         Some("install-hooks") => install::install_hooks_main(&args[1..]),
+        Some("hotkey") => hotkey::main(&args[1..], home.as_deref()),
         #[cfg(feature = "streamdeck")]
         Some("streamdeck") => streamdeck::main(&args[1..], home.as_deref()),
         Some("serve") => {
