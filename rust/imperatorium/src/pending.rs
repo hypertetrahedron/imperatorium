@@ -4,6 +4,7 @@
 //! A park that expires is a silent "ask": the terminal prompts as it would
 //! have without any of this, so never answering is always safe.
 
+use crate::locks::LockExt;
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -61,7 +62,7 @@ impl Pending {
                 item.insert("input".into(), json!(take(&joined.join(" / "), 400)));
             }
         }
-        let mut items = self.items.lock().unwrap();
+        let mut items = self.items.lk();
         items.insert(id.clone(), item);
         self.changed.notify_all();
         // Python's min(max(nan, 0), 600) is nan, and a nan deadline is
@@ -78,7 +79,7 @@ impl Pending {
             if decided || left.is_zero() {
                 break;
             }
-            items = self.changed.wait_timeout(items, left).unwrap().0;
+            items = self.changed.wait_timeout(items, left).unwrap_or_else(std::sync::PoisonError::into_inner).0;
         }
         let item = items.get(&id).cloned().unwrap_or_default();
         let mut verdict = item.get("verdict").cloned().unwrap_or(Value::Null);
@@ -103,7 +104,7 @@ impl Pending {
             return false;
         };
         let Some(id) = id.as_str() else { return false };
-        let mut items = self.items.lock().unwrap();
+        let mut items = self.items.lk();
         let Some(item) = items.get_mut(id) else {
             return false;
         };
@@ -125,7 +126,7 @@ impl Pending {
 
     /// Pending.waiting: everything still awaiting an answer, oldest first.
     pub fn waiting(&self) -> Vec<Value> {
-        let items = self.items.lock().unwrap();
+        let items = self.items.lk();
         let mut out: Vec<Value> = items
             .values()
             .filter(|i| i["verdict"].is_null())

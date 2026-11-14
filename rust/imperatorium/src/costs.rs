@@ -413,19 +413,30 @@ impl History {
         if known && state.size == size && state.mtime == mtime {
             return false;
         }
-        let Ok(bytes) = std::fs::read(path) else {
+        // Only what was appended is read: the head (to tell a file that was
+        // replaced) and the bytes past the offset - the same bytes, and the
+        // same verdicts, as reading the whole file and slicing it.
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut f) = std::fs::File::open(path) else {
             return false;
         };
-        let head_now = &bytes[..bytes.len().min(HEAD)];
-        if size < state.size
-            || (state.offset > 0 && head_now != &state.head[..state.head.len().min(HEAD)])
-        {
+        let mut head_now = Vec::with_capacity(HEAD);
+        if (&mut f).take(HEAD as u64).read_to_end(&mut head_now).is_err() {
+            return false;
+        }
+        let reset = size < state.size
+            || (state.offset > 0 && head_now[..] != state.head[..state.head.len().min(HEAD)]);
+        let from = if reset { 0 } else { state.offset };
+        let mut data = Vec::new();
+        // Past the end (the file shrank since it was looked at) reads nothing.
+        if f.seek(SeekFrom::Start(from)).is_err() || f.read_to_end(&mut data).is_err() {
+            return false;
+        }
+        if reset {
             state.reset();
         }
-        let from = (state.offset as usize).min(bytes.len());
-        let data = bytes[from..].to_vec();
         if state.offset == 0 {
-            state.head = head_now.to_vec();
+            state.head = head_now;
         }
         state.offset += data.len() as u64;
         state.size = size;

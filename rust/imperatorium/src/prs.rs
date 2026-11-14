@@ -4,6 +4,7 @@
 //! is showing and rows read the cache. A folder whose branch has no PR is
 //! remembered as such (one call per refresh period, not per poll).
 
+use crate::locks::LockExt;
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -145,7 +146,7 @@ impl Tracker {
             return None;
         }
         let key = crate::paths::abs_normcase(cwd).unwrap_or_else(|| cwd.to_string());
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lk();
         inner.wanted.insert(cwd.to_string(), now());
         inner.cache.get(&key).and_then(|e| e.pr.clone())
     }
@@ -164,19 +165,19 @@ impl Tracker {
     pub fn poll_once(&self) {
         let t = now();
         let wanted: Vec<String> = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lk();
             inner.wanted.retain(|_, asked| t - *asked <= 10.0 * REFRESH);
             inner.wanted.keys().cloned().collect()
         };
         for cwd in wanted {
-            if self.inner.lock().unwrap().disabled.is_some() {
+            if self.inner.lk().disabled.is_some() {
                 return;
             }
             let key = crate::paths::abs_normcase(&cwd).unwrap_or_else(|| cwd.clone());
             let Ok(branch) = crate::changes::git(&cwd, &["branch", "--show-current"], true) else { continue };
             let branch = crate::pyish::strip(&branch).to_string();
             {
-                let inner = self.inner.lock().unwrap();
+                let inner = self.inner.lk();
                 if let Some(hit) = inner.cache.get(&key) {
                     if hit.branch == branch && t - hit.at < REFRESH {
                         continue;
@@ -185,11 +186,11 @@ impl Tracker {
             }
             match lookup(&cwd) {
                 Err(e) => {
-                    self.inner.lock().unwrap().disabled = Some(e);
+                    self.inner.lk().disabled = Some(e);
                     return;
                 }
                 Ok(pr) => {
-                    self.inner.lock().unwrap().cache.insert(key, Entry { at: t, pr, branch });
+                    self.inner.lk().cache.insert(key, Entry { at: t, pr, branch });
                 }
             }
         }

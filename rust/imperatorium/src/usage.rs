@@ -3,6 +3,7 @@
 //! the account's windows, kept in limits.json beside the state so a restart
 //! shows the meters at once (written only when this binary has a store).
 
+use crate::locks::LockExt;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -212,13 +213,13 @@ fn fkey(v: Option<f64>) -> String {
 
 impl Usage {
     pub fn thresholds(&self) -> Vec<f64> {
-        self.thresholds.lock().unwrap().clone()
+        self.thresholds.lk().clone()
     }
 
     /// A saved budget.thresholds applies at once, sorted, as in Python.
     pub fn set_thresholds(&self, mut t: Vec<f64>) {
         t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        *self.thresholds.lock().unwrap() = t;
+        *self.thresholds.lk() = t;
     }
 
     pub fn new(thresholds: Vec<f64>, path: Option<PathBuf>, writes: bool, now: f64) -> Self {
@@ -258,7 +259,7 @@ impl Usage {
         else {
             return;
         };
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lk();
         for (name, w) in got
             .get("limits")
             .and_then(Value::as_object)
@@ -318,7 +319,7 @@ impl Usage {
     pub fn ingest(&self, key: &str, payload: &Map<String, Value>, now: f64) -> Option<Value> {
         let got = reading(payload);
         let mut crossings: Vec<Value> = Vec::new();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lk();
         let mut rec = got.clone();
         rec.insert("at".into(), json!(now));
         inner.sessions.insert(key.into(), rec);
@@ -373,16 +374,16 @@ impl Usage {
     }
 
     pub fn forget(&self, key: &str) {
-        self.inner.lock().unwrap().sessions.remove(key);
+        self.inner.lk().sessions.remove(key);
     }
 
     pub fn session(&self, key: &str) -> Option<Map<String, Value>> {
-        self.inner.lock().unwrap().sessions.get(key).cloned()
+        self.inner.lk().sessions.get(key).cloned()
     }
 
     /// Usage.summary: the account's windows, each with its pace.
     pub fn summary(&self, now: f64) -> Value {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lk();
         let mut out = Map::new();
         for (name, w) in &inner.limits {
             let resets = num(w.get("resets_at"));

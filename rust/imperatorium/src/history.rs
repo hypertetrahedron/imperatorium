@@ -2,8 +2,10 @@
 //! `imperatorium/history.py`'s `Index` (list, text cache, search) and its
 //! pure pieces (`info_dict`, `plain_text`, `matches`, `snippet`).
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use crate::locks::LockExt;
+use std::sync::{Arc, Mutex};
+
+use indexmap::IndexMap;
 use std::time::Instant;
 
 use serde_json::{json, Map, Value};
@@ -152,26 +154,36 @@ pub fn matches(query: &str, record: &Map<String, Value>, text: &str) -> Option<&
 }
 
 /// One listing of the sessions and when it was taken.
-type Listed = (Instant, Vec<Map<String, Value>>);
+type Listed = (Instant, Arc<Vec<Map<String, Value>>>);
+
+/// The plain-text cache's budget: total bytes of text kept.
+const TEXT_BUDGET: usize = 64 * 1024 * 1024;
+
+/// Each session's plain text, least recently used first, by its size then.
+#[derive(Default)]
+struct Texts {
+    by_sid: IndexMap<String, (Value, Arc<str>)>,
+    bytes: usize,
+}
 
 pub struct Index {
     listed: Mutex<Option<Listed>>,
-    text: Mutex<HashMap<String, (Value, String)>>,
+    text: Mutex<Texts>,
 }
 
 impl Index {
     pub fn new() -> Self {
         Index {
             listed: Mutex::new(None),
-            text: Mutex::new(HashMap::new()),
+            text: Mutex::new(Texts::default()),
         }
     }
 
     /// Index.list: newest first, at most MAX_SESSIONS, cached 30 s.
-    pub fn list(&self) -> Vec<Map<String, Value>> {
-        if let Some((at, rows)) = self.listed.lock().unwrap().as_ref() {
+    pub fn list(&self) -> Arc<Vec<Map<String, Value>>> {
+        if let Some((at, rows)) = self.listed.lk().as_ref() {
             if at.elapsed().as_secs_f64() < 30.0 {
-                return rows.clone();
+                return Arc::clone(rows);
             }
         }
         let mut rows: Vec<Map<String, Value>> = match crate::sessions::list_json() {
@@ -188,27 +200,53 @@ impl Index {
             m(b).partial_cmp(&m(a)).unwrap_or(std::cmp::Ordering::Equal)
         });
         rows.truncate(MAX_SESSIONS);
-        *self.listed.lock().unwrap() = Some((Instant::now(), rows.clone()));
+        let rows = Arc::new(rows);
+        *self.listed.lk() = Some((Instant::now(), Arc::clone(&rows)));
         rows
     }
 
     /// Index.text: a session's plain text, read again when its size moves.
-    fn text(&self, record: &Map<String, Value>, read: &dyn Fn(&str) -> Vec<Value>) -> String {
+    /// `read` gives the text, or None when the session cannot be read: that
+    /// is "" for this search, as in Python, but not remembered, so the next
+    /// search tries again. The cache is bounded by TEXT_BUDGET bytes, the
+    /// least recently used text going first.
+    fn text(&self, record: &Map<String, Value>, read: &dyn Fn(&str) -> Option<String>) -> Arc<str> {
         let sid = record.get("session_id").map(py_str).unwrap_or_default();
         let size = record.get("size").cloned().unwrap_or(Value::Null);
-        if let Some((s, t)) = self.text.lock().unwrap().get(&sid) {
-            if *s == size {
-                return t.clone();
+        {
+            let mut t = self.text.lk();
+            if let Some(i) = t.by_sid.get_index_of(&sid) {
+                if t.by_sid[i].0 == size {
+                    let last = t.by_sid.len() - 1;
+                    t.by_sid.move_index(i, last);
+                    return Arc::clone(&t.by_sid[last].1);
+                }
             }
         }
-        let text = plain_text(&read(&sid));
-        self.text.lock().unwrap().insert(sid, (size, text.clone()));
+        let Some(text) = read(&sid) else {
+            return Arc::from("");
+        };
+        let text: Arc<str> = Arc::from(text);
+        let mut t = self.text.lk();
+        if let Some((_, old)) = t.by_sid.shift_remove(&sid) {
+            t.bytes -= old.len();
+        }
+        if text.len() <= TEXT_BUDGET {
+            t.bytes += text.len();
+            t.by_sid.insert(sid, (size, Arc::clone(&text)));
+            while t.bytes > TEXT_BUDGET {
+                match t.by_sid.shift_remove_index(0) {
+                    Some((_, (_, old))) => t.bytes -= old.len(),
+                    None => break,
+                }
+            }
+        }
         text
     }
 
     /// Index.search: newest first; full text read until `budget` seconds
     /// are spent, so a first search answers rather than hanging.
-    pub fn search(&self, query: &str, limit: usize, read: &dyn Fn(&str) -> Vec<Value>) -> Value {
+    pub fn search(&self, query: &str, limit: usize, read: &dyn Fn(&str) -> Option<String>) -> Value {
         let query = strip(query);
         let rows = self.list();
         if query.is_empty() {
@@ -230,8 +268,8 @@ impl Index {
             .map(|s| s.to_string())
             .unwrap_or_default();
         let (mut out, mut complete) = (Vec::new(), true);
-        for r in &rows {
-            let mut text = String::new();
+        for r in rows.iter() {
+            let mut text: Arc<str> = Arc::from("");
             let mut found = matches(query, r, "");
             if found.is_none() {
                 if Instant::now() > deadline {
@@ -243,7 +281,7 @@ impl Index {
             }
             if let Some(w) = found {
                 let source = if !text.is_empty() {
-                    text.clone()
+                    text.to_string()
                 } else {
                     [r.get("first_prompt"), r.get("title")]
                         .into_iter()

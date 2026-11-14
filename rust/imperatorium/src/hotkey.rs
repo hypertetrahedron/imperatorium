@@ -59,7 +59,9 @@ pub fn candidates(over: Option<&str>, config: &Value) -> Vec<String> {
 /// raised instead; "(2) Imperatorium" (sessions waiting) is allowed.
 pub fn is_app_title(title: &str) -> bool {
     let t = title.trim();
-    let t = match regex::Regex::new(r"^\(\d+\)\s+").unwrap().find(t) {
+    static COUNT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let count = COUNT.get_or_init(|| regex::Regex::new(r"^\(\d+\)\s+").expect("the count pattern"));
+    let t = match count.find(t) {
         Some(m) => &t[m.end()..],
         None => t,
     };

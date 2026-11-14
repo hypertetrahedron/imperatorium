@@ -17,6 +17,7 @@
 //! sessions are not touched. The hosts' builds are refreshed too, so the
 //! dispatcher's next push matches.
 
+use crate::locks::LockExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -171,7 +172,7 @@ impl Checker {
     /// What the window shows: this version, the newest one the last check
     /// saw, its notes, and whether an update is under way.
     pub fn status(&self, cfg: &Value) -> Value {
-        let mut s = self.state.lock().unwrap().clone();
+        let mut s = self.state.lk().clone();
         if let Some(o) = s.as_object_mut() {
             o.insert("current".into(), Value::from(version()));
             o.insert("channel".into(), Value::from(channel_of(cfg)));
@@ -198,7 +199,7 @@ impl Checker {
             Err(e) => next["error"] = Value::from(e),
         }
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.state.lk();
             if let Some(a) = st.get("applying").cloned() {
                 next["applying"] = a;
             }
@@ -225,7 +226,7 @@ impl Checker {
     /// Run `imperatorium update` for the version the last check found. Its
     /// output goes to `update.log` in the state folder.
     pub fn apply(&self, cfg: &Value, log: &Path) -> Value {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lk();
         if st.get("newer") != Some(&Value::Bool(true)) {
             return serde_json::json!({"ok": false, "error": "no newer version known - check first"});
         }
@@ -387,9 +388,9 @@ mod tests {
         // Nothing to install before a check has found something newer.
         let log = std::env::temp_dir().join("imperatorium-update-test.log");
         assert_eq!(c.apply(&cfg, &log)["ok"], false);
-        *c.state.lock().unwrap() = serde_json::json!({"newer": true, "latest": "9.9.9", "installable": false});
+        *c.state.lk() = serde_json::json!({"newer": true, "latest": "9.9.9", "installable": false});
         assert!(c.apply(&cfg, &log)["error"].as_str().unwrap().contains("no build"));
-        *c.state.lock().unwrap() = serde_json::json!({"newer": true, "latest": "9.9.9", "applying": epoch()});
+        *c.state.lk() = serde_json::json!({"newer": true, "latest": "9.9.9", "applying": epoch()});
         assert!(c.apply(&cfg, &log)["error"].as_str().unwrap().contains("under way"));
     }
 

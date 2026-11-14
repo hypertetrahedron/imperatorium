@@ -496,6 +496,40 @@ pub fn merge_turns(items: Vec<Value>) -> Vec<Value> {
     merged
 }
 
+/// merge_turns of borrowed items: each item copied once, into its place.
+pub fn merge_turns_ref(items: &[Value]) -> Vec<Value> {
+    let mut merged: Vec<Value> = Vec::new();
+    for item in items {
+        let joins = match merged.last() {
+            Some(prev) => {
+                (item["speaker"] == prev["speaker"]
+                    && item.get("via") == prev.get("via")
+                    && item.get("note") == prev.get("note"))
+                    || (item["speaker"] == TOOLS && prev["speaker"] == CLAUDE)
+            }
+            None => false,
+        };
+        let into = if joins {
+            merged
+                .last_mut()
+                .and_then(|m| m.get_mut("blocks"))
+                .and_then(Value::as_array_mut)
+        } else {
+            None
+        };
+        match into {
+            Some(blocks) => {
+                if let Some(extra) = item["blocks"].as_array() {
+                    blocks.extend(extra.iter().cloned());
+                }
+            }
+            None if joins => {} // a previous item without blocks (merge_turns would panic)
+            None => merged.push(item.clone()),
+        }
+    }
+    merged
+}
+
 /// The newest `blocks` blocks of merged items: (items, start, first_block).
 pub fn tail_blocks(items: &[Value], blocks: i64) -> (Vec<Value>, usize, usize) {
     if blocks <= 0 {
@@ -525,6 +559,21 @@ pub fn tail_blocks(items: &[Value], blocks: i64) -> (Vec<Value>, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merging_borrowed_items_matches_merge_turns() {
+        let items = vec![
+            json!({"speaker": "you", "blocks": [{"kind": "text", "text": "a"}]}),
+            json!({"speaker": CLAUDE, "blocks": [{"kind": "text", "text": "b"}]}),
+            json!({"speaker": TOOLS, "blocks": [{"kind": "tool", "name": "Bash"}]}),
+            json!({"speaker": CLAUDE, "blocks": [{"kind": "text", "text": "c"}]}),
+            json!({"speaker": "you", "via": "peer", "blocks": [{"kind": "text", "text": "d"}]}),
+            json!({"speaker": "you", "blocks": [{"kind": "text", "text": "e"}]}),
+            json!({"speaker": "you", "blocks": [{"kind": "text", "text": "f"}]}),
+        ];
+        assert_eq!(merge_turns_ref(&items), merge_turns(items.clone()));
+        assert_eq!(merge_turns_ref(&items).len(), 4);
+    }
 
     #[test]
     fn peer_wrapper_is_removed() {

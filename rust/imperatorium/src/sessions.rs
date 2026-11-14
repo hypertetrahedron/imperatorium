@@ -23,6 +23,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::locks::LockExt;
 use crate::pyish::{py_regex, strip, truthy};
 
 const LITE_READ_BUF_SIZE: u64 = 65536;
@@ -634,19 +635,67 @@ pub fn info_json(session_id: &str) -> Value {
 /// returns for each (custom title, else summary, else ""). The dispatcher
 /// asks for every tile's title on each snapshot, and one process per tile
 /// would cost more than the read.
+///
+/// The project folders are listed once per call (info_json lists them per
+/// id), and a title is kept per file and read again only when the file's
+/// size or mtime moves. Which file answers is info_json's: the first folder
+/// holding a readable, non-empty one.
 pub fn titles_json(ids: &[String]) -> Value {
+    type Seen = HashMap<PathBuf, (u64, Option<std::time::SystemTime>, String)>;
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<Seen>> = std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    let dirs: Vec<PathBuf> = dirents(&projects_dir())
+        .into_iter()
+        .filter(|d| d.is_dir())
+        .collect();
     let mut out = Map::new();
     for id in ids {
-        let info = info_json(id);
-        let title = info
-            .get("custom_title")
-            .and_then(Value::as_str)
-            .filter(|t| !t.is_empty())
-            .or_else(|| info.get("summary").and_then(Value::as_str))
-            .unwrap_or("");
-        out.insert(id.clone(), Value::String(title.to_string()));
+        let mut title = String::new();
+        if valid_uuid(id) {
+            let name = format!("{id}.jsonl");
+            for dir in &dirs {
+                let path = dir.join(&name);
+                let Ok(meta) = fs::metadata(&path) else {
+                    continue;
+                };
+                let stamp = (meta.len(), meta.modified().ok());
+                let known = seen
+                    .lk()
+                    .get(&path)
+                    .filter(|(size, mtime, _)| (*size, *mtime) == stamp)
+                    .map(|(_, _, t)| t.clone());
+                if let Some(t) = known {
+                    title = t;
+                    break;
+                }
+                // read_lite is None for a file that is empty or unreadable:
+                // info_json goes on to the next folder then.
+                let Some(lite) = read_lite(&path) else {
+                    continue;
+                };
+                let info = info_from_lite(id, &lite).unwrap_or(Value::Null);
+                title = title_of(&info);
+                let mut s = seen.lk();
+                if s.len() >= 4096 {
+                    s.clear();
+                }
+                s.insert(path, (stamp.0, stamp.1, title.clone()));
+                break;
+            }
+        }
+        out.insert(id.clone(), Value::String(title));
     }
     Value::Object(out)
+}
+
+/// conversation.title() of a session's info: custom title, else summary.
+fn title_of(info: &Value) -> String {
+    info.get("custom_title")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+        .or_else(|| info.get("summary").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string()
 }
 
 /// `list_sessions()`: every project, newest first, one row per session id.

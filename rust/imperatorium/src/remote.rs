@@ -27,6 +27,7 @@
 //! A dead host must never stall a poll: every call is bounded, each host is
 //! polled on its own thread, and a failing host is parked with a backoff.
 
+use crate::locks::LockExt;
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -274,12 +275,12 @@ fn vias() -> &'static Mutex<HashMap<String, Via>> {
 }
 
 fn set_via(host: &str, via: Via) {
-    vias().lock().unwrap().insert(host.to_string(), via);
+    vias().lk().insert(host.to_string(), via);
 }
 
 /// A host load_hosts never saw is an SSH destination by that name.
 pub fn via_of(host: &str) -> Via {
-    vias().lock().unwrap().get(host).cloned().unwrap_or(Via {
+    vias().lk().get(host).cloned().unwrap_or(Via {
         ssh: Some(host.to_string()),
         container: None,
         docker: "docker".into(),
@@ -521,11 +522,11 @@ impl Deploy {
 
     /// Forget the check, so the next use looks again (a channel died).
     pub fn doubt(&self) {
-        *self.ready.lock().unwrap() = None;
+        *self.ready.lk() = None;
     }
 
     pub fn status(&self) -> Value {
-        match self.ready.lock().unwrap().as_ref() {
+        match self.ready.lk().as_ref() {
             Some(h) => json!({"binary": "ok", "sha256": h}),
             None => json!({"binary": null}),
         }
@@ -533,7 +534,7 @@ impl Deploy {
 
     /// Ok once the host has the same binary as this machine's build for it.
     pub fn ensure(&self) -> Result<(), String> {
-        let mut ready = self.ready.lock().unwrap();
+        let mut ready = self.ready.lk();
         if ready.is_some() {
             return Ok(());
         }
@@ -753,7 +754,7 @@ impl Channel {
 
     /// One request and its reply.
     pub fn call(&self, mut req: Map<String, Value>, timeout: f64) -> Result<Map<String, Value>, String> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lk();
         if st.live.is_none() {
             // A host that just failed is not re-dialled on every poll.
             if let Some(e) = &st.error {
@@ -937,7 +938,7 @@ impl Fleet {
     }
 
     pub fn status(&self) -> Map<String, Value> {
-        let st = self.state.lock().unwrap();
+        let st = self.state.lk();
         let mut out = Map::new();
         for h in &self.hosts {
             if let Some(rec) = st.get(&h.name) {
@@ -954,7 +955,7 @@ impl Fleet {
     }
 
     fn due(&self, name: &str) -> bool {
-        match self.state.lock().unwrap().get(name) {
+        match self.state.lk().get(name) {
             None => true,
             Some(rec) => now() >= rec.get("next_attempt").and_then(Value::as_f64).unwrap_or(0.0),
         }
@@ -963,13 +964,12 @@ impl Fleet {
     fn ok(&self, name: &str) {
         let rec = json!({"fails": 0, "next_attempt": 0, "error": null, "polled_at": now()});
         self.state
-            .lock()
-            .unwrap()
+            .lk()
             .insert(name.into(), rec.as_object().unwrap().clone());
     }
 
     fn failed(&self, name: &str, error: &str) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lk();
         let rec = st.get(name).cloned().unwrap_or_default();
         let fails = rec.get("fails").and_then(Value::as_u64).unwrap_or(0) + 1;
         let delay = (BACKOFF_START * 2f64.powi(fails as i32 - 1)).min(BACKOFF_MAX);
@@ -994,7 +994,7 @@ impl Fleet {
                 vec![]
             }
         };
-        self.rows.lock().unwrap().insert(name.clone(), rows);
+        self.rows.lk().insert(name.clone(), rows);
     }
 
     /// Each row's transcript numbers as `row["stat"]`: extra, never needed.
@@ -1019,7 +1019,7 @@ impl Fleet {
 
     /// Every host's latest rows, in config order.
     pub fn rows(&self) -> Vec<Row> {
-        let rows = self.rows.lock().unwrap();
+        let rows = self.rows.lk();
         self.hosts
             .iter()
             .flat_map(|h| rows.get(&h.name).cloned().unwrap_or_default())
@@ -1047,14 +1047,13 @@ impl Fleet {
             }
             let parked = self
                 .state
-                .lock()
-                .unwrap()
+                .lk()
                 .get(&p.host.name)
                 .and_then(|r| r.get("next_attempt").and_then(Value::as_f64))
                 .unwrap_or(0.0);
             let wait = if parked > 0.0 { (parked - now()).max(1.0) } else { self.every };
             let (lock, cv) = &*p.wake;
-            let woken = lock.lock().unwrap();
+            let woken = lock.lk();
             let (mut woken, _) = cv
                 .wait_timeout_while(woken, Duration::from_secs_f64(wait), |w| !*w)
                 .unwrap();
@@ -1064,12 +1063,12 @@ impl Fleet {
 
     /// Fleet.refresh: ask every host again now, parked or not.
     pub fn refresh(&self) -> usize {
-        for rec in self.state.lock().unwrap().values_mut() {
+        for rec in self.state.lk().values_mut() {
             rec.insert("next_attempt".into(), json!(0));
         }
         for p in &self.each {
             let (lock, cv) = &*p.wake;
-            *lock.lock().unwrap() = true;
+            *lock.lk() = true;
             cv.notify_all();
         }
         self.hosts.len()
@@ -1149,7 +1148,7 @@ impl Tunnel {
     }
 
     pub fn status(&self) -> Value {
-        let mut out = self.state.lock().unwrap().clone();
+        let mut out = self.state.lk().clone();
         out.insert("local_port".into(), json!(self.local_port));
         out.insert("remote_port".into(), json!(self.remote_port));
         Value::Object(out)
@@ -1164,7 +1163,7 @@ impl Tunnel {
     }
 
     fn down(&self, reason: &str) -> f64 {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lk();
         let fails = st.get("fails").and_then(Value::as_u64).unwrap_or(0) + 1;
         let delay = (5.0 * 2f64.powi(fails as i32 - 1)).min(BACKOFF_MAX);
         st.insert("up".into(), json!(false));
@@ -1220,7 +1219,7 @@ impl Tunnel {
                 for line in std::io::BufReader::new(out).lines() {
                     let Ok(line) = line else { break };
                     if line == "ready" {
-                        let mut st = self.state.lock().unwrap();
+                        let mut st = self.state.lk();
                         st.insert("up".into(), json!(true));
                         st.insert("since".into(), json!(started));
                         st.insert("error".into(), Value::Null);
@@ -1236,7 +1235,7 @@ impl Tunnel {
             let said = err.and_then(|h| h.join().ok()).unwrap_or_default();
             let reason = last_line(&text(&said), format!("hook relay exited {code}"));
             if now() - started > 120.0 {
-                self.state.lock().unwrap().insert("fails".into(), json!(0));
+                self.state.lk().insert("fails".into(), json!(0));
             }
             let delay = self.down(&reason);
             std::thread::sleep(Duration::from_secs_f64(delay));
@@ -1264,7 +1263,7 @@ impl Tunnel {
             };
             bind_to_us(&child);
             {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.state.lk();
                 st.insert("up".into(), json!(true));
                 st.insert("since".into(), json!(started));
                 st.insert("error".into(), Value::Null);
@@ -1278,7 +1277,7 @@ impl Tunnel {
             // A tunnel that held a while and dropped is a network blip, not
             // a broken host: no long backoff for it.
             if now() - started > 120.0 {
-                self.state.lock().unwrap().insert("fails".into(), json!(0));
+                self.state.lk().insert("fails".into(), json!(0));
             }
             let delay = self.down(&reason);
             std::thread::sleep(Duration::from_secs_f64(delay));
@@ -1490,7 +1489,7 @@ pub fn hook_relay_main(args: &[String]) -> i32 {
     });
     let out = Arc::new(Mutex::new(std::io::stdout()));
     {
-        let mut o = out.lock().unwrap();
+        let mut o = out.lk();
         if writeln!(o, "ready").and_then(|_| o.flush()).is_err() {
             return 1;
         }
@@ -1518,7 +1517,7 @@ pub fn hook_relay_main(args: &[String]) -> i32 {
             continue;
         }
         {
-            let mut o = out.lock().unwrap();
+            let mut o = out.lk();
             if writeln!(o, "{v}").and_then(|_| o.flush()).is_err() {
                 return 0;
             }

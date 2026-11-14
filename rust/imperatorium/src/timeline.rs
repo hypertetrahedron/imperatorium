@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
 
@@ -561,12 +561,17 @@ fn agent_spans(path: &Path, calls: &[Call], call_ix: &HashMap<String, usize>, tu
 /// The timeline of session `session_id` on this machine, reread only when its
 /// transcript (or a subagent's) has changed since the last ask.
 pub fn of_session(session_id: &str, known: &str) -> Value {
-    static CACHE: Mutex<Option<(PathBuf, String, Value)>> = Mutex::new(None);
+    Arc::unwrap_or_clone(of_session_shared(session_id, known))
+}
+
+/// of_session, the cached answer shared rather than copied.
+pub fn of_session_shared(session_id: &str, known: &str) -> Arc<Value> {
+    static CACHE: Mutex<Option<(PathBuf, String, Arc<Value>)>> = Mutex::new(None);
     if !crate::sessions::valid_uuid(session_id) {
-        return json!({"ok": false, "error": "not a session id"});
+        return Arc::new(json!({"ok": false, "error": "not a session id"}));
     }
     let Some(path) = crate::sessionstat::transcript_path(session_id) else {
-        return json!({"ok": false, "error": "no transcript for this session"});
+        return Arc::new(json!({"ok": false, "error": "no transcript for this session"}));
     };
     let stamp = |p: &Path| {
         std::fs::metadata(p)
@@ -586,9 +591,9 @@ pub fn of_session(session_id: &str, known: &str) -> Value {
             if *p == path && *k == key {
                 // The caller has this one already: say so, not all of it again.
                 if !known.is_empty() && v.get("sig").and_then(Value::as_str) == Some(known) {
-                    return json!({"ok": true, "same": true, "sig": known});
+                    return Arc::new(json!({"ok": true, "same": true, "sig": known}));
                 }
-                return v.clone();
+                return Arc::clone(v);
             }
         }
     }
@@ -599,9 +604,12 @@ pub fn of_session(session_id: &str, known: &str) -> Value {
         key.hash(&mut h);
         h.finish()
     });
-    v.as_object_mut().unwrap().insert("sig".into(), json!(sig));
+    if let Some(o) = v.as_object_mut() {
+        o.insert("sig".into(), json!(sig));
+    }
+    let v = Arc::new(v);
     if let Ok(mut g) = CACHE.lock() {
-        *g = Some((path, key, v.clone()));
+        *g = Some((path, key, Arc::clone(&v)));
     }
     v
 }
