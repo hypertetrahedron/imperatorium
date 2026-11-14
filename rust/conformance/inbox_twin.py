@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import REPO, binary, require_free  # noqa: E402
+from common import REPO, binary, require_free, stop_tree  # noqa: E402
 from sessions_compare import first_difference  # noqa: E402
 from twin import env, get, masked, post  # noqa: E402
 
@@ -467,7 +467,7 @@ def main():
             failures.append(("/api/queue", diff))
     finally:
         for p in procs:
-            p.terminate()
+            stop_tree(p)
         for p in procs:
             try:
                 p.wait(timeout=10)

@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import REPO, binary, require_free  # noqa: E402
+from common import REPO, binary, require_free, stop_tree  # noqa: E402
 from sessions_compare import first_difference  # noqa: E402
 
 PY_PORT, RS_PORT = 8813, 8814
@@ -256,7 +256,7 @@ def main():
                 failures.append((path, diff))
     finally:
         for p in (py, rs):
-            p.terminate()
+            stop_tree(p)
             try:
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:

@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import RUST, stand_in_path  # noqa: E402
+from common import RUST, stand_in_path, stop_tree, stop_under  # noqa: E402
 from inbox_twin import record, window_token  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
@@ -297,7 +297,7 @@ def main():
         print("typed into the idle console: %r" % [l for l in lines if l != "/exit"])
     finally:
         for p in procs:
-            p.terminate()
+            stop_tree(p)
         for c in consoles:
             if c.poll() is None:
                 c.kill()
@@ -306,6 +306,7 @@ def main():
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 p.kill()
+        stop_under(bin_dir)
         time.sleep(0.5)
         shutil.rmtree(root, ignore_errors=True)
     for what, diff in failures:

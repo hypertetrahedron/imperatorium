@@ -45,6 +45,37 @@ def stand_in_path(bin_dir):
     return os.pathsep.join([bin_dir] + keep)
 
 
+def stop_tree(proc):
+    """Stop `proc` and everything it started.
+
+    A twin's Python dispatcher runs under the venv's launcher, so
+    terminate() would stop only the launcher and leave the dispatcher
+    serving - with a PATH whose stand-ins are about to be deleted.
+    """
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        proc.terminate()
+
+
+def stop_under(folder):
+    """Stop every process whose executable lives under `folder` (a twin's
+    stand-ins, which can outlive the Popen that started them). Windows only;
+    matched by path, so a real claude elsewhere is never touched."""
+    if os.name != "nt":
+        return
+    script = ("$f = [IO.Path]::GetFullPath($env:STOP_UNDER).TrimEnd('\') + '\'; "
+              "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
+              "$_.ExecutablePath.StartsWith($f, [StringComparison]::OrdinalIgnoreCase) } | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                   env=dict(os.environ, STOP_UNDER=folder),
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+
+
 def binary():
     found = os.environ.get("IMPERATORIUM_BIN")
     if found:

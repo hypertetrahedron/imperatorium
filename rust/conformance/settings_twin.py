@@ -20,6 +20,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from inbox_twin import post_window, window_token  # noqa: E402
+from common import stop_tree  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import get, post  # noqa: E402
 
@@ -115,7 +116,7 @@ def main():
         files("send as typed")
     finally:
         for p in procs:
-            p.terminate()
+            stop_tree(p)
         for p in procs:
             try:
                 p.wait(timeout=10)

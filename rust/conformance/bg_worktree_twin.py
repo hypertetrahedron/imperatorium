@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import RUST, stand_in_path  # noqa: E402
+from common import RUST, stand_in_path, stop_tree, stop_under  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
 
@@ -148,9 +148,10 @@ def main():
             failures.append(("left", "%s\n  vs %s" % (state["py"], state["rs"])))
     finally:
         for p in procs:
-            p.kill()
+            stop_tree(p)
         for p in procs:
             p.wait()
+        stop_under(bin_dir)
     for label, answer in steps:
         brief = {k: answer.get(k) for k in ("ok", "error", "action", "branch", "base", "worktree")
                  if isinstance(answer, dict) and answer.get(k) is not None}
