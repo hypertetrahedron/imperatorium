@@ -200,19 +200,57 @@ if (channel){
   };
   const beat = () => channel.postMessage("open");
   beat();
+  // Not paused when hidden: the main window takes a silence of 2.5 s for
+  // this window being closed, and a covered window is still open.
   setInterval(beat, 1000);
-  setInterval(() => checkBoot(() => location.reload()), 5000);
   addEventListener("pagehide", () => channel.postMessage("closed"));
 }
 
+// How the page learns what is new. The native dispatcher pushes the whole
+// matrix down /api/stream?matrix=1 whenever it changes (an `event: matrix`);
+// until one arrives, and whenever the stream is down, the page asks every
+// 1.5 s as before - which is all the Python dispatcher is asked, as it
+// answers the stream with the session list and no matrix event. Nothing
+// runs while the page is hidden; showing it again catches up at once.
+let pushed = false, polling = false, pollTimer = 0, es = null, noPush = false;
 async function poll(){
-  try {
-    data = await get("/api/matrix");
+  if (polling) return;
+  polling = true;
+  clearTimeout(pollTimer);
+  if (!pushed && !document.hidden) {
+    try {
+      data = await get("/api/matrix");
+      $("#gone").hidden = true;
+      draw();
+    } catch (e) { $("#gone").hidden = false; }
+  }
+  polling = false;
+  if (!pushed && !document.hidden) pollTimer = setTimeout(poll, 1500);
+}
+function openStream(){
+  if (!("EventSource" in window) || es || noPush) return;
+  const mine = es = new EventSource("/api/stream?matrix=1");
+  // The first push comes at once; a dispatcher with none has no use for it.
+  setTimeout(() => { if (!pushed && es === mine) { mine.close(); es = null; noPush = true; } }, 8000);
+  mine.addEventListener("matrix", e => {
+    let d;
+    try { d = JSON.parse(e.data); } catch (x) { return; }
+    pushed = true;
+    clearTimeout(pollTimer);
+    data = d;
     $("#gone").hidden = true;
     draw();
-  } catch (e) { $("#gone").hidden = false; }
-  setTimeout(poll, 1500);
+  });
+  mine.onopen = () => checkBoot(() => location.reload());
+  mine.onerror = () => { if (pushed) { pushed = false; poll(); } };
 }
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { if (es) { es.close(); es = null; } pushed = false; }
+  else { openStream(); poll(); }
+});
+// The look follows a change in Settings through /api/health, and a restarted
+// dispatcher is noticed there (and when the stream reconnects).
+whileVisible(10000, () => checkBoot(() => location.reload()));
 
 // Double click: show that session in the main window. Raising a window
 // needs this click, so the window that opened this one is raised from here;
@@ -235,4 +273,5 @@ $("#grid").addEventListener("dblclick", e => {
 });
 
 addEventListener("resize", draw);
+openStream();
 poll();

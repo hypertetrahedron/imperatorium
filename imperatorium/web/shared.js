@@ -58,9 +58,12 @@ function applyLook(l){
     if (/^#[0-9a-f]{6}$/i.test(v)) root.style.setProperty("--hl-" + k, v);
   head.textContent = "";   // the page's own style now says it all
 }
-let bootChecking = false;
+let bootChecking = false, bootOnNew = null;
+// Not asked while the page is hidden (nobody is looking, and a reload would
+// only be wasted): the question is asked the moment it shows again.
 async function checkBoot(onNew){
-  if (!BOOT || bootChecking) return;
+  bootOnNew = onNew;
+  if (!BOOT || bootChecking || (typeof document !== "undefined" && document.hidden)) return;
   bootChecking = true;
   try {
     const h = await get("/api/health");
@@ -68,6 +71,22 @@ async function checkBoot(onNew){
     if (h && h.boot && h.boot !== BOOT) onNew();
   } catch (e) { /* down or restarting: ask again next time */ }
   bootChecking = false;
+}
+
+if (typeof document !== "undefined")
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && bootOnNew) checkBoot(bootOnNew); });
+
+// `fn` every `ms` while the page is showing; paused while it is hidden (a
+// minimised or covered window, another tab), and run once at once when it
+// shows again. `now` also runs it once straight away.
+function whileVisible(ms, fn, now){
+  let t = null;
+  const start = () => { if (t === null) t = setInterval(fn, ms); };
+  const stop = () => { if (t !== null) { clearInterval(t); t = null; } };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stop(); else { fn(); start(); }
+  });
+  if (!document.hidden) { start(); if (now) fn(); }
 }
 
 const esc = s => String(s == null ? "" : s)

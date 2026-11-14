@@ -397,10 +397,11 @@ async function save(){
 }
 // A new dispatcher holds a new window token, so saving from the old page
 // would be refused. Reload when nothing is unsaved; otherwise say so.
-setInterval(() => checkBoot(() => {
+const onNewDispatcher = () => {
   if (form && Object.keys(changes()).length) say("The dispatcher restarted - copy your changes, then reload this page.", true);
   else location.reload();
-}), 5000);
+};
+whileVisible(5000, () => checkBoot(onNewDispatcher));
 $("#save").onclick = save;
 $("#revert").onclick = () => { draw(form); say("changes discarded"); };
 addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); } });

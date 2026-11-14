@@ -3712,7 +3712,7 @@ $("#setbtn").onclick = () => {
   if (!w) $("#say").textContent = "the browser blocked the Settings window - allow pop-ups for this page";
   else w.focus();
 };
-setInterval(showMatrixButton, 1000);
+whileVisible(1000, showMatrixButton);
 // The update badge (gap J3): while the native binary's last check saw a
 // newer release. A click opens Settings at its Updates section, which shows
 // what is new and installs it. The Python dispatcher answers 404: no badge.

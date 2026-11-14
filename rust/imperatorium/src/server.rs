@@ -3211,7 +3211,13 @@ impl Shared {
     ///
     /// Python is also woken early by a hook event (Control.invalidate);
     /// this shadow receives no hooks, so it only looks on its clock.
-    pub fn stream(&self, out: &mut dyn std::io::Write) {
+    ///
+    /// `/api/stream?matrix=1` is the Chat Matrix's: not the session list but
+    /// `event: matrix`, the whole of /api/matrix, sent once on connecting and
+    /// again whenever it changes (see `stream_matrix`). Python answers it
+    /// with the session list, which the matrix page does not count as a push
+    /// and so keeps polling.
+    pub fn stream(&self, out: &mut dyn std::io::Write, matrix: bool) {
         let head = "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
                     Cache-Control: no-store\r\n\r\n";
         if out
@@ -3220,6 +3226,9 @@ impl Shared {
             .is_err()
         {
             return;
+        }
+        if matrix {
+            return self.stream_matrix(out);
         }
         let (mut last, mut quiet, mut looked) = (String::new(), Self::now(), 0.0);
         loop {
@@ -3247,6 +3256,37 @@ impl Shared {
                 return; // the page went away
             }
             std::thread::sleep(std::time::Duration::from_secs_f64(STREAM_EVERY));
+        }
+    }
+
+    /// The matrix's stream: what its page would have polled for every
+    /// MATRIX_EVERY seconds, sent only when it differs from the last send
+    /// (`now` aside, which the page does not read). The same work as the
+    /// poll, minus the requests, the parsing and the redraws when nothing
+    /// has moved.
+    fn stream_matrix(&self, out: &mut dyn std::io::Write) {
+        const MATRIX_EVERY: f64 = 1.5;
+        let (mut last, mut quiet) = (String::new(), Self::now());
+        loop {
+            let mut body = self.api_matrix();
+            if let Some(o) = body.as_object_mut() {
+                o.remove("now");
+            }
+            let same = json_dumps_sorted(&body);
+            let sent = if same != last {
+                last = same;
+                quiet = Self::now();
+                write!(out, "event: matrix\ndata: {body}\n\n").and_then(|_| out.flush())
+            } else if Self::now() - quiet >= STREAM_KEEPALIVE {
+                quiet = Self::now();
+                out.write_all(b": keepalive\n\n").and_then(|_| out.flush())
+            } else {
+                Ok(())
+            };
+            if sent.is_err() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs_f64(MATRIX_EVERY));
         }
     }
 
@@ -4355,8 +4395,12 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
                 .trim_end_matches('/')
                 .to_string();
             if method == "GET" && path == "/api/stream" {
+                let matrix = request
+                    .url()
+                    .split_once('?')
+                    .is_some_and(|(_, q)| q.split('&').any(|kv| kv == "matrix=1"));
                 let mut writer = request.into_writer();
-                shared.stream(&mut *writer);
+                shared.stream(&mut *writer, matrix);
                 return;
             }
             let (code, body) = if method == "POST" {
