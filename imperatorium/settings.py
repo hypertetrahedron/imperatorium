@@ -192,8 +192,8 @@ FIELDS = [
     # Read by the native binary only: the Python dispatcher updates by git.
     dict(key="updates.check", section="updates", label="Check for updates", type="bool",
          default=True, applies=LIVE,
-         help="Asks the project's releases for a newer version a few minutes after start and every "
-              "six hours, and shows a badge by the Settings button when there is one. "
+         help="Asks the project's releases for a newer version a few minutes after start and once a "
+              "day, and shows a badge by the Settings button when there is one. "
               "Nothing is installed until you press Update."),
     dict(key="updates.channel", section="updates", label="Channel", type="choice",
          choices=("stable", "preview"), default="stable", applies=LIVE,

@@ -203,8 +203,8 @@ fn restart_services(prefix: &str) {
 
 // -- the dispatcher's check and the window's Update button (gap J3) --------
 
-/// Asked once a few minutes after the dispatcher starts, then every six
-/// hours, when `updates.check` is on (it is by default). Nothing is
+/// Asked once a few minutes after the dispatcher starts, then once a
+/// day, when `updates.check` is on (it is by default). Nothing is
 /// installed until the window asks; then `imperatorium update` runs as a
 /// child that outlives us, swaps the binary and restarts the services
 /// (this dispatcher last).
@@ -213,7 +213,7 @@ pub struct Checker {
 }
 
 const FIRST_CHECK: Duration = Duration::from_secs(180);
-const EVERY: Duration = Duration::from_secs(6 * 3600);
+const EVERY: Duration = Duration::from_secs(24 * 3600);
 
 impl Default for Checker {
     fn default() -> Self {

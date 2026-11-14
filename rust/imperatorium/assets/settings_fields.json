@@ -397,7 +397,7 @@
    "type": "bool",
    "default": true,
    "applies": "live",
-   "help": "Asks the project's releases for a newer version a few minutes after start and every six hours, and shows a badge by the Settings button when there is one. Nothing is installed until you press Update."
+   "help": "Asks the project's releases for a newer version a few minutes after start and once a day, and shows a badge by the Settings button when there is one. Nothing is installed until you press Update."
   },
   {
    "key": "updates.channel",

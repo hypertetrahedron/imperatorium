@@ -496,7 +496,7 @@ sees; GPU detection asks ggml's device list rather than looking for
 **6e the update badge and What's New** (gap J3; `update::Checker`,
 `/api/update`, `/api/update/check`, `/api/update/apply`; settings
 `updates.check`, `updates.channel`). The dispatcher asks the release three
-minutes after start and every six hours; the window shows an `update`
+minutes after start and once a day; the window shows an `update`
 badge by the Settings button while a newer version is out, and Settings >
 Updates shows this version, the newest, the release's notes (`notes` in
 manifest.json: the tag's annotation in the workflow, `-Notes FILE` in
