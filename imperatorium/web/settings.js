@@ -1,5 +1,4 @@
 
-const $ = s => document.querySelector(s);
 let form = null, original = {};
 const LIST = {paths: 1, hotkeys: 1, names: 1, phrases: 1};
 const WHEN = {live: "applies at once", dispatcher: "after a dispatcher restart",
@@ -257,7 +256,7 @@ function hostState(st, now){
 }
 async function drawHosts(){
   let d;
-  try { d = await (await fetch("/api/hosts", {cache: "no-store"})).json(); } catch (e) { return; }
+  try { d = await get("/api/hosts"); } catch (e) { return; }
   const now = Date.now() / 1000;
   for (const el of document.querySelectorAll("#set .hst")) {
     const s = hostState((d.status || {})[el.dataset.host], now);
@@ -271,10 +270,7 @@ function wireHosts(){
   btn.onclick = async () => {
     btn.disabled = true;
     try {
-      const d = await (await fetch("/api/remote/refresh", {method: "POST", cache: "no-store",
-        headers: {"Content-Type": "application/json", "X-Imperatorium-Window":
-          (document.querySelector("meta[name=imp-window]") || {}).content || ""},
-        body: "{}"})).json();
+      const d = await post("/api/remote/refresh", {});
       say(d.ok ? `Polling ${d.hosts} host${d.hosts === 1 ? "" : "s"} now.` : (d.error || "not refreshed"), !d.ok);
     } catch (e) { say("dispatcher not answering", true); }
     // An answering host is back within seconds; one that times out, in ~30.
@@ -306,7 +302,7 @@ function updateLine(d, now){
 }
 async function drawUpdates(d){
   if (d === undefined) {
-    try { const r = await fetch("/api/update", {cache: "no-store"}); d = r.ok ? await r.json() : null; } catch (e) { d = null; }
+    try { d = await get("/api/update"); } catch (e) { d = null; }
   }
   const st = document.getElementById("updst");
   if (!st) return d;
@@ -322,11 +318,8 @@ async function drawUpdates(d){
   return d;
 }
 async function postUpdate(path){
-  const r = await fetch(path, {method: "POST", cache: "no-store",
-    headers: {"Content-Type": "application/json", "X-Imperatorium-Window":
-      (document.querySelector("meta[name=imp-window]") || {}).content || ""},
-    body: "{}"});
-  return r.ok || r.status === 403 ? r.json() : {ok: false, error: "not answered (" + r.status + ")"};
+  try { return await post(path, {}); }
+  catch (e) { return {ok: false, error: "not answered"}; }
 }
 function wireUpdates(){
   const check = document.getElementById("updcheck"), apply = document.getElementById("updapply");
@@ -370,7 +363,7 @@ function say(text, bad){ $("#msg").textContent = text; $("#msg").classList.toggl
 
 async function load(){
   try {
-    const d = await (await fetch("/api/settings", {cache: "no-store"})).json();
+    const d = await get("/api/settings");
     if (!d.ok) { say(d.error || "settings unavailable", true); return; }
     draw(d); say("");
   } catch (e) { say("dispatcher not answering", true); }
@@ -381,10 +374,7 @@ async function save(){
   $("#save").disabled = true; say("saving…");
   let d;
   try {
-    d = await (await fetch("/api/settings", {method: "POST", cache: "no-store",
-      headers: {"Content-Type": "application/json", "X-Imperatorium-Window":
-        (document.querySelector("meta[name=imp-window]") || {}).content || ""},
-      body: JSON.stringify({changes: ch})})).json();
+    d = await post("/api/settings", {changes: ch});
   } catch (e) { say("dispatcher not answering", true); $("#save").disabled = false; return; }
   for (const el of document.querySelectorAll("#set .f")) {
     el.classList.remove("bad");

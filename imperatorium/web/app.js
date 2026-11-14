@@ -1,5 +1,4 @@
 
-const $ = s => document.querySelector(s);
 let sessions = [], selected = null, lastSig = "", busy = false;
 
 function age(t){
@@ -8,21 +7,6 @@ function age(t){
   if (d < 60) return d + "s";
   if (d < 3600) return Math.floor(d/60) + "m";
   return Math.floor(d/3600) + "h";
-}
-
-async function get(url){
-  const r = await fetch(url, {cache:"no-store"});
-  if (!r.ok) throw new Error(r.status);
-  return r.json();
-}
-
-// Served with the page and never stored: what Send As Typed asks for.
-const windowToken = () => (document.querySelector("meta[name=imp-window]") || {}).content || "";
-async function post(url, body){
-  const r = await fetch(url, {method:"POST", cache:"no-store",
-    headers:{"Content-Type":"application/json", "X-Imperatorium-Window": windowToken()},
-    body:JSON.stringify(body)});
-  return r.json();
 }
 
 function key(s){ return s.sessionId || s.id; }

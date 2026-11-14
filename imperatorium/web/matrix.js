@@ -1,5 +1,4 @@
 
-const $ = s => document.querySelector(s);
 
 // Tiles are 1 wide by 1.5 high: a chat reads down, so a tile is a column.
 const RATIO = 1.5, GAP = 8, EDGE = 10;
@@ -204,12 +203,6 @@ if (channel){
   setInterval(beat, 1000);
   setInterval(() => checkBoot(() => location.reload()), 5000);
   addEventListener("pagehide", () => channel.postMessage("closed"));
-}
-
-async function get(url){
-  const r = await fetch(url, {cache: "no-store"});
-  if (!r.ok) throw new Error(r.status);
-  return r.json();
 }
 
 async function poll(){
