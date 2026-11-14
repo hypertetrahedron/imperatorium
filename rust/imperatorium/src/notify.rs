@@ -6,6 +6,7 @@
 //! *still* waiting before it fires, so answering at the desk within that
 //! window buzzes nothing.
 
+use crate::locks::LockExt;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -117,7 +118,7 @@ pub struct Notifier {
 
 impl Notifier {
     pub fn last_error(&self) -> Option<String> {
-        self.last_error.lock().unwrap().clone()
+        self.last_error.lk().clone()
     }
 
     pub fn sent(&self) -> u64 {
@@ -140,7 +141,7 @@ impl Notifier {
                 continue;
             };
             let mark = (ch.to_string(), key.to_string(), py_str(&since));
-            if !self.scheduled.lock().unwrap().insert(mark.clone()) {
+            if !self.scheduled.lk().insert(mark.clone()) {
                 continue;
             }
             let delay = cfg
@@ -172,7 +173,7 @@ impl Notifier {
                         );
                     }
                 }
-                me.scheduled.lock().unwrap().remove(&mark);
+                me.scheduled.lk().remove(&mark);
             });
         }
     }
@@ -221,9 +222,9 @@ impl Notifier {
         match sent {
             Ok(()) => {
                 self.sent.fetch_add(1, Ordering::SeqCst);
-                *self.last_error.lock().unwrap() = None;
+                *self.last_error.lk() = None;
             }
-            Err(e) => *self.last_error.lock().unwrap() = Some(format!("ntfy: {e}")),
+            Err(e) => *self.last_error.lk() = Some(format!("ntfy: {e}")),
         }
     }
 
@@ -246,7 +247,7 @@ impl Notifier {
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         if let Err(e) = cmd.spawn() {
-            *self.last_error.lock().unwrap() = Some(format!("speak: {e}"));
+            *self.last_error.lk() = Some(format!("speak: {e}"));
         }
     }
 }

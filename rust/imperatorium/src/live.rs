@@ -1,6 +1,7 @@
 //! Per-session tool events from hooks, newest last, bounded: a port of
 //! `activity.Live`. In memory only, as in Python.
 
+use crate::locks::LockExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
@@ -67,7 +68,7 @@ impl Live {
             return true;
         }
         let tid = payload.get("tool_use_id").cloned().unwrap_or(Value::Null);
-        let mut all = self.events.lock().unwrap();
+        let mut all = self.events.lk();
         let events = all.entry(key.to_string()).or_default();
         let fresh = |start: Value| {
             json!({"id": tid, "tool": payload.get("tool_name").cloned().unwrap_or(Value::Null),
@@ -114,8 +115,7 @@ impl Live {
 
     pub fn events(&self, key: &str) -> Vec<Value> {
         self.events
-            .lock()
-            .unwrap()
+            .lk()
             .get(key)
             .map(|q| q.iter().cloned().map(Value::Object).collect())
             .unwrap_or_default()
@@ -123,7 +123,7 @@ impl Live {
 
     /// Live.current: the call still running, or None.
     pub fn current(&self, key: &str, now: f64) -> Value {
-        let all = self.events.lock().unwrap();
+        let all = self.events.lk();
         let Some(last) = all.get(key).and_then(|q| q.back()) else {
             return Value::Null;
         };
@@ -142,6 +142,6 @@ impl Live {
     }
 
     pub fn forget(&self, key: &str) {
-        self.events.lock().unwrap().remove(key);
+        self.events.lk().remove(key);
     }
 }

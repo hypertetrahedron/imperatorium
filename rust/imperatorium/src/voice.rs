@@ -10,6 +10,7 @@
 //! The child exits when its stdin closes, and is ended after `idle_unload`
 //! seconds unused, which gives back the ~3 GB the loaded model holds.
 
+use crate::locks::LockExt;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -167,7 +168,7 @@ impl Worker {
 
     /// {device, model} the child last said it runs on, None before that.
     pub fn where_(&self) -> Option<Value> {
-        self.where_.lock().unwrap().clone()
+        self.where_.lk().clone()
     }
 
     fn alive(p: &mut Proc) -> bool {
@@ -284,7 +285,7 @@ impl Worker {
             return Err(e.map(crate::pyish::py_str).unwrap_or_else(|| "transcription failed".into()));
         }
         if crate::pyish::truthy(reply.get("device")) {
-            *self.where_.lock().unwrap() = Some(json!({"device": reply["device"],
+            *self.where_.lk() = Some(json!({"device": reply["device"],
                 "model": reply.get("model").cloned().unwrap_or(Value::Null)}));
         }
         Ok(reply)
@@ -292,7 +293,7 @@ impl Worker {
 
     /// Start the child if needed and wait until its model is built.
     pub fn load(self: &Arc<Self>) -> Result<Value, String> {
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lk();
         self.call(&mut s, json!({"op": "load"}), b"")
     }
 
@@ -309,7 +310,7 @@ impl Worker {
         if data.is_empty() {
             return Ok(String::new());
         }
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lk();
         let reply = self.call(&mut s, json!({"op": "transcribe", "hint": hint, "bytes": data.len()}), data)?;
         Ok(reply.get("text").and_then(Value::as_str).unwrap_or("").to_string())
     }
@@ -329,7 +330,7 @@ impl Worker {
 
     #[allow(dead_code)]
     pub fn stop(&self) {
-        Self::stop_locked(&mut self.state.lock().unwrap());
+        Self::stop_locked(&mut self.state.lk());
     }
 }
 

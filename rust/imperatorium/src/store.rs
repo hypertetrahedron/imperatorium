@@ -5,6 +5,7 @@
 //! read-only shadow and nothing here runs. Only `--live` may open the live
 //! state file: a test dispatcher that wrote it would fight the real one.
 
+use crate::locks::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -77,7 +78,7 @@ impl Store {
 
     /// A copy of everything, as `registry::state()` reads the file.
     pub fn snapshot(&self) -> Map<String, Value> {
-        self.data.lock().unwrap().clone()
+        self.data.lk().clone()
     }
 
     /// Store._flush_locked: a temporary file beside it, then an atomic
@@ -106,7 +107,7 @@ impl Store {
     }
 
     fn with<R>(&self, f: impl FnOnce(&mut Map<String, Value>) -> (R, bool)) -> R {
-        let mut data = self.data.lock().unwrap();
+        let mut data = self.data.lk();
         let (r, dirty) = f(&mut data);
         if dirty {
             self.flush(&data);
@@ -196,8 +197,7 @@ impl Store {
 
     pub fn session(&self, sid: &str) -> Option<Map<String, Value>> {
         self.data
-            .lock()
-            .unwrap()
+            .lk()
             .get("sessions")?
             .get(sid)?
             .as_object()

@@ -39,6 +39,7 @@ mod inbox;
 mod install;
 mod launch;
 mod live;
+mod locks;
 mod matrix;
 mod modlink;
 mod models;

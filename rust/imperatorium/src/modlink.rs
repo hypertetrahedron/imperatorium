@@ -8,6 +8,7 @@
 //! mod's name. Beats carry the token in the state folder's `mod-token`,
 //! which keeps anything that merely reaches the port from posing as a mod.
 
+use crate::locks::LockExt;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -286,7 +287,7 @@ impl ModLink {
         if sid.is_empty() {
             return vec![];
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lk();
         let known = inner.mods.get(&sid).cloned().unwrap_or_default();
         let or = |k: &str| match beat.get(k).filter(|v| truthy(Some(v))) {
             Some(v) => v.clone(),
@@ -336,12 +337,12 @@ impl ModLink {
     }
 
     pub fn forget(&self, sid: &str) {
-        self.inner.lock().unwrap().mods.remove(sid);
+        self.inner.lk().mods.remove(sid);
     }
 
     /// ModLink.state: the last beat of a live mod.
     pub fn state(&self, sid: &str, now: f64) -> Option<Obj> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lk();
         let got = inner.mods.get(sid)?;
         (now - got["at"].as_f64().unwrap_or(0.0) <= LIVE_FOR).then(|| got.clone())
     }
@@ -357,7 +358,7 @@ impl ModLink {
         let id: String = raw.iter().map(|b| format!("{b:02x}")).collect();
         let item =
             json!({"id": id, "text": text, "as_user": as_user, "at": now, "claimed_at": null});
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lk();
         inner
             .outbox
             .entry(sid.to_string())
@@ -369,8 +370,7 @@ impl ModLink {
     /// ModLink.pending(sid): offered and not yet settled.
     pub fn pending(&self, sid: &str) -> Vec<Obj> {
         self.inner
-            .lock()
-            .unwrap()
+            .lk()
             .outbox
             .get(sid)
             .cloned()
@@ -380,8 +380,7 @@ impl ModLink {
     #[allow(dead_code)] // the window's record of what became of them comes later
     pub fn settled(&self, sid: &str) -> Vec<Obj> {
         self.inner
-            .lock()
-            .unwrap()
+            .lk()
             .settled
             .get(sid)
             .cloned()
