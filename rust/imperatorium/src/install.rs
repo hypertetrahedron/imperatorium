@@ -1149,6 +1149,7 @@ pub fn install_hooks_main(args: &[String]) -> i32 {
     let mut settings_file = settings_path();
     let (mut native, mut home) = (String::new(), PathBuf::from("."));
     let (mut tool, mut line, mut uninstall, mut mod_dir) = (false, false, false, None);
+    let mut reporting_only = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1158,6 +1159,8 @@ pub fn install_hooks_main(args: &[String]) -> i32 {
             "--tool-hooks" => tool = true,
             "--statusline" => line = true,
             "--uninstall" => uninstall = true,
+            // A remote host or container: its permission prompts stay there.
+            "--reporting-only" => reporting_only = true,
             "--mod" => mod_dir = it.next().cloned(),
             _ => {}
         }
@@ -1170,6 +1173,21 @@ pub fn install_hooks_main(args: &[String]) -> i32 {
         }
     };
     let mut changes = apply_hooks(&mut s, uninstall, tool, &native, &home);
+    if reporting_only && !uninstall {
+        if let Some(hooks) = s.get_mut("hooks").and_then(Value::as_object_mut) {
+            let kept: Vec<Value> = hooks
+                .get("PermissionRequest")
+                .and_then(Value::as_array)
+                .map(|b| b.iter().filter(|x| !is_ours(x)).cloned().collect())
+                .unwrap_or_default();
+            if kept.is_empty() {
+                hooks.shift_remove("PermissionRequest");
+            } else {
+                hooks.insert("PermissionRequest".into(), Value::Array(kept));
+            }
+            changes.retain(|c| !c.ends_with(" PermissionRequest"));
+        }
+    }
     if line || uninstall {
         changes.extend(apply_statusline(&mut s, uninstall, &native));
     }

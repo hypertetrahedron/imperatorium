@@ -197,6 +197,7 @@ fn main() {
         // A remote host's side (phase 4), run over SSH by the dispatcher.
         Some("remote-channel") => remote::channel_main(),
         Some("inbox-send") => remote::inbox_send_main(&args[1..]),
+        Some("hook-relay") => remote::hook_relay_main(&args[1..]),
         Some("remote-probe") => remote::probe_main(&args[1..], home.as_deref()),
         // Setting a machine up from the binary alone (phase 6).
         Some("install") => install::install_main(&args[1..], home.as_deref()),

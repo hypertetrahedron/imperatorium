@@ -16,6 +16,14 @@
 //! * **Hooks.** A `Tunnel` holds `ssh -N -R` open so the host's hooks reach
 //!   a hook-only listener here (the server owns the listener).
 //!
+//! * **Containers.** A host entry with `"container": NAME` is a container:
+//!   every command runs as `docker exec -i NAME sh -c ...`, on this machine
+//!   (`"ssh": false`) or on the SSH host named by `"ssh"`. A container cannot
+//!   reach the dispatcher's loopback port, so its hooks come back through
+//!   `imperatorium hook-relay` inside it: a listener on the container's own
+//!   127.0.0.1:8792 that prints each hook as a JSON line on the exec's
+//!   stdout, which the `Tunnel` hands to the hook-only listener here.
+//!
 //! A dead host must never stall a poll: every call is bounded, each host is
 //! polled on its own thread, and a failing host is parked with a backoff.
 
@@ -139,6 +147,20 @@ pub fn load_hosts(config: &Value) -> Vec<Host> {
                 .map(py_str)
                 .unwrap_or_else(|| d.to_string())
         };
+        let container = entry
+            .get("container")
+            .filter(|c| truthy(Some(c)))
+            .map(py_str);
+        // "ssh": false (or null) for a container on this machine; a name
+        // for the SSH host it runs on; absent: the entry's own name, except
+        // that a container with no "ssh" is local.
+        let ssh = match entry.get("ssh") {
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            Some(_) => None,
+            None if container.is_some() => None,
+            None => Some(name.clone()),
+        };
+        set_via(&name, Via { ssh, container, docker: pick("docker", "docker") });
         hosts.push(Host {
             claude: pick("claude", DEFAULT_CLAUDE),
             label: pick("label", &name),
@@ -238,8 +260,67 @@ pub fn ssh_base() -> Vec<String> {
     ]
 }
 
+/// How a host is reached: over SSH, inside a container, or both.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Via {
+    pub ssh: Option<String>,
+    pub container: Option<String>,
+    pub docker: String,
+}
+
+fn vias() -> &'static Mutex<HashMap<String, Via>> {
+    static VIAS: std::sync::OnceLock<Mutex<HashMap<String, Via>>> = std::sync::OnceLock::new();
+    VIAS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn set_via(host: &str, via: Via) {
+    vias().lock().unwrap().insert(host.to_string(), via);
+}
+
+/// A host load_hosts never saw is an SSH destination by that name.
+pub fn via_of(host: &str) -> Via {
+    vias().lock().unwrap().get(host).cloned().unwrap_or(Via {
+        ssh: Some(host.to_string()),
+        container: None,
+        docker: "docker".into(),
+    })
+}
+
+/// The program and arguments that run `cmd` (a POSIX shell command line)
+/// on `host`.
+pub fn argv_for(host: &str, cmd: &str) -> (String, Vec<String>) {
+    let via = via_of(host);
+    match (&via.ssh, &via.container) {
+        (Some(dest), None) => {
+            let mut a = ssh_base();
+            a.extend([dest.clone(), cmd.to_string()]);
+            (ssh_program(), a)
+        }
+        (Some(dest), Some(c)) => {
+            let mut a = ssh_base();
+            a.push(dest.clone());
+            a.push(format!("{} exec -i {} sh -c {}", via.docker, sh_quote(c), sh_quote(cmd)));
+            (ssh_program(), a)
+        }
+        (None, Some(c)) => (
+            via.docker.clone(),
+            vec!["exec".into(), "-i".into(), c.clone(), "sh".into(), "-c".into(), cmd.to_string()],
+        ),
+        // "ssh": false with no container: there is nothing else to use.
+        (None, None) => {
+            let mut a = ssh_base();
+            a.extend([host.to_string(), cmd.to_string()]);
+            (ssh_program(), a)
+        }
+    }
+}
+
 fn command(args: &[String]) -> Command {
-    let mut c = Command::new(ssh_program());
+    command_of(&ssh_program(), args)
+}
+
+fn command_of(program: &str, args: &[String]) -> Command {
+    let mut c = Command::new(program);
     c.args(args);
     #[cfg(windows)]
     {
@@ -249,13 +330,13 @@ fn command(args: &[String]) -> Command {
     c
 }
 
-fn spawn(args: &[String], stdin: bool) -> Result<Child, String> {
-    let child = command(args)
+fn spawn(program: &str, args: &[String], stdin: bool) -> Result<Child, String> {
+    let child = command_of(program, args)
         .stdin(if stdin { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("ssh could not run: {e}"))?;
+        .map_err(|e| format!("{program} could not run: {e}"))?;
     bind_to_us(&child);
     Ok(child)
 }
@@ -269,10 +350,8 @@ pub struct Done {
 /// One ssh call to `host` running `remote_cmd`, `input` on its stdin,
 /// bounded by `timeout` seconds.
 pub fn run(host: &str, remote_cmd: &str, input: Option<Vec<u8>>, timeout: f64) -> Result<Done, String> {
-    let mut args = ssh_base();
-    args.push(host.into());
-    args.push(remote_cmd.into());
-    let mut child = spawn(&args, input.is_some())?;
+    let (program, args) = argv_for(host, remote_cmd);
+    let mut child = spawn(&program, &args, input.is_some())?;
     if let (Some(data), Some(mut sin)) = (input, child.stdin.take()) {
         std::thread::spawn(move || {
             let _ = sin.write_all(&data);
@@ -611,10 +690,8 @@ impl Channel {
 
     fn start(&self) -> Result<Live, String> {
         self.deploy.ensure()?;
-        let mut args = ssh_base();
-        args.push(self.host.clone());
-        args.push(format!("{REMOTE_BIN} remote-channel"));
-        let mut child = spawn(&args, true)?;
+        let (program, args) = argv_for(&self.host, &format!("{REMOTE_BIN} remote-channel"));
+        let mut child = spawn(&program, &args, true)?;
         let stdin = child.stdin.take().unwrap();
         let (tx, rx) = channel();
         let out = child.stdout.take().unwrap();
@@ -1057,7 +1134,78 @@ impl Tunnel {
         delay
     }
 
+    /// A container's hooks: `hook-relay` inside it, each line it prints
+    /// posted to the hook-only listener as a host's tunnel would deliver it.
+    fn run_relay(&self) {
+        let url = format!("http://127.0.0.1:{}/hook", self.local_port);
+        // The relay is the binary, which a fresh container does not have
+        // until something opens a channel; its hooks would be lost before.
+        let deploy = Deploy::new(&self.host);
+        loop {
+            let started = now();
+            if let Err(e) = deploy.ensure() {
+                let delay = self.down(&format!("the binary: {e}"));
+                std::thread::sleep(Duration::from_secs_f64(delay));
+                continue;
+            }
+            deploy.doubt();
+            let (program, args) =
+                argv_for(&self.host, &format!("{REMOTE_BIN} hook-relay --port {}", self.remote_port));
+            // stdin is held open: the relay leaves when it closes, since
+            // killing `docker exec` does not end what it started.
+            let child = command_of(&program, &args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn();
+            let mut child = match child {
+                Ok(c) => c,
+                Err(e) => {
+                    self.down(&format!("{program} could not run: {e}"));
+                    std::thread::sleep(Duration::from_secs_f64(BACKOFF_START));
+                    continue;
+                }
+            };
+            bind_to_us(&child);
+            let _stdin = child.stdin.take();
+            let err = child.stderr.take().map(|mut e| {
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = e.read_to_end(&mut buf);
+                    buf
+                })
+            });
+            if let Some(out) = child.stdout.take() {
+                for line in std::io::BufReader::new(out).lines() {
+                    let Ok(line) = line else { break };
+                    if line == "ready" {
+                        let mut st = self.state.lock().unwrap();
+                        st.insert("up".into(), json!(true));
+                        st.insert("since".into(), json!(started));
+                        st.insert("error".into(), Value::Null);
+                        continue;
+                    }
+                    if serde_json::from_str::<Value>(&line).is_ok() {
+                        let _ = crate::http::post_json(&url, &line, Duration::from_secs(5));
+                    }
+                }
+            }
+            let _ = child.kill();
+            let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+            let said = err.and_then(|h| h.join().ok()).unwrap_or_default();
+            let reason = last_line(&text(&said), format!("hook relay exited {code}"));
+            if now() - started > 120.0 {
+                self.state.lock().unwrap().insert("fails".into(), json!(0));
+            }
+            let delay = self.down(&reason);
+            std::thread::sleep(Duration::from_secs_f64(delay));
+        }
+    }
+
     fn run(&self) {
+        if via_of(&self.host).container.is_some() {
+            return self.run_relay();
+        }
         loop {
             let started = now();
             let child = command(&self.argv())
@@ -1246,6 +1394,69 @@ pub fn channel_main() -> i32 {
     0
 }
 
+/// `imperatorium hook-relay [--port N]`, inside a container: the hooks'
+/// endpoint (127.0.0.1:N/hook, the hooks' default 8792), each body printed
+/// as one JSON line for the dispatcher reading this process's stdout. It
+/// prints `ready` once listening and leaves when its stdin closes.
+pub fn hook_relay_main(args: &[String]) -> i32 {
+    let port = args
+        .iter()
+        .position(|a| a == "--port")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_REMOTE_HOOK_PORT);
+    let server = match tiny_http::Server::http(("127.0.0.1", port)) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("hook-relay: cannot listen on 127.0.0.1:{port}: {e}");
+            return 1;
+        }
+    };
+    std::thread::spawn(|| {
+        let mut sink = Vec::new();
+        let _ = std::io::stdin().read_to_end(&mut sink);
+        std::process::exit(0);
+    });
+    let out = Arc::new(Mutex::new(std::io::stdout()));
+    {
+        let mut o = out.lock().unwrap();
+        if writeln!(o, "ready").and_then(|_| o.flush()).is_err() {
+            return 1;
+        }
+    }
+    let reply = |request: tiny_http::Request, code: u16, body: Value| {
+        let header = tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap();
+        let _ = request.respond(
+            tiny_http::Response::from_string(body.to_string()).with_status_code(code).with_header(header),
+        );
+    };
+    for mut request in server.incoming_requests() {
+        let path = request.url().split('?').next().unwrap_or("").trim_end_matches('/').to_string();
+        if request.method() != &tiny_http::Method::Post || path != "/hook" {
+            reply(request, 404, json!({"error": "no such path"}));
+            continue;
+        }
+        let mut raw = Vec::new();
+        let _ = Read::take(request.as_reader(), 4 * 1024 * 1024 + 1).read_to_end(&mut raw);
+        let Ok(v) = serde_json::from_slice::<Value>(&raw) else {
+            reply(request, 400, json!({"error": "body is not JSON"}));
+            continue;
+        };
+        if raw.len() > 4 * 1024 * 1024 || !v.is_object() {
+            reply(request, 413, json!({"error": "body must be a JSON object under 4 MiB"}));
+            continue;
+        }
+        {
+            let mut o = out.lock().unwrap();
+            if writeln!(o, "{v}").and_then(|_| o.flush()).is_err() {
+                return 0;
+            }
+        }
+        reply(request, 200, json!({"ok": true}));
+    }
+    0
+}
+
 /// `imperatorium inbox-send SOCKET`: the frames on stdin, written to a
 /// session's inbox socket on this host.
 pub fn inbox_send_main(args: &[String]) -> i32 {
@@ -1270,6 +1481,30 @@ pub fn inbox_send_main(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn containers_run_through_docker_exec() {
+        let hosts = load_hosts(&json!({"remote": {"hosts": [
+            "plainhost",
+            {"name": "box-local", "container": "box1", "ssh": false},
+            {"name": "box-remote", "container": "box 2", "ssh": "devhost", "docker": "podman"},
+            {"name": "box-default", "container": "box3"}
+        ]}}));
+        assert_eq!(hosts.len(), 4);
+        let (p, a) = argv_for("plainhost", "uname -m");
+        assert_eq!(p, ssh_program());
+        assert_eq!(&a[a.len() - 2..], ["plainhost", "uname -m"]);
+        assert_eq!(
+            argv_for("box-local", "echo $HOME"),
+            ("docker".into(), ["exec", "-i", "box1", "sh", "-c", "echo $HOME"].map(String::from).to_vec())
+        );
+        let (p, a) = argv_for("box-remote", "echo $HOME");
+        assert_eq!(p, ssh_program());
+        assert_eq!(&a[a.len() - 2..], ["devhost", "podman exec -i 'box 2' sh -c 'echo $HOME'"]);
+        assert_eq!(argv_for("box-default", "x").0, "docker");
+        // Never configured: an SSH destination, as before.
+        assert_eq!(argv_for("elsewhere", "x").1.last().unwrap(), "x");
+    }
 
     #[test]
     fn quotes_like_shlex() {

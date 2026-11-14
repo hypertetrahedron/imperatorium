@@ -392,6 +392,42 @@ today's `cc_hook.py` posts, 5 events); `inbox-send` into a throwaway Unix
 socket on both; the live tunnels and hook-only listener from both hosts;
 `remote_twin.py` (32 checks, fake ssh) in `run_all.py`.
 
+### Sessions in containers (2026-11-14)
+
+A container is a host whose commands run through `docker exec`. In
+`config.json` `remote.hosts`:
+
+```json
+{"name": "local-box", "container": "my-claude", "ssh": false, "tunnel": true},
+{"name": "dev-box", "container": "my-claude", "ssh": "developmenthost1", "tunnel": true}
+```
+
+`"ssh": false` (or no `"ssh"`) is a container on this machine; a name runs
+`docker exec` on that SSH host (`"docker"` names another CLI, e.g. podman).
+Everything else is the same as a host: polling, the binary pushed to
+`$HOME/.claude/imperatorium/bin/imperatorium` inside the container, reads,
+stats, injection and `claude --bg` for new sessions. A container cannot
+reach the dispatcher's loopback port (or an SSH tunnel's), so its `Tunnel` runs
+`imperatorium hook-relay` inside it instead: a listener on the container's
+own 127.0.0.1:8792 that prints each hook as a JSON line on the exec's stdout,
+posted here to the hook-only listener. The relay pushes the binary first and
+leaves when its stdin closes (killing `docker exec` does not end what it
+started).
+
+The container needs: a `sh` and coreutils (any Debian or Alpine base),
+Claude Code logged in, the working folder trusted, and the reporting hooks,
+installed by the pushed binary once the dispatcher has polled it:
+`docker exec C sh -c '$HOME/.claude/imperatorium/bin/imperatorium install-hooks --reporting-only --native $HOME/.claude/imperatorium/bin/imperatorium'`
+(`--reporting-only`: no PermissionRequest hook; prompts are answered in the
+container, as on a remote host).
+
+Verified with a test dispatcher and two throwaway containers (python:3.12-slim
+on this PC's Docker Desktop, node:22-slim on developmenthost1, Claude Code
+2.1.325, uid 1000): rows, hooks through the relay (dispatchable), reads,
+stats, a prompt injected into each, a new session started in each by
+`/api/dispatch`, a Bash call run in each, Matrix tiles; after the dispatcher
+stopped, no imperatorium process was left in either container.
+
 ## Phase 5, as built (2026-11-13)
 
 **Voice.** `rust/voice` is `imperatorium-voice`, its own crate and
