@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 use crate::pyish::{json_dumps_indent, truthy};
+use crate::service::Service;
 
 const MARK: &str = "imperatorium";
 const LEGACY_MARKS: &[&str] = &["ccontrol"];
@@ -379,7 +380,7 @@ pub fn claude_path() -> Option<PathBuf> {
 /// The PATH a service gets: this one, plus claude's folder when it is not
 /// on it (a user service starts with a bare PATH, and the dispatcher calls
 /// `claude`, `git` and `gh`).
-fn service_path() -> String {
+pub(crate) fn service_path() -> String {
     let sep = if cfg!(windows) { ';' } else { ':' };
     let mut path = std::env::var("PATH").unwrap_or_default();
     if crate::launch::which("claude").is_none() {
@@ -422,373 +423,6 @@ pub fn install_dir() -> PathBuf {
 
 pub fn exe_name() -> &'static str {
     if cfg!(windows) { "imperatorium.exe" } else { "imperatorium" }
-}
-
-// -- the service ------------------------------------------------------------
-
-pub struct Service {
-    pub prefix: String,
-    pub exe: PathBuf,
-    pub home: PathBuf,
-    /// Extra `serve` arguments (a test's --port / --state); empty: --live.
-    pub serve_args: Vec<String>,
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
-
-impl Service {
-    fn units(&self, streamdeck: bool, hotkey: bool) -> Vec<(String, Vec<String>, u32, &'static str)> {
-        let home = self.home.to_string_lossy().into_owned();
-        let serve = if self.serve_args.is_empty() {
-            vec!["serve".into(), "--live".into(), "--home".into(), home.clone()]
-        } else {
-            let mut a = vec!["serve".to_string()];
-            a.extend(self.serve_args.iter().cloned());
-            a.extend(["--home".to_string(), home.clone()]);
-            a
-        };
-        let mut out = vec![("Dispatcher".to_string(), serve, 0, "the dispatcher and window")];
-        if streamdeck {
-            out.push(("StreamDeck".into(), vec!["streamdeck".into(), "--home".into(), home.clone()], 15, "the Stream Deck surface"));
-        }
-        if hotkey {
-            out.push(("Hotkey".into(), vec!["hotkey".into(), "--home".into(), home], 20, "the global hotkey"));
-        }
-        out
-    }
-
-    /// A task as `service/tasks.ps1` shapes it: logon trigger (delayed for
-    /// the surfaces), a one-minute heartbeat trigger from now on (a killed
-    /// process is otherwise never restarted), IgnoreNew, three restarts, no
-    /// time limit; run under a headless conhost so no console window shows.
-    pub fn task_xml(&self, args: &[String], delay: u32, start: &str) -> String {
-        let user = format!(
-            "{}\\{}",
-            std::env::var("USERDOMAIN").unwrap_or_default(),
-            std::env::var("USERNAME").unwrap_or_default()
-        );
-        let quote = |a: &str| if a.contains(' ') || a.is_empty() { format!("\"{a}\"") } else { a.to_string() };
-        let arguments = std::iter::once(format!("--headless \"{}\"", self.exe.display()))
-            .chain(args.iter().map(|a| quote(a)))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let delay = if delay > 0 { format!("<Delay>PT{delay}S</Delay>") } else { String::new() };
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Imperatorium - see and dispatch to Claude Code sessions</Description></RegistrationInfo>
-  <Triggers>
-    <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId>{delay}</LogonTrigger>
-    <TimeTrigger><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>{start}</StartBoundary><Enabled>true</Enabled></TimeTrigger>
-  </Triggers>
-  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
-    <Enabled>true</Enabled>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>
-  </Settings>
-  <Actions Context="Author"><Exec><Command>C:\Windows\System32\conhost.exe</Command><Arguments>{args}</Arguments><WorkingDirectory>{wd}</WorkingDirectory></Exec></Actions>
-</Task>
-"#,
-            args = xml_escape(&arguments),
-            wd = xml_escape(&self.home.to_string_lossy()),
-        )
-    }
-
-    /// setup_machine.systemd_unit.
-    #[cfg_attr(windows, allow(dead_code))]
-    pub fn systemd_unit(&self, args: &[String], what: &str, path: &str) -> String {
-        let quoted = std::iter::once(self.exe.to_string_lossy().into_owned())
-            .chain(args.iter().cloned())
-            .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!(
-            "[Unit]\nDescription=Imperatorium - {what}\nAfter=network-online.target\n\n[Service]\nType=simple\n\
-             WorkingDirectory={}\nEnvironment=\"PATH={path}\"\nExecStart={quoted}\nRestart=always\nRestartSec=5\n\n\
-             [Install]\nWantedBy=default.target\n",
-            self.home.display()
-        )
-    }
-
-    /// setup_machine.launchd_plist.
-    #[cfg_attr(windows, allow(dead_code))]
-    pub fn launchd_plist(&self, label: &str, args: &[String], path: &str, log: &str) -> String {
-        let items: String = std::iter::once(self.exe.to_string_lossy().into_owned())
-            .chain(args.iter().cloned())
-            .map(|a| format!("<string>{}</string>", xml_escape(&a)))
-            .collect();
-        format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
-             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\
-             <key>Label</key><string>{}</string><key>ProgramArguments</key><array>{items}</array>\
-             <key>WorkingDirectory</key><string>{}</string>\
-             <key>EnvironmentVariables</key><dict><key>PATH</key><string>{}</string></dict>\
-             <key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string>\
-             <key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>\n",
-            xml_escape(label),
-            xml_escape(&self.home.to_string_lossy()),
-            xml_escape(path)
-        )
-    }
-}
-
-fn run(cmd: &str, args: &[&str]) -> (bool, String) {
-    let mut c = std::process::Command::new(cmd);
-    c.args(args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000);
-    }
-    match c.output() {
-        Ok(o) => (
-            o.status.success(),
-            String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr),
-        ),
-        Err(e) => (false, e.to_string()),
-    }
-}
-
-/// End any process of ours running `sub` for this service (a task's binary
-/// outlives its conhost, so stopping the task is not enough).
-#[cfg(windows)]
-fn stop_processes(exe: &Path, sub: &str, extra: &str) {
-    let filter = format!(
-        "Name='{}'",
-        exe.file_name().and_then(|n| n.to_str()).unwrap_or("imperatorium.exe")
-    );
-    let script = format!(
-        "Get-CimInstance Win32_Process -Filter \"{filter}\" | Where-Object {{ $_.CommandLine -match ' {sub}( |$)' -and $_.CommandLine -match '{extra}' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
-    );
-    let _ = run("powershell", &["-NoProfile", "-Command", &script]);
-}
-
-impl Service {
-    /// Register and start everything (or describe it under dry_run).
-    pub fn install(&self, streamdeck: bool, hotkey: bool, dry: bool, say: &mut dyn FnMut(String)) -> Result<(), String> {
-        let path = service_path();
-        for (name, args, delay, what) in self.units(streamdeck, hotkey) {
-            #[cfg(windows)]
-            {
-                let _ = what;
-                let task = format!("{}{name}", self.prefix);
-                say(format!("   task {task}: {} {}", self.exe.display(), args.join(" ")));
-                if dry {
-                    continue;
-                }
-                let _ = run("schtasks", &["/End", "/TN", &task]);
-                stop_processes(&self.exe, &args[0], &regex::escape(&self.home.to_string_lossy()));
-                let start = {
-                    let t = crate::paths::local_stamp(); // YYYY-MM-DD HH:MM:SS
-                    t.replacen(' ', "T", 1)
-                };
-                let xml = self.task_xml(&args, delay, &start);
-                let file = std::env::temp_dir().join(format!("{task}.xml"));
-                // schtasks reads the XML as UTF-16, as its header says.
-                let mut bytes = vec![0xFF, 0xFE];
-                for u in xml.encode_utf16() {
-                    bytes.extend(u.to_le_bytes());
-                }
-                std::fs::write(&file, bytes).map_err(|e| e.to_string())?;
-                let (ok, said) = run("schtasks", &["/Create", "/F", "/TN", &task, "/XML", &file.to_string_lossy()]);
-                let _ = std::fs::remove_file(&file);
-                if !ok {
-                    return Err(format!("registering {task}: {}", said.trim()));
-                }
-                let _ = run("schtasks", &["/Run", "/TN", &task]);
-                let _ = path.len();
-            }
-            #[cfg(target_os = "linux")]
-            {
-                let unit = format!("{}-{}.service", self.prefix.to_lowercase(), name.to_lowercase());
-                let dir = crate::paths::env_nonempty("XDG_CONFIG_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home_dir().join(".config"))
-                    .join("systemd")
-                    .join("user");
-                say(format!("   unit {}", dir.join(&unit).display()));
-                if dry {
-                    for l in self.systemd_unit(&args, what, &path).lines() {
-                        say(format!("      {l}"));
-                    }
-                    continue;
-                }
-                let _ = delay;
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                std::fs::write(dir.join(&unit), self.systemd_unit(&args, what, &path)).map_err(|e| e.to_string())?;
-                let _ = run("systemctl", &["--user", "daemon-reload"]);
-                let _ = run("systemctl", &["--user", "enable", "--now", &unit]);
-                let _ = run("systemctl", &["--user", "restart", &unit]);
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let _ = (delay, what);
-                let label = format!("local.{}.{}", self.prefix.to_lowercase(), name.to_lowercase());
-                let file = home_dir().join("Library/LaunchAgents").join(format!("{label}.plist"));
-                say(format!("   agent {}", file.display()));
-                if dry {
-                    continue;
-                }
-                let log = home_dir().join("Library/Logs").join(format!("imperatorium-{}.log", name.to_lowercase()));
-                std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
-                std::fs::write(&file, self.launchd_plist(&label, &args, &path, &log.to_string_lossy()))
-                    .map_err(|e| e.to_string())?;
-                let domain = format!("gui/{}", unsafe { libc::getuid() });
-                let _ = run("launchctl", &["bootout", &domain, &file.to_string_lossy()]);
-                let _ = run("launchctl", &["bootstrap", &domain, &file.to_string_lossy()]);
-            }
-        }
-        Ok(())
-    }
-
-    /// Stop and remove everything this prefix registered.
-    pub fn uninstall(&self, dry: bool, say: &mut dyn FnMut(String)) {
-        for name in ["Dispatcher", "StreamDeck", "Hotkey"] {
-            #[cfg(windows)]
-            {
-                let task = format!("{}{name}", self.prefix);
-                if !run("schtasks", &["/Query", "/TN", &task]).0 {
-                    continue;
-                }
-                say(format!("   remove task {task}"));
-                if dry {
-                    continue;
-                }
-                let _ = run("schtasks", &["/End", "/TN", &task]);
-                let _ = run("schtasks", &["/Delete", "/F", "/TN", &task]);
-                let sub = match name {
-                    "Dispatcher" => "serve",
-                    "StreamDeck" => "streamdeck",
-                    _ => "hotkey",
-                };
-                stop_processes(&self.exe, sub, &regex::escape(&self.home.to_string_lossy()));
-            }
-            #[cfg(target_os = "linux")]
-            {
-                let unit = format!("{}-{}.service", self.prefix.to_lowercase(), name.to_lowercase());
-                let file = crate::paths::env_nonempty("XDG_CONFIG_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home_dir().join(".config"))
-                    .join("systemd/user")
-                    .join(&unit);
-                if !file.exists() {
-                    continue;
-                }
-                say(format!("   remove {}", file.display()));
-                if dry {
-                    continue;
-                }
-                let _ = run("systemctl", &["--user", "disable", "--now", &unit]);
-                let _ = std::fs::remove_file(&file);
-                let _ = run("systemctl", &["--user", "daemon-reload"]);
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let label = format!("local.{}.{}", self.prefix.to_lowercase(), name.to_lowercase());
-                let file = home_dir().join("Library/LaunchAgents").join(format!("{label}.plist"));
-                if !file.exists() {
-                    continue;
-                }
-                say(format!("   remove {}", file.display()));
-                if dry {
-                    continue;
-                }
-                let domain = format!("gui/{}", unsafe { libc::getuid() });
-                let _ = run("launchctl", &["bootout", &domain, &file.to_string_lossy()]);
-                let _ = std::fs::remove_file(&file);
-            }
-        }
-    }
-
-    /// The `--home` the registered dispatcher was installed with, if any:
-    /// what `status` reports when it is given none, since that is the
-    /// config home actually in use.
-    pub fn installed_home(&self) -> Option<PathBuf> {
-        #[cfg(windows)]
-        {
-            let task = format!("{}Dispatcher", self.prefix);
-            let (ok, xml) = run("schtasks", &["/Query", "/TN", &task, "/XML"]);
-            if !ok {
-                return None;
-            }
-            let start = xml.find("<Arguments>")? + "<Arguments>".len();
-            let end = start + xml[start..].find("</Arguments>")?;
-            let args = xml[start..end]
-                .replace("&quot;", "\"")
-                .replace("&apos;", "'")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&amp;", "&");
-            home_arg(&args).map(PathBuf::from)
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let unit = format!("{}-dispatcher.service", self.prefix.to_lowercase());
-            let file = crate::paths::env_nonempty("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home_dir().join(".config"))
-                .join("systemd/user")
-                .join(unit);
-            let text = std::fs::read_to_string(file).ok()?;
-            let line = text.lines().find_map(|l| l.strip_prefix("ExecStart="))?;
-            home_arg(&line.replace("\\\"", "\u{0}")).map(|h| PathBuf::from(h.replace('\u{0}', "\"")))
-        }
-        #[cfg(not(any(windows, target_os = "linux")))]
-        {
-            None
-        }
-    }
-
-    /// Each unit: registered, and its state.
-    pub fn status(&self) -> Vec<(String, String)> {
-        let mut out = Vec::new();
-        for name in ["Dispatcher", "StreamDeck", "Hotkey"] {
-            #[cfg(windows)]
-            {
-                let task = format!("{}{name}", self.prefix);
-                let (ok, said) = run("schtasks", &["/Query", "/TN", &task, "/FO", "LIST"]);
-                let state = if !ok {
-                    "not registered".to_string()
-                } else {
-                    said.lines()
-                        .find(|l| l.trim_start().starts_with("Status:"))
-                        .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string())
-                        .unwrap_or_else(|| "registered".into())
-                };
-                out.push((task, state));
-            }
-            #[cfg(target_os = "linux")]
-            {
-                let unit = format!("{}-{}.service", self.prefix.to_lowercase(), name.to_lowercase());
-                let file = crate::paths::env_nonempty("XDG_CONFIG_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home_dir().join(".config"))
-                    .join("systemd/user")
-                    .join(&unit);
-                if !file.exists() {
-                    out.push((unit, "not installed".into()));
-                    continue;
-                }
-                let (_, said) = run("systemctl", &["--user", "is-active", &unit]);
-                out.push((unit, said.trim().to_string()));
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let label = format!("local.{}.{}", self.prefix.to_lowercase(), name.to_lowercase());
-                let (ok, _) = run("launchctl", &["list", &label]);
-                out.push((label, if ok { "loaded".into() } else { "not loaded".into() }));
-            }
-        }
-        out
-    }
 }
 
 // -- the commands -----------------------------------------------------------
@@ -884,7 +518,7 @@ fn wait_for_dispatcher(port: &str, seconds: u64) -> Option<Value> {
 }
 
 /// The value after `--home` in a command line, quoted or not.
-fn home_arg(cmdline: &str) -> Option<String> {
+pub(crate) fn home_arg(cmdline: &str) -> Option<String> {
     let mut words = Vec::new();
     let mut cur = String::new();
     let (mut quoted, mut any) = (false, false);
@@ -921,27 +555,44 @@ fn service_for(o: &Opts, exe: PathBuf) -> Service {
     if let Some(s) = &o.state {
         serve_args.extend(["--state".to_string(), s.clone()]);
     }
-    Service { prefix: o.prefix.clone(), exe, home: o.home.clone(), serve_args }
+    Service::new(o.prefix.clone(), exe, o.home.clone(), serve_args)
 }
 
-/// `imperatorium install`.
-pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
-    let o = opts(args, home);
-    let mut say = |s: String| println!("{s}");
-    let step = |s: &str| println!("\n== {s}");
-    println!("Imperatorium {} setup{}", crate::update::version(), if o.dry { " (dry run: nothing is changed)" } else { "" });
+/// A step that failed and has said why; `install_main` ends with 1.
+struct Failed;
 
-    step("1/7 Prerequisites");
+type Say<'a> = &'a mut dyn FnMut(String);
+
+/// The answers of step 2.
+struct Choices {
+    roots: Vec<String>,
+    voice: bool,
+    deck: bool,
+    auto: bool,
+    use_mod: bool,
+    statusline: bool,
+    tool_hooks: bool,
+    push: bool,
+    hotkey: bool,
+    service: bool,
+}
+
+fn heading(s: &str) {
+    println!("\n== {s}");
+}
+
+/// Step 1: Claude Code is there and new enough; git and gh are noted.
+fn check_prerequisites(say: Say) -> Result<Option<(u32, u32, u32)>, Failed> {
     let ver = claude_version();
     match ver {
         Some(v_) if v_ >= MIN_CLAUDE => say(format!("   ok       Claude Code {}", v(v_))),
         Some(v_) => {
             say(format!("   MISSING  Claude Code {}+ (this machine has {})", v(MIN_CLAUDE), v(v_)));
-            return 1;
+            return Err(Failed);
         }
         None => {
             say("   MISSING  Claude Code (`claude` is not on PATH) - https://claude.com/claude-code".into());
-            return 1;
+            return Err(Failed);
         }
     }
     for (tool, why) in [("git", "worktree actions and PR badges"), ("gh", "PR badges and 'open PR'")] {
@@ -949,51 +600,58 @@ pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
         say(format!("   {:<8} {tool:<12} {}", if found.is_some() { "ok" } else { "--" },
                     found.unwrap_or_else(|| format!("optional - {why}"))));
     }
+    Ok(ver)
+}
 
-    step("2/7 Choices");
+/// Step 2: what to set up (flags, then questions, then defaults).
+fn make_choices(o: &Opts, ver: Option<(u32, u32, u32)>, say: Say) -> Choices {
     let roots = if o.roots.is_empty() { default_roots() } else { o.roots.clone() };
     say(format!("   projects under: {}", roots.join(", ")));
     let mod_ok = ver.is_some_and(|x| x >= MIN_CLAUDE_MOD);
-    let voice = choose(&o, "voice", "Local dictation (F9)? Fetches a ~1.6 GB model; a GPU helps", false);
-    let deck = choose(&o, "streamdeck", "Elgato Stream Deck surface?", false);
-    let auto = choose(&o, "auto-approve", "Auto-approve cheap permission prompts (reads, git status, tests)?", false);
-    let use_mod = mod_ok && choose(&o, "mod", "The Imperatorium mod (prompts arrive as your own words; live status)?", true);
-    let statusline = choose(&o, "statusline", "Statusline (usage meter)?", !use_mod);
-    let tool_hooks = choose(&o, "tool-hooks", "Tool hooks (live, timed activity)?", true);
-    let push = choose(&o, "ntfy", "Phone push when a session has waited on you (ntfy.sh)?", false);
-    let hotkey = cfg!(windows) && choose(&o, "hotkey", "Global hotkey to bring the window up?", true);
-    let service = !o.no_service && choose(&o, "service", "Start Imperatorium at logon and keep it running?", true);
+    let voice = choose(o, "voice", "Local dictation (F9)? Fetches a ~1.6 GB model; a GPU helps", false);
+    let deck = choose(o, "streamdeck", "Elgato Stream Deck surface?", false);
+    let auto = choose(o, "auto-approve", "Auto-approve cheap permission prompts (reads, git status, tests)?", false);
+    let use_mod = mod_ok && choose(o, "mod", "The Imperatorium mod (prompts arrive as your own words; live status)?", true);
+    let statusline = choose(o, "statusline", "Statusline (usage meter)?", !use_mod);
+    let tool_hooks = choose(o, "tool-hooks", "Tool hooks (live, timed activity)?", true);
+    let push = choose(o, "ntfy", "Phone push when a session has waited on you (ntfy.sh)?", false);
+    let hotkey = cfg!(windows) && choose(o, "hotkey", "Global hotkey to bring the window up?", true);
+    let service = !o.no_service && choose(o, "service", "Start Imperatorium at logon and keep it running?", true);
+    Choices { roots, voice, deck, auto, use_mod, statusline, tool_hooks, push, hotkey, service }
+}
 
-    step("3/7 The binary");
+/// Step 3: the binary the hooks and services will run (copied into place
+/// unless it is there already or --no-copy).
+fn install_binary(o: &Opts, say: Say) -> Result<PathBuf, Failed> {
     let here = std::env::current_exe().unwrap_or_default();
     let target = install_dir().join(exe_name());
-    let exe = if o.no_copy || same_dir(&here.to_string_lossy(), &target.to_string_lossy()) {
+    if o.no_copy || same_dir(&here.to_string_lossy(), &target.to_string_lossy()) {
         say(format!("   {}", here.display()));
-        here.clone()
-    } else {
-        say(format!("   copy {} -> {}", here.display(), target.display()));
-        if !o.dry {
-            if let Err(e) = place_binary(&here, &target) {
-                say(format!("   could not: {e}"));
-                return 1;
-            }
-            // The voice worker travels with it when it sits beside us.
-            let vname = if cfg!(windows) { "imperatorium-voice.exe" } else { "imperatorium-voice" };
-            let vsrc = here.with_file_name(vname);
-            if vsrc.is_file() {
-                let _ = place_binary(&vsrc, &target.with_file_name(vname));
-            }
+        return Ok(here);
+    }
+    say(format!("   copy {} -> {}", here.display(), target.display()));
+    if !o.dry {
+        if let Err(e) = place_binary(&here, &target) {
+            say(format!("   could not: {e}"));
+            return Err(Failed);
         }
-        target.clone()
-    };
-    let native = exe.to_string_lossy().into_owned();
+        // The voice worker travels with it when it sits beside us.
+        let vname = if cfg!(windows) { "imperatorium-voice.exe" } else { "imperatorium-voice" };
+        let vsrc = here.with_file_name(vname);
+        if vsrc.is_file() {
+            let _ = place_binary(&vsrc, &target.with_file_name(vname));
+        }
+    }
+    Ok(target)
+}
 
-    step("4/7 Settings");
+/// Step 4: config.json and policy.json, each only when absent.
+fn write_config(o: &Opts, c: &Choices, say: Say) -> Result<(), Failed> {
     say(format!("   config home: {}", o.home.display()));
-    let topic = push.then(ntfy_topic);
+    let topic = c.push.then(ntfy_topic);
     for (name, body) in [
-        ("config.json", build_config(&roots, voice, topic.as_deref())),
-        ("policy.json", build_policy(auto)),
+        ("config.json", build_config(&c.roots, c.voice, topic.as_deref())),
+        ("policy.json", build_policy(c.auto)),
     ] {
         let path = o.home.join(name);
         if path.exists() {
@@ -1005,17 +663,20 @@ pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
             let _ = std::fs::create_dir_all(&o.home);
             if let Err(e) = std::fs::write(&path, json_dumps_indent(&body, 2) + "\n") {
                 say(format!("   could not: {e}"));
-                return 1;
+                return Err(Failed);
             }
         }
     }
     if let Some(t) = &topic {
         say(format!("   phone push: subscribe to {t} in the ntfy app (treat the name like a password)"));
     }
+    Ok(())
+}
 
-    step("5/7 Claude Code hooks");
+/// Step 5: the mod's files, then settings.json's hooks, statusline and mod.
+fn install_claude_hooks(o: &Opts, c: &Choices, native: &str, say: Say) -> Result<(), Failed> {
     let mod_dir = crate::paths::state_dir().join("mod").join("imperatorium");
-    if use_mod {
+    if c.use_mod {
         say(format!("   the mod: {}", mod_dir.display()));
         if !o.dry {
             for (rel, body) in MOD_FILES {
@@ -1023,7 +684,7 @@ pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
                 let _ = std::fs::create_dir_all(p.parent().unwrap());
                 if let Err(e) = std::fs::write(&p, body) {
                     say(format!("   could not write {}: {e}", p.display()));
-                    return 1;
+                    return Err(Failed);
                 }
             }
         }
@@ -1032,56 +693,96 @@ pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
         Ok(s) => s,
         Err(e) => {
             say(format!("   {e}"));
-            return 1;
+            return Err(Failed);
         }
     };
-    let mut changes = apply_hooks(&mut settings, false, tool_hooks, &native, &o.home);
-    if statusline {
-        changes.extend(apply_statusline(&mut settings, false, &native));
+    let mut changes = apply_hooks(&mut settings, false, c.tool_hooks, native, &o.home);
+    if c.statusline {
+        changes.extend(apply_statusline(&mut settings, false, native));
     }
-    if use_mod {
+    if c.use_mod {
         changes.extend(apply_mod(&mut settings, false, &mod_dir.to_string_lossy()));
     }
     say(format!("   settings: {}", o.settings.display()));
-    for c in &changes {
-        say(format!("     {c}"));
+    for ch in &changes {
+        say(format!("     {ch}"));
     }
     if !o.dry {
-        if let Err(e) = write_settings(&o.settings, &settings, &mut say) {
+        if let Err(e) = write_settings(&o.settings, &settings, say) {
             say(format!("   could not write settings: {e}"));
-            return 1;
+            return Err(Failed);
         }
     }
+    Ok(())
+}
 
-    step("6/7 Keep it running");
-    let port = o.port.clone().unwrap_or_else(|| "8792".into());
-    if service {
-        let svc = service_for(&o, exe.clone());
-        if let Err(e) = svc.install(deck, hotkey, o.dry, &mut say) {
+/// Step 6: register and start the service, or say how to start by hand.
+fn install_service(o: &Opts, c: &Choices, exe: &Path, say: Say) -> Result<(), Failed> {
+    if c.service {
+        let svc = service_for(o, exe.to_path_buf());
+        if let Err(e) = svc.install(c.deck, c.hotkey, o.dry, say) {
             say(format!("   {e}"));
-            return 1;
+            return Err(Failed);
         }
     } else {
-        say(format!("   skipped - start it with:  \"{native}\" serve --live --home \"{}\"", o.home.display()));
+        say(format!(
+            "   skipped - start it with:  \"{}\" serve --live --home \"{}\"",
+            exe.display(),
+            o.home.display()
+        ));
     }
+    Ok(())
+}
 
-    step("7/7 Check");
+/// Step 7: wait for the dispatcher and say what is left to do.
+fn final_check(o: &Opts, c: &Choices, say: Say) {
+    let port = o.port.clone().unwrap_or_else(|| "8792".into());
     if o.dry {
         say("   dry run: nothing was changed".into());
-        return 0;
+        return;
     }
-    match wait_for_dispatcher(&port, if service { 30 } else { 2 }) {
+    match wait_for_dispatcher(&port, if c.service { 30 } else { 2 }) {
         Some(h) => {
             say(format!("   dispatcher is up (pid {})", h.get("pid").cloned().unwrap_or(Value::Null)));
             say(format!("\nDone. Open the window: http://127.0.0.1:{port}/"));
         }
         None => say(format!("   dispatcher is not answering yet on 127.0.0.1:{port}")),
     }
-    if voice {
+    if c.voice {
         say("Dictation: `imperatorium voice fetch` downloads the worker and the model (~1.6 GB), SHA-256 checked.".into());
     }
     say("Restart running Claude Code sessions so they pick up the hooks.".into());
-    0
+}
+
+/// `imperatorium install`.
+pub fn install_main(args: &[String], home: Option<&str>) -> i32 {
+    let o = opts(args, home);
+    match install_steps(&o) {
+        Ok(()) => 0,
+        Err(Failed) => 1,
+    }
+}
+
+fn install_steps(o: &Opts) -> Result<(), Failed> {
+    let mut say = |s: String| println!("{s}");
+    println!("Imperatorium {} setup{}", crate::update::version(), if o.dry { " (dry run: nothing is changed)" } else { "" });
+
+    heading("1/7 Prerequisites");
+    let ver = check_prerequisites(&mut say)?;
+    heading("2/7 Choices");
+    let choices = make_choices(o, ver, &mut say);
+    heading("3/7 The binary");
+    let exe = install_binary(o, &mut say)?;
+    let native = exe.to_string_lossy().into_owned();
+    heading("4/7 Settings");
+    write_config(o, &choices, &mut say)?;
+    heading("5/7 Claude Code hooks");
+    install_claude_hooks(o, &choices, &native, &mut say)?;
+    heading("6/7 Keep it running");
+    install_service(o, &choices, &exe, &mut say)?;
+    heading("7/7 Check");
+    final_check(o, &choices, &mut say);
+    Ok(())
 }
 
 /// Copy beside, then rename into place: a running copy (a hook holds it)
