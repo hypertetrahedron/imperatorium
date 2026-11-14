@@ -382,6 +382,24 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
             add(&mut out, id, item, "agent", transcripts.get(&py_str(id)));
         }
     }
+    // A scheduled wakeup (ScheduleWakeup, CronCreate) prints nothing; what it
+    // will do when it fires is its label.
+    for item in stat
+        .get("wakeups")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(id) = item.get("id").filter(|v| truthy(Some(v))) {
+            let label = item.get("label").filter(|v| truthy(Some(v))).cloned().unwrap_or(json!(""));
+            out.push(json!({"id": id, "kind": "wakeup", "label": label.clone(),
+                            "foreground": false,
+                            "started": item.get("started").cloned().unwrap_or(Value::Null),
+                            "size": 0, "mtime": null, "text": label,
+                            "fires_at": item.get("fires_at").cloned().unwrap_or(Value::Null),
+                            "recurring": truthy(item.get("recurring"))}));
+        }
+    }
     if !foreground.is_empty() {
         let started = |i: &Value| i.get("started").and_then(Value::as_f64).unwrap_or(0.0);
         foreground.sort_by(|a, b| {

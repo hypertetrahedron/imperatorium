@@ -106,10 +106,42 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .m{display:flex;align-items:center;gap:6px}
 .s .m .det{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .s .m .acts{display:flex;flex:none;gap:3px}
-/* Only the selected tile is open - and any tile while the pointer is on it,
-   which is where its pin and close are. */
-.s:not(.on):not(:hover) :is(.m,.stl,.x){display:none}
-.s:is(.on,:hover) .why{display:none}
+/* Only the selected tile is open: a click opens it (no longer the pointer
+   passing over), and its pin, close and task list are there. */
+.s:not(.on) :is(.m,.stl,.x,.tk){display:none}
+.s.on .why{display:none}
+/* What the session has going, folded at the foot of the open tile. */
+.s .tk{margin-top:5px;border-top:1px solid var(--line);padding-top:3px}
+.s .tkh{display:flex;align-items:center;gap:6px;width:100%;background:transparent;border:0;
+  padding:2px 0;color:var(--muted);font-size:12px;cursor:pointer;text-align:left}
+.s .tkh:hover{color:var(--ink)}
+.s .tkh .ar{display:inline-block;width:.8em;transition:transform .12s}
+.s .tk.open .tkh .ar{transform:rotate(90deg)}
+.s .tkl{display:none;flex-direction:column;gap:1px;margin:2px 0 1px}
+.s .tk.open .tkl{display:flex}
+.s .tki{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 6px;border-radius:4px;
+  color:var(--ink);cursor:pointer;min-width:0}
+.s .tki:hover{background:var(--sel)}
+.s .tki.on{background:var(--sel);box-shadow:inset 2px 0 0 var(--busy)}
+.s .tki.static{cursor:default;color:var(--muted)}
+.s .tki.static:hover{background:transparent}
+.s .tki .k{font:12px var(--mono);color:var(--busy);min-width:3.4em;flex:none}
+.s .tki .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s .tki .a{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
+.s .tki .live{width:6px;height:6px;border-radius:50%;background:var(--busy);flex:none}
+@media (prefers-reduced-motion: reduce){.s .tkh .ar{transition:none}}
+/* A task shown in place of the chat. */
+#taskview{flex:1;display:flex;flex-direction:column;min-height:0}
+#taskview[hidden]{display:none}
+#tvhead{flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;
+  border-bottom:1px solid var(--line);background:var(--panel)}
+#tvhead .k{font:12px var(--mono);color:var(--busy)}
+#tvhead b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tvhead .when{color:var(--muted);font-size:12px;white-space:nowrap}
+#tvhead .ended{color:var(--warn)}
+#tvtext{flex:1;min-height:0;margin:0;overflow:auto;padding:10px 16px;
+  font:12.5px/18px var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+#tvtext .none{color:var(--muted);font-style:italic}
 .s .stl{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s .stl.st-d-attn{color:var(--warn)}
 .s .stl.st-d-comp{color:var(--comp)}

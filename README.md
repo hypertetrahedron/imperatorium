@@ -112,6 +112,17 @@ each call that failed, read from its own transcript under the session's
 `subagents/` folder. With several, an **Auto** tab comes first and follows
 whichever wrote last. Drag the drawer's top edge to resize it.
 
+A tile opens when you click it (not when the pointer passes over it), and
+the open tile ends in a folded **Tasks** line - `Tasks · 2 shells · 1
+subagent` - that lists what the session has going when clicked: the tool
+call in flight, background shells, Monitors, subagents, scheduled wakeups
+(with when they fire) and the processes its shells started. Click an item
+to see it in place of the chat: a shell's or Monitor's output, a subagent's
+story, a wakeup's prompt, kept on screen with "ended" once it finishes; the
+tool call jumps to itself in the chat instead. A click anywhere else on the
+tile, **Chat**, or Esc brings the chat back. The list stays open or folded
+for every session until you fold it again.
+
 Under the Send buttons, a status panel (click its line to fold it) shows the
 selected session in more detail than its tile: subagents, backgrounded
 commands and Monitors still running, the shell processes under it, whether

@@ -65,6 +65,16 @@ class Tail(Base):
 
 
 class Awaited(Base):
+    def test_scheduled_wakeups_are_listed_with_when_they_fire(self):
+        stat = {"wakeups": [{"id": "wakeup", "label": "check the CI run", "started": 5,
+                             "fires_at": 600.0},
+                            {"id": "cron:c1", "label": "nightly", "fires_at": 900.0,
+                             "recurring": True}]}
+        got = taskout.awaited(stat, self.folder)
+        self.assertEqual([(t["id"], t["kind"], t["text"], t["fires_at"], t["recurring"])
+                          for t in got],
+                         [("cron:c1", "wakeup", "nightly", 900.0, True),
+                          ("wakeup", "wakeup", "check the CI run", 600.0, False)])
     def test_background_shells_and_monitors_by_their_ids(self):
         self.write("bshell", "building\n")
         self.write("bmon", "event\n")

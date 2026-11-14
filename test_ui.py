@@ -292,9 +292,11 @@ class SessionTree(unittest.TestCase):
         self.assertNotIn('data-fam="strata"', html)
         self.assertTrue(html.endswith("[strata-0b]"))
 
-    def test_hover_opens_a_tile_and_carries_its_pin_and_close(self):
-        self.assertIn(".s:not(.on):not(:hover) :is(.m,.stl,.x){display:none}", ui.CSS)
-        self.assertIn(".s:is(.on,:hover) .why{display:none}", ui.CSS)
+    def test_a_click_opens_a_tile_and_it_carries_its_pin_close_and_tasks(self):
+        # Opened by a click only (2026-11-14: no longer by the pointer passing).
+        self.assertIn(".s:not(.on) :is(.m,.stl,.x,.tk){display:none}", ui.CSS)
+        self.assertIn(".s.on .why{display:none}", ui.CSS)
+        self.assertNotIn(":not(:hover) :is(.m", ui.CSS)
         self.assertNotIn(".s:hover .acts", ui.CSS)
         self.assertIn('<span class="acts">${acts}</span></div>`;', ui.SCRIPT)
 
@@ -1390,6 +1392,44 @@ if __name__ == "__main__":
 
 
 @unittest.skipUnless(NODE, "node is not installed")
+class TileTasks(unittest.TestCase):
+    """The folded list of what a session has going, at the foot of its tile."""
+
+    def run_js(self, tail):
+        a = ui.SCRIPT.index("const TASK_MARK")
+        js = ("const RUNNING = {busy: 1, shell: 1};\n" +
+              "function age(t){ return t ? Math.round(Date.now()/1000 - t) + 's' : ''; }\n" +
+              ui.SCRIPT[a:ui.SCRIPT.index("function foldTasks(")] + "\n" + tail)
+        out = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True,
+                             encoding="utf-8", timeout=30)
+        if out.returncode:
+            raise AssertionError(out.stderr)
+        return json.loads(out.stdout)
+
+    def test_the_list_and_its_summary(self):
+        got = self.run_js(
+            "const s = {status: 'busy', doing: 'Bash pytest', doing_since: 1, work: {processes: 2}};"
+            "const l = taskList(s, [{id: 'b1', kind: 'shell', label: 'npm run dev'},"
+            "                      {id: 'a1', kind: 'agent', label: 'explore'}]);"
+            "process.stdout.write(JSON.stringify([l.map(t => [t.id, t.kind, !!t.static]),"
+            " taskSummary(l), taskSummary([])]));")
+        items, summary, empty = got
+        self.assertEqual(items, [["tool", "tool", False], ["b1", "shell", False],
+                                 ["a1", "agent", False], ["processes", "process", True]])
+        self.assertEqual(summary, "1 tool call \u00b7 1 shell \u00b7 1 subagent")
+        self.assertEqual(empty, "none running")
+
+    def test_an_idle_session_has_no_tool_call_and_wakeups_say_when(self):
+        got = self.run_js(
+            "const now = Date.now()/1000;"
+            "const l = taskList({status: 'idle', doing: 'Bash ls'}, []);"
+            "process.stdout.write(JSON.stringify([l.length,"
+            " taskWhen({kind: 'wakeup', fires_at: now + 600}, now),"
+            " taskWhen({kind: 'wakeup', fires_at: now - 5}, now)]));")
+        self.assertEqual(got, [0, "in 600s", "due"])
+
+
+@unittest.skipUnless(NODE, "node is not installed")
 class AwaitedPanel(unittest.TestCase):
     """The tabs under the chat for what the session is waiting on."""
 
@@ -1431,7 +1471,7 @@ class AwaitedPanel(unittest.TestCase):
 
     def test_panel_sits_directly_under_the_chat(self):
         page = ui.render_shell()
-        self.assertIn("<div id=log></div><div id=procs hidden>", page)
+        self.assertIn("<div id=log></div><div id=taskview hidden><div id=tvhead></div><pre id=tvtext></pre></div><div id=procs hidden>", page)
 
 
 @unittest.skipUnless(NODE, "node not installed")

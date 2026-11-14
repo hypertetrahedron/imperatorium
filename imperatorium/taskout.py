@@ -193,7 +193,8 @@ def _created(path):
 
 def awaited(stat, folder, limit=TAIL_BYTES, agents=None):
     """[{id, kind, label, foreground, started, size, mtime, text}] for each
-    running shell, monitor and subagent in `stat` (a `sessionstat` summary),
+    running shell, monitor, subagent and scheduled wakeup (with `fires_at`
+    and `recurring`) in `stat` (a `sessionstat` summary),
     oldest first. `folder` is the session's tasks folder and `agents` its
     subagents folder, either None when there is none."""
     out = []
@@ -227,6 +228,16 @@ def awaited(stat, folder, limit=TAIL_BYTES, agents=None):
     for item in stat.get("agents") or ():
         if item.get("id"):
             add(item["id"], item, "agent", transcripts.get(item["id"]))
+
+    # A scheduled wakeup (ScheduleWakeup, CronCreate) prints nothing; what it
+    # will do when it fires is its label.
+    for item in stat.get("wakeups") or ():
+        if item.get("id"):
+            out.append({"id": item["id"], "kind": "wakeup", "label": item.get("label") or "",
+                        "foreground": False, "started": item.get("started"), "size": 0,
+                        "mtime": None, "text": item.get("label") or "",
+                        "fires_at": item.get("fires_at"),
+                        "recurring": bool(item.get("recurring"))})
 
     # A foreground call is matched to a file no transcript record names that
     # appeared after the call was made, in the order both happened.

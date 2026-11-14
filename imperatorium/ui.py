@@ -128,10 +128,42 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .m{display:flex;align-items:center;gap:6px}
 .s .m .det{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .s .m .acts{display:flex;flex:none;gap:3px}
-/* Only the selected tile is open - and any tile while the pointer is on it,
-   which is where its pin and close are. */
-.s:not(.on):not(:hover) :is(.m,.stl,.x){display:none}
-.s:is(.on,:hover) .why{display:none}
+/* Only the selected tile is open: a click opens it (no longer the pointer
+   passing over), and its pin, close and task list are there. */
+.s:not(.on) :is(.m,.stl,.x,.tk){display:none}
+.s.on .why{display:none}
+/* What the session has going, folded at the foot of the open tile. */
+.s .tk{margin-top:5px;border-top:1px solid var(--line);padding-top:3px}
+.s .tkh{display:flex;align-items:center;gap:6px;width:100%;background:transparent;border:0;
+  padding:2px 0;color:var(--muted);font-size:12px;cursor:pointer;text-align:left}
+.s .tkh:hover{color:var(--ink)}
+.s .tkh .ar{display:inline-block;width:.8em;transition:transform .12s}
+.s .tk.open .tkh .ar{transform:rotate(90deg)}
+.s .tkl{display:none;flex-direction:column;gap:1px;margin:2px 0 1px}
+.s .tk.open .tkl{display:flex}
+.s .tki{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 6px;border-radius:4px;
+  color:var(--ink);cursor:pointer;min-width:0}
+.s .tki:hover{background:var(--sel)}
+.s .tki.on{background:var(--sel);box-shadow:inset 2px 0 0 var(--busy)}
+.s .tki.static{cursor:default;color:var(--muted)}
+.s .tki.static:hover{background:transparent}
+.s .tki .k{font:12px var(--mono);color:var(--busy);min-width:3.4em;flex:none}
+.s .tki .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s .tki .a{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
+.s .tki .live{width:6px;height:6px;border-radius:50%;background:var(--busy);flex:none}
+@media (prefers-reduced-motion: reduce){.s .tkh .ar{transition:none}}
+/* A task shown in place of the chat. */
+#taskview{flex:1;display:flex;flex-direction:column;min-height:0}
+#taskview[hidden]{display:none}
+#tvhead{flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;
+  border-bottom:1px solid var(--line);background:var(--panel)}
+#tvhead .k{font:12px var(--mono);color:var(--busy)}
+#tvhead b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tvhead .when{color:var(--muted);font-size:12px;white-space:nowrap}
+#tvhead .ended{color:var(--warn)}
+#tvtext{flex:1;min-height:0;margin:0;overflow:auto;padding:10px 16px;
+  font:12.5px/18px var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+#tvtext .none{color:var(--muted);font-style:italic}
 .s .stl{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s .stl.st-d-attn{color:var(--warn)}
 .s .stl.st-d-comp{color:var(--comp)}
@@ -1593,7 +1625,7 @@ function tile(s, short){
       pinned ? `<span class="pin">★</span>` : ""}</span>${
       plain ? "" : `<span class="why" title="${esc(label)}">${esc(label)}</span>`}<span class="sig">${
       tileSignals(s, now, open)}</span></div><div class="stl st-${dot}" title="${esc(label)}">${
-      esc(label)}</div>${lines}${details}
+      esc(label)}</div>${lines}${details}${open ? `<div class="tk"></div>` : ""}
   </div>`;
 }
 
@@ -1768,7 +1800,13 @@ function drawSessions(){
   if ($("#sessions").dataset.sig !== html){ $("#sessions").innerHTML = html; $("#sessions").dataset.sig = html; }
 
   document.querySelectorAll(".s").forEach(el =>
-    el.onclick = () => { selected = el.dataset.k; showCached(); drawSessions(); refreshTab(true); loadStatus(true); });
+    el.onclick = e => {
+      if (e.target.closest("[data-tasks-toggle]")){ e.stopPropagation(); foldTasks(!tasksOpen); return; }
+      const item = e.target.closest("[data-task]");
+      if (item && el.dataset.k === selected){ e.stopPropagation(); openTask(item.dataset.task); return; }
+      closeTask();
+      selected = el.dataset.k; showCached(); drawSessions(); refreshTab(true); loadStatus(true); loadProcs();
+    });
   document.querySelectorAll("[data-fam]").forEach(el => el.onclick = () => famClicked(el.dataset.fam));
   document.querySelectorAll("[data-pin]").forEach(el => el.onclick = e => {
     e.stopPropagation(); savePrefs({pinned: toggleIn("pinned", el.dataset.pin)}); });
@@ -1785,6 +1823,7 @@ function drawSessions(){
 
   syncDraft();
   drawHead();
+  drawTileTasks();
 }
 
 function drawHead(){
@@ -2241,7 +2280,7 @@ function procView(tasks, pick){
 function procWanted(){
   const s = current(), w = (s && s.work) || {};
   return view === "session" && tab === "log" && s && !s.remote && w.alive
-    && ((w.shells || 0) + (w.monitors || 0) + (w.agents || 0) > 0);
+    && ((w.shells || 0) + (w.monitors || 0) + (w.agents || 0) + (w.wakeups || 0) > 0);
 }
 
 async function loadProcs(){
@@ -2256,11 +2295,14 @@ async function loadProcs(){
 }
 
 function drawProcs(){
+  drawTileTasks();
+  drawTaskView();
   if (held("#procs", drawProcs)) return;
-  const box = $("#procs"), v = procView(procFor === selected ? procTasks : [], procPick);
+  const box = $("#procs");
+  const v = procView((procFor === selected ? procTasks : []).filter(t => t.kind !== "wakeup"), procPick);
   procPick = v.pick;
-  box.hidden = !v.show;
-  if (!v.show){ procShown = ""; return; }
+  box.hidden = !v.show || taskShown();
+  if (box.hidden){ procShown = ""; return; }
   const tabs = v.tabs.map(t => `<button role=tab data-proc="${esc(t.id)}" class="${t.on ? "on" : ""}${
       t.live ? " live" : ""}" title="${esc(t.id === "auto" ? "follows whichever printed last" : t.label)}">${
       t.kind ? `<span class=k>${PROC_MARK[t.kind] || "$"}</span>` : ""}${esc(t.label)}</button>`).join("");
@@ -2278,6 +2320,116 @@ function drawProcs(){
   procShown = sig;
   if (atEnd) pre.scrollTop = pre.scrollHeight;
 }
+
+// -- the session's tasks, in its tile ------------------------------------------
+// The open tile ends in a folded list of what the session has going: the
+// tool call in flight, background shells, monitors, subagents, scheduled
+// wakeups and the processes its shells started. An item opens in place of
+// the chat (the tool call jumps to it in the chat instead); a click anywhere
+// else on the tile, Back, or Escape returns to the chat.
+let tasksOpen = false, taskView = null, taskLast = null, tvShown = "";
+try { tasksOpen = localStorage.getItem("imperatorium.tasksOpen") === "1"; } catch (e) {}
+const TASK_MARK = {tool: "tool", shell: "$", monitor: "mon", agent: "agent", wakeup: "wake", process: "proc"};
+const TASK_KINDS_SAID = [["tool", "tool call"], ["shell", "shell"], ["monitor", "monitor"],
+                    ["agent", "subagent"], ["wakeup", "wakeup"]];
+
+// Pure: the list for row `s`, given what /api/awaited last said for it.
+function taskList(s, tasks){
+  if (!s) return [];
+  const out = [];
+  if (s.doing && (RUNNING[s.status] || s.state === "working"))
+    out.push({id: "tool", kind: "tool", label: s.doing, started: s.doing_since});
+  for (const t of tasks || []) out.push(t);
+  const n = (s.work || {}).processes || 0;
+  if (n) out.push({id: "processes", kind: "process", static: true,
+                   label: n + (n === 1 ? " process" : " processes") + " started by its shells"});
+  return out;
+}
+// Pure: "2 shells · 1 subagent", or "none running".
+function taskSummary(list){
+  const n = {};
+  for (const t of list) n[t.kind] = (n[t.kind] || 0) + 1;
+  return TASK_KINDS_SAID.filter(([k]) => n[k]).map(([k, w]) => n[k] + " " + w + (n[k] === 1 ? "" : "s"))
+    .join(" \u00b7 ") || "none running";
+}
+const taskWhen = (t, now) => t.kind === "wakeup"
+  ? (t.fires_at ? (t.fires_at > now ? "in " + age(2 * now - t.fires_at) : "due") : "")
+  : age(t.started);
+function foldTasks(open){
+  tasksOpen = open;
+  try { localStorage.setItem("imperatorium.tasksOpen", open ? "1" : "0"); } catch (e) {}
+  drawTileTasks();
+}
+function drawTileTasks(){
+  const box = document.querySelector("#sessions .s.on .tk");
+  if (!box) return;
+  const s = current(), now = Date.now() / 1000;
+  const list = taskList(s, procFor === selected ? procTasks : []);
+  const items = list.map(t => {
+    const on = taskView && taskView.id === t.id ? " on" : "";
+    const live = t.mtime && now - t.mtime < 5;
+    return `<div class="tki${on}${t.static ? " static" : ""}"${t.static ? "" : ` data-task="${esc(t.id)}"`} title="${
+      esc(t.static ? t.label : (t.kind === "tool" ? "show it in the chat: " : "show its output: ") + (t.label || t.id))}">` +
+      `<span class=k>${TASK_MARK[t.kind] || "?"}</span><span class=l>${esc(t.label || t.id)}</span>` +
+      `${live ? "<span class=live></span>" : ""}<span class=a>${esc(taskWhen(t, now))}</span></div>`;
+  }).join("") || `<div class="tki static">nothing running</div>`;
+  const html = `<button type=button class=tkh data-tasks-toggle aria-expanded="${tasksOpen}">` +
+    `<span class=ar>&#9656;</span>Tasks \u00b7 ${esc(taskSummary(list))}</button><div class=tkl>${items}</div>`;
+  box.classList.toggle("open", tasksOpen);
+  if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }
+}
+const taskShown = () => !!taskView && taskView.k === selected && view === "session" && tab === "log";
+function openTask(id){
+  if (id === "tool"){ closeTask(); jumpToTool(); return; }
+  if (taskView && taskView.id === id){ closeTask(); return; }
+  if (tab !== "log") setTab("log");
+  taskView = {k: selected, id}; taskLast = null; tvShown = "";
+  drawProcs();
+}
+function closeTask(){
+  if (!taskView) return;
+  taskView = null; taskLast = null; tvShown = "";
+  drawProcs();
+}
+// The tool call in flight is the newest one in the chat.
+function jumpToTool(){
+  const t = [...$("#log").querySelectorAll(".tool")].pop();
+  if (!t) return;
+  t.scrollIntoView({block: "center"});
+  logFollow = logAtEnd($("#log"));
+  markAway();
+}
+function drawTaskView(){
+  if (taskView && taskView.k !== selected){ taskView = null; taskLast = null; tvShown = ""; }
+  const on = taskShown();
+  $("#taskview").hidden = !on;
+  if (tab === "log") $("#log").hidden = on;
+  if (!on) return;
+  const t = (procFor === selected ? procTasks : []).find(x => x.id === taskView.id);
+  if (t) taskLast = t;
+  const show = t || taskLast;
+  const now = Date.now() / 1000;
+  if (!show){ $("#tvhead").innerHTML = `<button class="ghost sm" data-taskback>&#8592; Chat</button><b>loading\u2026</b>`; return; }
+  const when = !t ? `<span class="when ended">ended - its last output</span>`
+    : `<span class=when>${show.kind === "wakeup" ? esc(taskWhen(show, now))
+      : "started " + esc(age(show.started)) + " ago"}</span>`;
+  const head = `<button class="ghost sm" data-taskback title="back to the chat (Esc)">&#8592; Chat</button>` +
+    `<span class=k>${TASK_MARK[show.kind] || "?"}</span><b title="${esc(show.label || show.id)}">${esc(show.label || show.id)}</b>${when}`;
+  if ($("#tvhead").dataset.sig !== head){ $("#tvhead").innerHTML = head; $("#tvhead").dataset.sig = head; }
+  const text = show.kind === "wakeup"
+    ? (show.fires_at ? "Fires at " + clock(show.fires_at) + (show.recurring ? ", and again after that" : "") + ".\n\n" : "") + (show.label || "")
+    : show.text || "";
+  const pre = $("#tvtext"), sig = show.id + "\n" + text;
+  if (sig === tvShown) return;
+  const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4 || !tvShown.startsWith(show.id + "\n");
+  pre.innerHTML = text.trim() ? esc(text.replace(/\n+$/, "")) : `<span class=none>no output yet</span>`;
+  tvShown = sig;
+  if (atEnd) pre.scrollTop = pre.scrollHeight;
+}
+$("#taskview").addEventListener("click", e => { if (e.target.closest("[data-taskback]")) closeTask(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && taskShown() && !typing(e)){ e.preventDefault(); closeTask(); }
+});
 
 async function procLoop(){
   try { await loadProcs(); } catch (e) {}
@@ -2921,6 +3073,7 @@ function setView(v){
 }
 
 function setTab(t){
+  if (t !== "log") closeTask();
   tab = t;
   $("#tabpick").value = t;
   ["log","changes","activity","worktrees"].forEach(n => $("#" + n).hidden = n !== t);
@@ -4013,6 +4166,7 @@ def render_shell(token="", boot="", look=None):
         '<div id=sessionpane><div id=current hidden><div class=hd id=curhd>'
         '<span id=curcap>current prompt</span><span id=curfold>&#9662;</span></div>'
         '<div class=bd id=curbody></div></div><div id=log></div>'
+        '<div id=taskview hidden><div id=tvhead></div><pre id=tvtext></pre></div>'
         '<div id=procs hidden><div id=procgrip title="drag to resize"></div>'
         '<div id=proctabs role=tablist></div><pre id=proctext></pre></div>'
         '<div id=changes class=panel hidden></div><div id=activity class=panel hidden></div>'
