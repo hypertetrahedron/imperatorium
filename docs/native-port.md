@@ -469,8 +469,29 @@ own exe path. The Windows exe links the C runtime statically. A local
 release: `powershell -File rust\release\build.ps1 -Version 0.3.1-preview.1`,
 then serve `dist\` over HTTP.
 
-**6d** (Vulkan dictation, models fetched when dictation is turned on) waits
-on the Vulkan SDK.
+**6d Vulkan dictation and `imperatorium voice fetch | status`**
+(`models.rs`, the voice crate's `vulkan` feature). `voice fetch` takes the
+worker from the release beside the installed exe and the ggml models from
+whisper.cpp's Hugging Face repositories, each kept only if its SHA-256 is
+the one embedded here. The released Windows worker is the Vulkan build:
+57 MB, imports only `vulkan-1.dll` (every GPU driver installs it; without
+it the worker cannot start, which `fetch` and `status` say) besides
+system DLLs. Against the CUDA build over the conformance clips
+(`voice_compare.py --against CUDA_EXE --native VULKAN_EXE`): 10 of 11
+identical (Vulkan heard "poll request" once), 0.11 s a clip against
+0.06 s, the CPU fallback works; the very first run fills the driver's
+pipeline cache (~4.5 s once). This machine keeps the CUDA build.
+
+Building it: `build-voice.cmd build --release --no-default-features
+--features vulkan --target-dir SHORT` with `VULKAN_SDK` set. The target
+folder must be under ~35 characters - the shader generator is a CMake
+sub-build nesting ~225 below it, and Windows' limit is 260. Both builds
+link the C runtime statically: whisper.cpp asks for CMake 3.5, so
+`build-voice.cmd` sets `CMAKE_POLICY_DEFAULT_CMP0091=NEW` and
+`CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` (whisper-rs-sys passes `CMAKE_*`
+through). The worker's `--devices` prints the backend and the GPU ggml
+sees; GPU detection asks ggml's device list rather than looking for
+`nvcuda.dll`.
 
 ## Building
 

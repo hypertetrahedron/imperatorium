@@ -99,6 +99,36 @@ fn worker_path() -> PathBuf {
     std::env::current_exe().unwrap_or_default().with_file_name(name)
 }
 
+/// The released Windows worker is the Vulkan build, which imports the
+/// Vulkan loader every GPU driver installs; without it the worker cannot
+/// start at all, not even on the CPU.
+fn vulkan_missing() -> bool {
+    cfg!(windows)
+        && !std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join("System32")
+            .join("vulkan-1.dll")
+            .is_file()
+}
+const NO_VULKAN: &str = "this machine has no Vulkan loader (System32\\vulkan-1.dll, installed with any GPU driver): the released dictation worker cannot start without it";
+
+/// What the worker says it would run on (`--devices`).
+fn worker_devices(w: &std::path::Path) -> String {
+    let mut c = std::process::Command::new(w);
+    c.arg("--devices").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    match c.output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Ok(o) => format!("did not start ({})", o.status),
+        Err(e) => format!("did not start ({e})"),
+    }
+}
+
 pub fn main(args: &[String], home: Option<&str>) -> i32 {
     let mut model = None;
     let mut cpu = false;
@@ -116,7 +146,15 @@ pub fn main(args: &[String], home: Option<&str>) -> i32 {
     match args.first().map(String::as_str) {
         Some("status") => {
             let w = worker_path();
-            println!("worker  {} {}", w.display(), if w.is_file() { "ok" } else { "missing" });
+            if w.is_file() {
+                // An old worker without --devices prints its usage and exits 2.
+                println!("worker  {} ok, {}", w.display(), worker_devices(&w));
+            } else {
+                println!("worker  {} missing", w.display());
+            }
+            if vulkan_missing() {
+                println!("   {NO_VULKAN}");
+            }
             println!("models  {}", dir.display());
             for f in wanted(home, model.as_deref(), true) {
                 let p = dir.join(&f);
@@ -127,7 +165,10 @@ pub fn main(args: &[String], home: Option<&str>) -> i32 {
         Some("fetch") => {
             let mut failed = 0;
             let w = worker_path();
-            if !w.is_file() {
+            if !w.is_file() && vulkan_missing() {
+                println!("worker  {NO_VULKAN} - not downloaded");
+                failed += 1;
+            } else if !w.is_file() {
                 // The worker from the release this binary came from.
                 let base = from.or_else(|| crate::paths::env_nonempty("IMPERATORIUM_RELEASES")).unwrap_or_else(|| {
                     format!("{}/latest/download", crate::update::RELEASES)

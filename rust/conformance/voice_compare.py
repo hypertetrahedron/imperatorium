@@ -1,7 +1,10 @@
 """Dictation: the Python worker (faster-whisper) against imperatorium-voice
 (whisper.cpp), over the worker protocol both speak.
 
-    python voice_compare.py CLIPS_DIR [--native EXE] [--home CHECKOUT]
+    python voice_compare.py CLIPS_DIR [--native EXE] [--home CHECKOUT] [--against EXE]
+
+(--against EXE compares two native workers, e.g. the CUDA build against the
+Vulkan one; it takes the place of the Python worker in the output.)
 
 CLIPS_DIR holds WAV files and optionally lines.txt (what say0.wav, say1.wav,
 ... say, one per line). Each clip goes to both workers; the script prints
@@ -71,10 +74,13 @@ def main():
         home = args[args.index("--home") + 1]
     clips = args[0]
     py = os.path.join(home, ".venv", "Scripts", "python.exe")
-    workers = {
-        "python": Worker([py, "-m", "imperatorium.voice", "--worker", json.dumps(SETTINGS)], cwd=home),
-        "native": Worker([native, "--worker", json.dumps(SETTINGS)]),
-    }
+    # --against EXE: another native worker in the Python one's place (the
+    # CUDA build against the Vulkan one); "python" below is then that EXE.
+    if "--against" in args:
+        first = Worker([args[args.index("--against") + 1], "--worker", json.dumps(SETTINGS)])
+    else:
+        first = Worker([py, "-m", "imperatorium.voice", "--worker", json.dumps(SETTINGS)], cwd=home)
+    workers = {"python": first, "native": Worker([native, "--worker", json.dumps(SETTINGS)])}
     for name, w in workers.items():
         t = time.time()
         r = w.call({"op": "load"})

@@ -38,13 +38,18 @@ jobs:
         shell: cmd
         env:
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-        run: build-voice.cmd build --release --no-default-features --features vulkan
+        # A short target folder: the Vulkan shader generator's sub-build
+        # nests ~225 characters below it (Windows' limit is 260).
+        run: build-voice.cmd build --release --no-default-features --features vulkan --target-dir C:\vk
+      - name: Gather the Windows binaries
+        shell: bash
+        run: |
+          mkdir -p win
+          cp rust/target/release/imperatorium.exe /c/vk/release/imperatorium-voice.exe win/
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: |
-            rust/target/release/imperatorium.exe
-            rust/voice/target/release/imperatorium-voice.exe
+          path: win/
 
   linux:
     runs-on: ubuntu-latest
@@ -102,8 +107,8 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           assets=(
-            "x86_64-pc-windows-msvc=built/windows/target/release/imperatorium.exe"
-            "voice-x86_64-pc-windows-msvc=built/windows/voice/target/release/imperatorium-voice.exe"
+            "x86_64-pc-windows-msvc=built/windows/imperatorium.exe"
+            "voice-x86_64-pc-windows-msvc=built/windows/imperatorium-voice.exe"
             "x86_64-unknown-linux-musl=built/linux/x86_64-unknown-linux-musl/release/imperatorium"
             "aarch64-unknown-linux-musl=built/linux/aarch64-unknown-linux-musl/release/imperatorium"
           )

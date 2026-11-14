@@ -91,7 +91,7 @@ impl Transcriber {
         let first = if want_gpu && gpu_present() {
             Self::build(&self.model, true)
         } else {
-            Err("no CUDA device".into())
+            Err("no GPU device".into())
         };
         match first {
             Ok(c) => self.ctx = Some(c),
@@ -164,21 +164,41 @@ impl Transcriber {
     }
 }
 
-/// Is there a CUDA device to use? whisper.cpp would quietly run on the CPU
-/// without one, and the window says which it is.
+/// Is there a GPU to use? whisper.cpp would quietly run on the CPU without
+/// one, and the window says which it is. Asked of ggml's own device list,
+/// so it is the same question for the CUDA build and the Vulkan one.
 fn gpu_present() -> bool {
     if std::env::var_os("IMPERATORIUM_VOICE_CPU").is_some() {
         return false;
     }
-    #[cfg(windows)]
-    {
-        let sys = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_default();
-        sys.join("System32").join("nvcuda.dll").is_file()
+    gpu_name().is_some()
+}
+
+/// The first GPU ggml sees (a discrete one before an integrated one).
+fn gpu_name() -> Option<String> {
+    use whisper_rs::whisper_rs_sys as sys;
+    let mut integrated = None;
+    // SAFETY: the registry is ggml's static list; the pointers it returns
+    // live for the process, and the strings are NUL-terminated.
+    unsafe {
+        for i in 0..sys::ggml_backend_dev_count() {
+            let dev = sys::ggml_backend_dev_get(i);
+            let kind = sys::ggml_backend_dev_type(dev);
+            let desc = sys::ggml_backend_dev_description(dev);
+            let name = if desc.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(desc).to_string_lossy().into_owned()
+            };
+            if kind == sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU {
+                return Some(name);
+            }
+            if kind == sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_IGPU && integrated.is_none() {
+                integrated = Some(name);
+            }
+        }
     }
-    #[cfg(not(windows))]
-    {
-        std::path::Path::new("/dev/nvidia0").exists()
-    }
+    integrated
 }
 
 // -- audio ----------------------------------------------------------------
@@ -350,6 +370,12 @@ fn main() {
             println!("{}", models_dir().display());
             0
         }
+        Some("--devices") => {
+            // What a load would run on: {"gpu": "<name>" | null, "backend": ...}.
+            let backend = if cfg!(feature = "vulkan") { "vulkan" } else if cfg!(feature = "cuda") { "cuda" } else { "cpu" };
+            println!("{}", json!({"gpu": if gpu_present() { gpu_name() } else { None }, "backend": backend}));
+            0
+        }
         Some("--transcribe") => {
             // A file straight through, for testing: --transcribe FILE.wav [SETTINGS]
             let settings = args
@@ -382,7 +408,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: imperatorium-voice --worker SETTINGS_JSON | --transcribe FILE.wav [SETTINGS] | --models");
+            eprintln!("usage: imperatorium-voice --worker SETTINGS_JSON | --transcribe FILE.wav [SETTINGS] | --models | --devices");
             2
         }
     };

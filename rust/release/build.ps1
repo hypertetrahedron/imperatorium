@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     The Windows exe (C runtime linked in), the two Linux hosts' static musl
-    builds, and - when -Voice is given - the dictation worker, then
+    builds, and - when -Voice is given - the dictation worker (Vulkan), then
     package.py. The release workflow does the same per runner; this is for
     a local release folder to test the installers and `imperatorium update`
     against (serve dist\<version> over HTTP and point IMPERATORIUM_RELEASES
@@ -39,9 +39,15 @@ try {
         "aarch64-unknown-linux-musl=$rust\target\aarch64-unknown-linux-musl\release\imperatorium"
     )
     if ($Voice) {
-        & cmd.exe /c "`"$rust\voice\build-voice.cmd`""
+        # The released worker is the Vulkan build (needs the LunarG SDK and
+        # LIBCLANG_PATH). Built in a short folder: its shader generator's
+        # compiler checks nest ~225 characters deep, so the folder itself
+        # must stay under ~35 to keep inside Windows' 260.
+        if (-not $env:VULKAN_SDK) { throw 'voice: set VULKAN_SDK (the LunarG Vulkan SDK)' }
+        $vk = Join-Path $env:USERPROFILE '.ivk'
+        & cmd.exe /c "`"$rust\voice\build-voice.cmd`" build --release --no-default-features --features vulkan --target-dir `"$vk`""
         if ($LASTEXITCODE) { throw 'voice build failed' }
-        $assets += "voice-x86_64-pc-windows-msvc=$rust\voice\target\release\imperatorium-voice.exe"
+        $assets += "voice-x86_64-pc-windows-msvc=$vk\release\imperatorium-voice.exe"
     }
 } finally {
     Pop-Location
