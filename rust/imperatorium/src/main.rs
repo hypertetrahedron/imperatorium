@@ -53,6 +53,7 @@ mod pyish;
 mod registry;
 mod remote;
 mod server;
+mod service;
 mod sessions;
 mod sessionstat;
 mod settings;

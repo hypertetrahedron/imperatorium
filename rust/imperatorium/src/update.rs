@@ -133,72 +133,7 @@ fn write_beside_and_swap(body: &[u8], dst: &Path) -> Result<(), String> {
 
 /// Restart what runs from this binary, so the new one takes over.
 fn restart_services(prefix: &str) {
-    #[cfg(windows)]
-    {
-        let exe = std::env::current_exe().unwrap_or_default();
-        let lit = |s: &str| s.replace('\'', "''");
-        let image = exe.file_name().and_then(|n| n.to_str()).unwrap_or("imperatorium.exe").to_string();
-        // The tasks are found by what they run - this exe - not by name:
-        // an install made with --task-prefix is restarted too (the window's
-        // Update button does not know the prefix), and another install's
-        // tasks - the live one, beside a test copy - are left alone, however
-        // they are named. Processes likewise: only those started from this
-        // exe, by the path in their command line (the task put it there);
-        // not by image path, which after the swap names the old, renamed
-        // file. The dispatcher goes last: on Linux its restart ends us.
-        let script = format!(
-            "$p = '{p}'.ToLower()\n\
-             $all = @(Get-ScheduledTask -ErrorAction SilentlyContinue)\n\
-             $mine = @($all | Where-Object {{ (($_.Actions | ForEach-Object {{ \"$($_.Execute) $($_.Arguments)\" }}) -join ' ').ToLower().Contains($p) }})\n\
-             foreach ($t in $all) {{ if ($t.TaskName -like '{prefix}*' -and -not ($mine | Where-Object TaskName -eq $t.TaskName)) {{ \"   $($t.TaskName) runs another copy of imperatorium - left alone\" }} }}\n\
-             foreach ($sub in 'streamdeck', 'hotkey', 'serve') {{\n\
-               foreach ($t in $mine) {{\n\
-                 $a = ($t.Actions | ForEach-Object {{ \"$($_.Arguments)\" }}) -join ' '\n\
-                 if ($a -notmatch \" $sub( |$)\") {{ continue }}\n\
-                 Stop-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName\n\
-                 Get-CimInstance Win32_Process -Filter \"Name='{i}'\" | Where-Object {{ $_.CommandLine -and $_.CommandLine.ToLower().Contains($p) -and $_.CommandLine -match \" $sub( |$)\" }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}\n\
-                 \"   restarted $($t.TaskName)\"\n\
-                 Start-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName\n\
-               }}\n\
-             }}",
-            p = lit(&exe.to_string_lossy()),
-            i = lit(&image),
-            prefix = lit(prefix),
-        );
-        // Printed as it goes: once the dispatcher's restart kills the
-        // processes, a later line might never arrive.
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .stdin(std::process::Stdio::null())
-            .status();
-    }
-    #[cfg(target_os = "linux")]
-    for name in ["streamdeck", "hotkey", "dispatcher"] {
-        let unit = format!("{}-{name}.service", prefix.to_lowercase());
-        let enabled = std::process::Command::new("systemctl")
-            .args(["--user", "is-enabled", &unit])
-            .output()
-            .is_ok_and(|o| o.status.success());
-        // As on Windows: only a unit that runs this exe.
-        let exe = std::env::current_exe().unwrap_or_default();
-        let runs = std::process::Command::new("systemctl")
-            .args(["--user", "show", "-p", "ExecStart", "--value", &unit])
-            .output()
-            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&*exe.to_string_lossy()));
-        if enabled && !runs {
-            println!("   {unit} runs another copy of imperatorium - left alone");
-        } else if enabled {
-            let _ = std::process::Command::new("systemctl").args(["--user", "restart", &unit]).output();
-            println!("   restarted {unit}");
-        }
-    }
-    #[cfg(target_os = "macos")]
-    for name in ["streamdeck", "hotkey", "dispatcher"] {
-        let label = format!("local.{}.{name}", prefix.to_lowercase());
-        let uid = unsafe { libc::getuid() };
-        let _ = std::process::Command::new("launchctl").args(["kickstart", "-k", &format!("gui/{uid}/{label}")]).output();
-    }
+    crate::service::Service::restart_running(prefix);
 }
 
 // -- the dispatcher's check and the window's Update button (gap J3) --------
