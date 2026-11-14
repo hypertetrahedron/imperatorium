@@ -3941,7 +3941,7 @@ impl Body {
 }
 
 /// secrets.token_urlsafe(n): n random bytes, base64url without padding.
-fn token_urlsafe(n: usize) -> String {
+pub fn token_urlsafe(n: usize) -> String {
     let mut bytes = vec![0u8; n];
     getrandom::getrandom(&mut bytes).expect("the OS random source is unavailable");
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";

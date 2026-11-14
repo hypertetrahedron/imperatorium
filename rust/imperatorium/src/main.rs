@@ -35,6 +35,7 @@ mod history;
 mod hooks;
 mod http;
 mod inbox;
+mod install;
 mod launch;
 mod live;
 mod matrix;
@@ -191,6 +192,11 @@ fn main() {
         Some("remote-channel") => remote::channel_main(),
         Some("inbox-send") => remote::inbox_send_main(&args[1..]),
         Some("remote-probe") => remote::probe_main(&args[1..], home.as_deref()),
+        // Setting a machine up from the binary alone (phase 6).
+        Some("install") => install::install_main(&args[1..], home.as_deref()),
+        Some("uninstall") => install::uninstall_main(&args[1..], home.as_deref()),
+        Some("status") => install::status_main(&args[1..], home.as_deref()),
+        Some("install-hooks") => install::install_hooks_main(&args[1..]),
         #[cfg(feature = "streamdeck")]
         Some("streamdeck") => streamdeck::main(&args[1..], home.as_deref()),
         Some("serve") => {
