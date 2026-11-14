@@ -324,7 +324,7 @@ path), `voice.rs` (the dispatcher side of dictation: `/api/transcribe` and
 child over its JSON-lines protocol, from the checkout's venv; preload,
 idle unload, the 180 s reply limit; a synthesized WAV came back word for
 word, 3.6 s cold and 0.13 s warm on CUDA), `/api/open_window`, `/api/hosts`
-(empty until phase 4), the spend warm-up at start, and `serve --live`: the
+(hosts since phase 4), the spend warm-up at start, and `serve --live`: the
 live state file (which a store otherwise refuses) on port 8792.
 
 The task `ImperatoriumDispatcher` now runs
@@ -338,6 +338,59 @@ state file as it was and the phase-2 binary, with `rollback-to-python.ps1`.
 
 Lost at the switch until phase 4: remote hosts and their hook tunnels (both
 configured hosts had no sessions at the time).
+
+Fixed after the switch: the window froze about ten minutes after each load.
+Python ends `/api/stream` after 600 s and the page reconnects; tiny_http
+cannot close a keep-alive connection, so the socket stayed open, Edge waited
+on a stream that never spoke again, and never fell back to polling. The
+stream now runs until a write fails (the 15 s keepalive finds a page that
+went away). A stream held open for 665 s kept its pushes coming.
+
+## Phase 4, as built (2026-11-13)
+
+`remote.rs` ports `remote.py`, and the host's side is this same binary, not
+python3:
+
+- **Polling** is unchanged and shell-only: `claude agents --json --all` and
+  `~/.claude/sessions/*.json` in one SSH call, merged by `registry::merge`;
+  a host on its own thread, parked with a growing backoff when it fails.
+- **The binary on the host.** `Deploy` reads `uname -m` and the hash of
+  `~/.claude/imperatorium/bin/imperatorium` there; when it differs from this
+  machine's build for that triple it is sent over the SSH channel, written
+  beside and renamed over, and hashed again. Builds are found beside the
+  installed exe in `targets/<triple>/imperatorium` (or a cargo target dir's
+  own cross builds). Static musl builds for x86_64 and aarch64, linked with
+  the toolchain's `rust-lld` (`rust/.cargo/config.toml`) and built with
+  `--no-default-features`: the `tls` feature (ntfy to an https server) is
+  the only part needing a C compiler for the target, and a host never sends
+  a push.
+- **Channels.** `imperatorium remote-channel` on the host answers JSON
+  lines: `read` (the phase-2 transcript reader and `to_items`, with the
+  session's title) and `stats` (sessionstat's incremental reader). One
+  channel for each per host, kept open, serialised, killed on a timeout,
+  re-dialled no sooner than 30 s after a failure. No Agent SDK venv is
+  needed on the host any more.
+- **Injection.** `imperatorium inbox-send SOCKET` on the host, the frames on
+  stdin (the token never on a command line).
+- **Hooks.** `Tunnel` holds `ssh -N -R 127.0.0.1:8792:127.0.0.1:<local>`;
+  `hook_only` is the listener it lands on, `/hook` and nothing else, the
+  host known from the listener. `on_hook(payload, host)` keeps a host's
+  records under `host/sid`. Every ssh is in one kill-on-close job object, so
+  none outlives the dispatcher holding a host's port.
+- Remote rows, conversations, Matrix tiles, delivery, the queue, dispatch
+  (inject, else `claude --bg` there), the host-qualified catalogue,
+  `/api/hosts`, `/api/remote/refresh`, and Python's refusals for what does
+  not cross the wire (focus, changes, activity, status, resume, new, close,
+  dismiss).
+- `hooks/install.py --remote HOST --native host` points a host's hooks at
+  that binary, so the host needs no python3 at all.
+
+Verified: `remote_compare.py` against both real hosts (every read and the
+stats identical to Python's Reader and Stats under the host's SDK venv);
+`remote_hook_compare.sh` on both hosts (the binary's `hook` posts what
+today's `cc_hook.py` posts, 5 events); `inbox-send` into a throwaway Unix
+socket on both; the live tunnels and hook-only listener from both hosts;
+`remote_twin.py` (32 checks, fake ssh) in `run_all.py`.
 
 ## Building
 

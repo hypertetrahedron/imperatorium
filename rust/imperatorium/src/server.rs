@@ -77,6 +77,17 @@ pub struct Shared {
     convs: Mutex<HashMap<String, Arc<Cached>>>,
     /// convcache._paths: each session's transcript, found once.
     paths: Mutex<HashMap<String, PathBuf>>,
+    /// Sessions on other machines (remote.Fleet): only for a dispatcher with
+    /// a store of its own and hosts in config.json. Polled once serve() has
+    /// the port.
+    fleet: Option<Arc<crate::remote::Fleet>>,
+    /// Host name -> its hook tunnel, started by serve().
+    tunnels: Mutex<HashMap<String, Arc<crate::remote::Tunnel>>>,
+}
+
+/// dispatcher.remote_key: where a remote session's hook records live.
+fn remote_key(host: &str, sid: &str) -> String {
+    format!("{host}/{sid}")
 }
 
 struct Cached {
@@ -269,6 +280,12 @@ impl Shared {
             doing: Mutex::new(HashMap::new()),
             convs: Mutex::new(HashMap::new()),
             paths: Mutex::new(HashMap::new()),
+            fleet: {
+                let hosts = crate::remote::load_hosts(&load_config(home));
+                (has_store && !hosts.is_empty())
+                    .then(|| crate::remote::Fleet::new(hosts, crate::remote::POLL_EVERY))
+            },
+            tunnels: Mutex::new(HashMap::new()),
         }
     }
 
@@ -292,8 +309,10 @@ impl Shared {
         }
     }
 
-    /// Control.on_hook: one hook event.
-    fn on_hook(&self, payload: &Map<String, Value>) -> Value {
+    /// Control.on_hook: one hook event. `host` is set only by a host's
+    /// tunnel listener, and a remote session's records are kept under a
+    /// host-qualified key, so a host can only ever describe its own.
+    fn on_hook(&self, payload: &Map<String, Value>, host: Option<&str>) -> Value {
         let Some(store) = &self.store else {
             return json!({"ok": false, "error": "a read-only shadow takes no hooks"});
         };
@@ -306,16 +325,20 @@ impl Shared {
             .get("session_id")
             .filter(|v| truthy(Some(v)))
             .map(crate::pyish::py_str);
+        let qualified = |sid: &str| match host {
+            Some(h) => remote_key(h, sid),
+            None => sid.to_string(),
+        };
         if let Some(sid) = &sid {
             if event == "imperatorium_statusline" || event == "ccontrol_statusline" {
                 // Several a minute per session: memory only, never the store.
-                if let Some(crossing) = self.usage.ingest(sid, payload, Self::now()) {
+                if let Some(crossing) = self.usage.ingest(&qualified(sid), payload, Self::now()) {
                     self.budget_crossed(&crossing);
                 }
                 return json!({"ok": true});
             }
             if crate::live::TOOL_EVENTS.contains(&event.as_str()) {
-                self.live.ingest(sid, payload, Self::now());
+                self.live.ingest(&qualified(sid), payload, Self::now());
                 return json!({"ok": true});
             }
         }
@@ -328,9 +351,10 @@ impl Shared {
             "SubagentStop",
             "TaskCompleted",
         ];
-        let Some(key) = sid.filter(|_| INTERESTING.contains(&event.as_str())) else {
+        let Some(sid) = sid.filter(|_| INTERESTING.contains(&event.as_str())) else {
             return json!({"ok": true, "ignored": event});
         };
+        let key = qualified(&sid);
         let mut meta = Map::new();
         meta.insert(
             "cwd".into(),
@@ -344,16 +368,19 @@ impl Shared {
         }
         // herdr-core hosting comes with step 3; a SessionStart outside it
         // replaces the old terminal's record, as in Python.
-        if !truthy(payload.get("hc_terminal")) && event == "SessionStart" {
+        if host.is_none() && !truthy(payload.get("hc_terminal")) && event == "SessionStart" {
             meta.insert("hc".into(), json!({}));
         }
         let ev = |kind: &str, extra: Value| {
-            let mut e = json!({"kind": kind, "session_id": key})
+            let mut e = json!({"kind": kind, "session_id": sid})
                 .as_object()
                 .unwrap()
                 .clone();
             if let Value::Object(x) = extra {
                 e.extend(x);
+            }
+            if let Some(h) = host {
+                e.insert("host".into(), json!(h));
             }
             store.add_event(e);
         };
@@ -374,7 +401,7 @@ impl Shared {
                 store.forget(&key);
                 self.live.forget(&key);
                 self.usage.forget(&key);
-                if let Some(link) = &self.modlink {
+                if let (Some(link), None) = (&self.modlink, host) {
                     link.forget(&key);
                 }
                 self.invalidate();
@@ -478,10 +505,11 @@ impl Shared {
                     let stop_at = meta.get("last_event_at").cloned().unwrap_or(Value::Null);
                     if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
                         let (k, at) = (key.clone(), stop_at);
+                        let (h, s) = (host.map(str::to_string), sid.clone());
                         std::thread::spawn(move || {
                             std::thread::sleep(std::time::Duration::from_secs_f64(IDLE_AFTER));
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                me.idle_check(&k, &at)
+                                me.idle_check(&k, &at, h.as_deref(), &s)
                             }));
                         });
                     }
@@ -707,14 +735,25 @@ impl Shared {
                     .cloned()
                     .unwrap_or(Value::Null),
             );
-            let (items, error) = match self.conversation(&sid) {
-                Ok(c) => (c.merged.clone(), None),
-                Err(e) => (vec![], Some(format!("RuntimeError: {e}"))),
+            let (items, error) = if truthy(row.get("remote")) {
+                // The tail only, over SSH on every poll: the replies a tile
+                // keeps are recent anyway (MATRIX_REMOTE_ITEMS).
+                let got = self.remote_conversation(row, 150);
+                (
+                    got.get("items").and_then(Value::as_array).cloned().unwrap_or_default(),
+                    got.get("error").filter(|e| truthy(Some(e))).map(crate::pyish::py_str),
+                )
+            } else {
+                let got = match self.conversation(&sid) {
+                    Ok(c) => (c.merged.clone(), None),
+                    Err(e) => (vec![], Some(format!("RuntimeError: {e}"))),
+                };
+                tile.insert(
+                    "tokens".into(),
+                    mine.get("tokens").cloned().unwrap_or(Value::Null),
+                );
+                got
             };
-            tile.insert(
-                "tokens".into(),
-                mine.get("tokens").cloned().unwrap_or(Value::Null),
-            );
             let live = crate::matrix::working(row) || truthy(row.get("attention"));
             tile.extend(crate::matrix::focus(&items, live));
             if let Some(e) = error {
@@ -811,7 +850,7 @@ impl Shared {
     /// Control._idle_check: the `idle_prompt` Claude Code no longer sends. A
     /// minute after Stop, a session that is idle, has had no hook since and
     /// has nothing running is waiting for you. True when it raised it.
-    fn idle_check(&self, key: &str, stop_at: &Value) -> bool {
+    fn idle_check(&self, key: &str, stop_at: &Value, host: Option<&str>, sid: &str) -> bool {
         let Some(store) = &self.store else {
             return false;
         };
@@ -844,9 +883,12 @@ impl Shared {
         store.raise_attention(key, caption, "notification", &meta);
         self.announce(key, caption);
         self.invalidate();
-        let e = json!({"kind": "idle_prompt", "session_id": key,
+        let mut e = json!({"kind": "idle_prompt", "session_id": if sid.is_empty() { key } else { sid },
                        "cwd": rec.get("cwd").cloned().unwrap_or(Value::Null),
                        "summary": "raised by the dispatcher"});
+        if let Some(h) = host {
+            e["host"] = json!(h);
+        }
         store.add_event(e.as_object().unwrap().clone());
         true
     }
@@ -1495,19 +1537,28 @@ impl Shared {
             self.invalidate();
             return None;
         }
-        if truthy(row.get("remote")) {
-            return Some("remote hosts are not ported yet".into());
-        }
         let text = crate::conversation::with_origin(prompt);
         let socket = row.get("socket").and_then(Value::as_str).unwrap_or("");
         let token = row.get("token").and_then(Value::as_str);
-        if let Err(e) = crate::inbox::send(socket, token, &text) {
+        let host = truthy(row.get("remote"))
+            .then(|| row.get("host").map(crate::pyish::py_str).unwrap_or_default());
+        let sent = match &host {
+            Some(h) => match self.fleet.as_ref().filter(|f| f.host(h).is_some()) {
+                None => return Some(format!("host {h} is not configured")),
+                Some(f) => f.inject(h, socket, token, &text),
+            },
+            None => crate::inbox::send(socket, token, &text),
+        };
+        if let Err(e) = sent {
             return Some(e);
         }
         let sid = row.get("sessionId").cloned().unwrap_or(Value::Null);
         let summary = crate::pyish::take(&crate::conversation::strip_origin(&text), 280);
-        let e = json!({"kind": "dispatch_inject", "session_id": sid,
+        let mut e = json!({"kind": "dispatch_inject", "session_id": sid,
                        "cwd": row.get("cwd").cloned().unwrap_or(Value::Null), "summary": summary});
+        if let Some(h) = host.filter(|h| !h.is_empty()) {
+            e["host"] = json!(h);
+        }
         store.add_event(e.as_object().unwrap().clone());
         None
     }
@@ -1633,26 +1684,72 @@ impl Shared {
             set(&mut out, got);
             return out;
         }
-        if remote {
-            set(
-                &mut out,
-                json!({"ok": false, "error": "remote hosts are not ported yet"}),
-            );
-            return out;
-        }
-        if mode == "background" {
-            let options = self
-                .config()
+        let background_options = || -> Map<String, Value> {
+            self.config()
                 .get("background")
                 .and_then(Value::as_object)
                 .cloned()
-                .unwrap_or_default();
-            let options: Map<String, Value> = options
+                .unwrap_or_default()
                 .into_iter()
                 .filter(|(k, _)| {
                     ["model", "permission_mode", "agent", "name", "extra"].contains(&k.as_str())
                 })
-                .collect();
+                .collect()
+        };
+        if remote {
+            let name = crate::pyish::py_str(&m["host"]);
+            let Some(fleet) = self.fleet.as_ref().filter(|f| f.host(&name).is_some()) else {
+                set(
+                    &mut out,
+                    json!({"ok": false, "error": format!("host {name} is not configured")}),
+                );
+                return out;
+            };
+            // A live session there whose hooks have reported in is reached
+            // as a local one is. Otherwise - and always for launch or
+            // background, with no window here to open - the work becomes a
+            // background session over there.
+            if mode == "auto" || mode == "inject" {
+                let target = self.session_for_on(&path, Some(&name));
+                let error = match &target {
+                    Some(t) => self.deliver(store, t, &prompt, as_user),
+                    None => Some("no dispatchable session for that project".to_string()),
+                };
+                match (error, target) {
+                    (None, Some(t)) => {
+                        set(
+                            &mut out,
+                            json!({"ok": true, "action": "inject", "host": name,
+                                   "session": t.get("sessionId").cloned().unwrap_or(Value::Null),
+                                   "session_name": t.get("name").cloned().unwrap_or(Value::Null)}),
+                        );
+                        return out;
+                    }
+                    (Some(e), _) if mode == "inject" => {
+                        set(&mut out, json!({"ok": false, "error": e}));
+                        return out;
+                    }
+                    _ => {}
+                }
+            }
+            let host = fleet.host(&name).unwrap().clone();
+            match crate::remote::start_background(&host, &path, &prompt, &background_options()) {
+                Err(e) => set(&mut out, json!({"ok": false, "error": e})),
+                Ok(started) => {
+                    let e = json!({"kind": "dispatch_remote", "cwd": path,
+                                   "summary": crate::pyish::take(&prompt, 280),
+                                   "host": name, "bg_id": started["id"]});
+                    store.add_event(e.as_object().unwrap().clone());
+                    set(
+                        &mut out,
+                        json!({"ok": true, "action": "remote", "host": name, "bg_id": started["id"]}),
+                    );
+                }
+            }
+            return out;
+        }
+        if mode == "background" {
+            let options = background_options();
             match crate::background::start(&prompt, &path, &options) {
                 Err(e) => set(&mut out, json!({"ok": false, "error": e})),
                 Ok(started) => {
@@ -1714,14 +1811,22 @@ impl Shared {
     /// match. (The catalogue holds this machine's projects only until remote
     /// hosts are ported.)
     fn exact_project(&self, path: &str, host: Option<&str>) -> Option<Value> {
-        if host.is_some() {
-            return None;
-        }
-        let want = paths::abs_normcase(path)?;
+        let host = host.filter(|h| !h.is_empty());
+        let want = match host {
+            // A remote path is the host's, compared as written.
+            Some(_) => path.to_string(),
+            None => paths::abs_normcase(path)?,
+        };
         let proj = self.catalogue().into_iter().find(|p| {
-            !truthy(p.get("host"))
-                && p["path"].as_str().and_then(paths::abs_normcase).as_deref()
-                    == Some(want.as_str())
+            let theirs = p.get("host").filter(|h| truthy(Some(h))).map(crate::pyish::py_str);
+            theirs.as_deref() == host
+                && match host {
+                    Some(_) => p["path"].as_str() == Some(want.as_str()),
+                    None => {
+                        p["path"].as_str().and_then(paths::abs_normcase).as_deref()
+                            == Some(want.as_str())
+                    }
+                }
         })?;
         Some(json!({"match": proj, "score": 1.0, "confidence": "certain", "candidates": [proj]}))
     }
@@ -1730,7 +1835,21 @@ impl Shared {
     /// machine - an idle one if there is one, since a busy one would queue it
     /// behind its own work.
     fn session_for(&self, path: &str) -> Option<Row> {
-        let want = paths::abs_normcase(path)?;
+        self.session_for_on(path, None)
+    }
+
+    /// The same on `host` (None: here). A remote path is the host's POSIX
+    /// path, compared as written less a trailing slash: normcase/abspath
+    /// here would make it a Windows path on the current drive.
+    fn session_for_on(&self, path: &str, host: Option<&str>) -> Option<Row> {
+        let want = match host {
+            Some(_) => path.trim_end_matches('/').to_string(),
+            None => paths::abs_normcase(path)?,
+        };
+        let same = |cwd: &str| match host {
+            Some(_) => cwd.trim_end_matches('/') == want,
+            None => paths::abs_normcase(cwd).as_deref() == Some(want.as_str()),
+        };
         let mut best: Option<Row> = None;
         for row in self.sessions(2.0) {
             let Some(cwd) = row
@@ -1740,13 +1859,14 @@ impl Shared {
             else {
                 continue;
             };
-            if !truthy(row.get("dispatchable"))
-                || truthy(row.get("remote"))
-                || truthy(row.get("host"))
-            {
+            if !truthy(row.get("dispatchable")) {
                 continue;
             }
-            if paths::abs_normcase(cwd).as_deref() != Some(want.as_str()) {
+            let row_host = row.get("host").filter(|h| truthy(Some(h))).map(crate::pyish::py_str);
+            if row_host.as_deref() != host || truthy(row.get("remote")) != host.is_some() {
+                continue;
+            }
+            if !same(cwd) {
                 continue;
             }
             let idle = |r: &Row| r.get("status").and_then(Value::as_str) == Some("idle");
@@ -2024,6 +2144,10 @@ impl Shared {
         let Some(row) = (if id.is_empty() { None } else { self.row(&id) }) else {
             return json!({"ok": false, "error": "no such session"});
         };
+        if truthy(row.get("remote")) {
+            return json!({"ok": false, "error": format!("dismissing a session on {} is not supported yet",
+                crate::pyish::py_str(row.get("host").unwrap_or(&Value::Null)))});
+        }
         if truthy(row.get("pid")) {
             return json!({"ok": false, "error": "that session is still running - close it instead"});
         }
@@ -2167,7 +2291,11 @@ impl Shared {
             _ => {}
         }
         match path {
-            "/hook" => (200, Body::Json(self.on_hook(p))),
+            "/hook" => (200, Body::Json(self.on_hook(p, None))),
+            "/api/remote/refresh" => {
+                let n = self.fleet.as_ref().map(|f| f.refresh()).unwrap_or(0);
+                (200, Body::Json(json!({"ok": true, "hosts": n})))
+            }
             "/api/dispatch" => {
                 let Some(store) = &self.store else {
                     return (
@@ -2444,6 +2572,29 @@ impl Shared {
                 .cloned()
                 .unwrap_or(Value::Null)
         };
+        if let Some(r) = row.as_ref().filter(|r| truthy(r.get("remote"))) {
+            // Read on the session's own machine (Handler: a remote body is
+            // hashed here, and `blocks` cut from it as from a local one).
+            let mut body = self.remote_conversation(r, limit);
+            let items = body.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+            let sig = signature(&items);
+            if q.get("known").map(String::as_str) == Some(sig.as_str()) {
+                return (
+                    200,
+                    Body::Json(json!({"session": body.get("session").cloned().unwrap_or(Value::Null),
+                                      "unchanged": true, "sig": sig})),
+                );
+            }
+            if blocks > 0 {
+                let (tail, start, first) = conversation::tail_blocks(&items, blocks);
+                body.insert("total".into(), json!(items.len()));
+                body.insert("items".into(), Value::Array(tail));
+                body.insert("start".into(), json!(start));
+                body.insert("first_block".into(), json!(first));
+            }
+            body.insert("sig".into(), json!(sig));
+            return (200, Body::Json(Value::Object(body)));
+        }
         let cached = self.conversation(&sid);
         // The poll's usual case - the whole conversation, changed - is
         // answered from the items as serialised once at fill time, spliced
@@ -2508,6 +2659,54 @@ impl Shared {
         }
         body.insert("sig".into(), json!(sig));
         (200, Body::Json(Value::Object(body)))
+    }
+
+    /// Control.hosts_status: GET /api/hosts.
+    fn hosts_status(&self) -> Value {
+        let Some(fleet) = &self.fleet else {
+            return json!({"hosts": [], "status": {}});
+        };
+        let tunnels = self.tunnels.lock().unwrap();
+        let hosts: Vec<Value> = fleet
+            .hosts
+            .iter()
+            .map(|h| {
+                let mut e = h.public();
+                if let Some(t) = tunnels.get(&h.name) {
+                    e.insert("tunnel_status".into(), t.status());
+                }
+                Value::Object(e)
+            })
+            .collect();
+        json!({"hosts": hosts, "status": fleet.status()})
+    }
+
+    /// Control._remote_conversation: the same items, read on the session's
+    /// own machine by the host's channel.
+    fn remote_conversation(&self, row: &Row, limit: usize) -> Map<String, Value> {
+        let f = |k: &str| row.get(k).cloned().unwrap_or(Value::Null);
+        let mut out = json!({"session": f("sessionId"), "items": [], "remote": true,
+                             "host": f("host"), "name": f("name"), "cwd": f("cwd")})
+        .as_object()
+        .unwrap()
+        .clone();
+        let host = row.get("host").map(crate::pyish::py_str).unwrap_or_default();
+        let Some(fleet) = self.fleet.as_ref().filter(|f| f.host(&host).is_some()) else {
+            out.insert("error".into(), json!(format!("host {host} is not configured")));
+            return out;
+        };
+        let sid = row.get("sessionId").map(crate::pyish::py_str).unwrap_or_default();
+        let cwd = row.get("cwd").and_then(Value::as_str);
+        match fleet.read(&host, &sid, limit, cwd) {
+            Ok((items, title)) => {
+                out.insert("items".into(), Value::Array(items));
+                out.insert("title".into(), json!(title));
+            }
+            Err(e) => {
+                out.insert("error".into(), json!(format!("reading on {host}: {e}")));
+            }
+        }
+        out
     }
 
     // -- the session snapshot -------------------------------------------------
@@ -2593,6 +2792,7 @@ impl Shared {
                 );
             }
         }
+        rows.extend(self.remote_with_hooks(known, &creds));
         let queue = st
             .get("queue")
             .and_then(Value::as_object)
@@ -2622,19 +2822,72 @@ impl Shared {
         rows
     }
 
+    /// Control._remote_with_hooks: remote rows, with what that host's hooks
+    /// reported folded in - kept under host-qualified keys, so nothing a
+    /// host posts can overwrite, forget or re-point a session here.
+    fn remote_with_hooks(
+        &self,
+        known: &Map<String, Value>,
+        creds: &HashMap<String, (Value, Value)>,
+    ) -> Vec<Row> {
+        let Some(fleet) = &self.fleet else {
+            return vec![];
+        };
+        let mut out = Vec::new();
+        for mut row in fleet.rows() {
+            let host = row.get("host").map(crate::pyish::py_str).unwrap_or_default();
+            let sid = row.get("sessionId").map(crate::pyish::py_str).unwrap_or_default();
+            let key = remote_key(&host, &sid);
+            let extra = known
+                .get(&key)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if !truthy(row.get("socket")) && truthy(extra.get("socket")) {
+                row.insert("socket".into(), extra["socket"].clone());
+            }
+            // registry.attach_credentials, for this one row.
+            if let Some((token, recorded)) = creds.get(&key) {
+                if truthy(Some(token)) {
+                    let live = row.get("socket").cloned().unwrap_or(Value::Null);
+                    if truthy(Some(recorded)) && truthy(Some(&live)) && *recorded == live {
+                        row.insert("token".into(), token.clone());
+                    } else {
+                        row.insert("stale_credential".into(), json!(true));
+                    }
+                }
+            }
+            let d = truthy(row.get("socket")) && truthy(row.get("token"));
+            row.insert("dispatchable".into(), json!(d));
+            if !extra.is_empty() && overlay(&mut row, &extra) {
+                if let Some(store) = &self.store {
+                    store.clear_attention(&key);
+                }
+            }
+            out.push(row);
+        }
+        out
+    }
+
     /// Control._decorate, less what only the Python dispatcher knows.
     fn decorate(&self, row: &mut Row, queue: &Map<String, Value>) {
         let sid = row
             .get("sessionId")
             .map(crate::pyish::py_str)
             .unwrap_or_default();
-        row.insert("key".into(), json!(sid));
+        let remote = truthy(row.get("remote"));
+        let key = if remote {
+            remote_key(&row.get("host").map(crate::pyish::py_str).unwrap_or_default(), &sid)
+        } else {
+            sid.clone()
+        };
+        row.insert("key".into(), json!(key));
         let state = row.get("state").and_then(Value::as_str).map(str::to_string);
         let ended = matches!(
             state.as_deref(),
             Some("done") | Some("failed") | Some("stopped")
         );
-        let current = self.live.current(&sid, Self::now());
+        let current = self.live.current(&key, Self::now());
         if let Value::Object(c) = &current {
             let summary = activity::first_line(c.get("summary"));
             let tool = c
@@ -2646,11 +2899,11 @@ impl Shared {
                 "doing_since".into(),
                 c.get("since").cloned().unwrap_or(Value::Null),
             );
-        } else if !ended {
+        } else if !ended && !remote {
             let line = self.doing_line(&sid);
             row.insert("doing".into(), json!(line));
         }
-        if let Some(got) = self.usage.session(&sid) {
+        if let Some(got) = self.usage.session(&key) {
             let mut u = Map::new();
             for k in [
                 "context_pct",
@@ -2674,7 +2927,7 @@ impl Shared {
                 }
             }
         }
-        if let Some(Value::Array(q)) = queue.get(&sid) {
+        if let Some(Value::Array(q)) = queue.get(&key) {
             if !q.is_empty() {
                 row.insert("queued".into(), json!(q.len()));
             }
@@ -2715,7 +2968,14 @@ impl Shared {
             "resume_command".into(),
             json!(format!("claude --resume {sid}")),
         );
-        let work = self.work(row);
+        // A remote row's numbers were read on its host by the poll that
+        // found it (remote.Stats).
+        let stat = if remote {
+            Some(row.remove("stat").unwrap_or_else(|| json!({})))
+        } else {
+            None
+        };
+        let work = self.work(row, stat);
         row.insert("work".into(), work);
     }
 
@@ -2744,15 +3004,16 @@ impl Shared {
     }
 
     /// Control._work: what the tile shows at a glance.
-    fn work(&self, row: &Row) -> Value {
+    fn work(&self, row: &Row, stat: Option<Value>) -> Value {
         let sid = row
             .get("sessionId")
             .map(crate::pyish::py_str)
             .unwrap_or_default();
-        let stat = self
-            .stats
-            .read(&sid, Self::now())
-            .unwrap_or_else(|| json!({}));
+        let stat = stat.unwrap_or_else(|| {
+            self.stats
+                .read(&sid, Self::now())
+                .unwrap_or_else(|| json!({}))
+        });
         let alive =
             row.get("pid").is_some_and(|p| p.is_u64() || p.is_i64()) && truthy(row.get("status"));
         let cache = stat.get("cache").cloned().unwrap_or_else(|| json!({}));
@@ -2975,8 +3236,8 @@ impl Shared {
         } else {
             configured
         };
-        let local: Vec<String> = self
-            .sessions(2.0)
+        let rows = self.sessions(2.0);
+        let local: Vec<String> = rows
             .iter()
             .filter(|r| !truthy(r.get("remote")))
             .filter_map(|r| {
@@ -2986,7 +3247,27 @@ impl Shared {
                     .map(str::to_string)
             })
             .collect();
-        projects::discover(&roots, &local)
+        let mut found = projects::discover(&roots, &local);
+        // A remote project is whatever a remote session has worked in,
+        // host-qualified: the same name exists on more than one machine,
+        // and firing at the wrong one is the wrong-repository mistake.
+        let mut seen = std::collections::HashSet::new();
+        for r in &rows {
+            let (Some(host), Some(cwd)) = (
+                r.get("host").filter(|_| truthy(r.get("remote"))).map(crate::pyish::py_str),
+                r.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()),
+            ) else {
+                continue;
+            };
+            if !seen.insert((host.clone(), cwd.to_string())) {
+                continue;
+            }
+            let trimmed = cwd.trim_end_matches('/');
+            let leaf = trimmed.rsplit('/').next().filter(|l| !l.is_empty()).unwrap_or(cwd);
+            found.push(json!({"name": format!("{host}/{leaf}"), "path": cwd,
+                              "source": "remote", "host": host}));
+        }
+        found
     }
 
     /// Control._row(id): the row whose sessionId or key is `id`.
@@ -3024,6 +3305,10 @@ impl Shared {
         let events = self.live.events(&key);
         let (calls, source) = if !events.is_empty() {
             (events, "hooks")
+        } else if row.as_ref().is_some_and(|r| truthy(r.get("remote"))) {
+            return json!({"ok": true, "source": "none", "timeline": [],
+                          "tally": activity::tally(&[]),
+                          "note": "remote sessions report activity only through tool hooks"});
         } else {
             let items = match self.conversation(&sid) {
                 Ok(c) => {
@@ -3053,6 +3338,10 @@ impl Shared {
         let Some(row) = hit(&self.sessions(15.0)).or_else(|| hit(&self.sessions(2.0))) else {
             return json!({"ok": false, "error": "no such session"});
         };
+        if truthy(row.get("remote")) {
+            return json!({"ok": true, "now": Self::now(),
+                          "note": "remote sessions report only what their tile shows"});
+        }
         let now = Self::now();
         let sid = row
             .get("sessionId")
@@ -3115,7 +3404,7 @@ impl Shared {
         let now = Self::now();
         let alive =
             row.get("pid").is_some_and(|p| p.is_u64() || p.is_i64()) && truthy(row.get("status"));
-        if !alive {
+        if truthy(row.get("remote")) || !alive {
             return json!({"ok": true, "now": now, "tasks": []});
         }
         let sid = row
@@ -3229,6 +3518,13 @@ impl Shared {
         let Some(row) = self.row(session) else {
             return json!({"ok": false, "error": "no such session"});
         };
+        if truthy(row.get("remote")) {
+            let name = row.get("name").filter(|n| truthy(Some(n))).map(crate::pyish::py_str)
+                .unwrap_or_else(|| session.to_string());
+            let host = row.get("host").map(crate::pyish::py_str).unwrap_or_default();
+            return json!({"ok": false, "error":
+                format!("{name} is on {host} - changes are only read on this machine so far")});
+        }
         let cwd = row.get("cwd").and_then(Value::as_str).unwrap_or("");
         changes::changes(cwd)
     }
@@ -3245,6 +3541,7 @@ impl Shared {
         let mut known: Vec<String> = self
             .catalogue()
             .iter()
+            .filter(|p| !truthy(p.get("host")))
             .filter_map(|p| p.get("path").and_then(Value::as_str).map(str::to_string))
             .collect();
         known.extend(
@@ -3329,7 +3626,7 @@ impl Shared {
             ("GET", "/settings") => (200, self.page(ui::SETTINGS, &self.window_token, false)),
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
             // Remote hosts are phase 4: until then this dispatcher polls none.
-            ("GET", "/api/hosts") => (200, Body::Json(json!({"hosts": [], "status": {}}))),
+            ("GET", "/api/hosts") => (200, Body::Json(self.hosts_status())),
             ("GET", "/api/events") => {
                 // store.events(100): the newest hundred, newest first.
                 let st = self.state();
@@ -3696,6 +3993,91 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// dispatcher.start_tunnels: a hook-only listener and a reverse tunnel for
+/// each host that asks. Run after the main port is bound, so a second
+/// dispatcher that failed to bind never fights the first for the hosts'
+/// ports.
+fn start_tunnels(shared: &Arc<Shared>, fleet: &Arc<crate::remote::Fleet>) {
+    for h in &fleet.hosts {
+        let Some((local, remote)) = h.tunnel else {
+            continue;
+        };
+        let addr = format!("127.0.0.1:{local}");
+        let listener = match tiny_http::Server::http(&addr) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("tunnel {}: cannot listen on {local}: {e}", h.name);
+                continue;
+            }
+        };
+        let (me, name) = (Arc::clone(shared), h.name.clone());
+        std::thread::Builder::new()
+            .name(format!("hooks-{name}"))
+            .spawn(move || hook_only(listener, me, name))
+            .ok();
+        let tunnel = crate::remote::Tunnel::new(&h.name, local, remote);
+        tunnel.start();
+        shared.tunnels.lock().unwrap().insert(h.name.clone(), tunnel);
+        println!("tunnel {}: host 127.0.0.1:{remote} -> hooks on 127.0.0.1:{local}", h.name);
+    }
+}
+
+/// HookOnlyHandler: what a host's tunnel lands on - `/hook`, and nothing
+/// else. Everything else the dispatcher serves would let any process on
+/// that host drive the sessions on this machine. The host is known from
+/// which listener the connection came in on, never from the payload.
+fn hook_only(server: tiny_http::Server, shared: Arc<Shared>, host: String) {
+    for request in server.incoming_requests() {
+        let (shared, host) = (Arc::clone(&shared), host.clone());
+        std::thread::spawn(move || hook_only_one(request, &shared, &host));
+    }
+}
+
+fn hook_only_one(mut request: tiny_http::Request, shared: &Arc<Shared>, host: &str) {
+    {
+        let path = request.url().split('?').next().unwrap_or("").trim_end_matches('/').to_string();
+        let (code, body) = if request.method() != &tiny_http::Method::Post || path != "/hook" {
+            (404, json!({"error": "no such path"}))
+        } else {
+            let ctype = request
+                .headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("Content-Type"))
+                .map(|h| h.value.as_str().to_string())
+                .unwrap_or_default();
+            let mut raw = Vec::new();
+            let _ = std::io::Read::read_to_end(
+                &mut std::io::Read::take(request.as_reader(), 4 * 1024 * 1024 + 1),
+                &mut raw,
+            );
+            if ctype.split(';').next().unwrap_or("").trim() != "application/json" {
+                (415, json!({"error": "expected application/json"}))
+            } else if raw.is_empty() || raw.len() > 4 * 1024 * 1024 {
+                (413, json!({"error": format!("body must be 1..{} bytes", 4 * 1024 * 1024)}))
+            } else {
+                match serde_json::from_slice::<Value>(&raw) {
+                    Err(_) => (400, json!({"error": "body is not JSON"})),
+                    Ok(v) => {
+                        let empty = Map::new();
+                        let p = v.as_object().unwrap_or(&empty);
+                        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            shared.on_hook(p, Some(host))
+                        }))
+                        .unwrap_or_else(|_| json!({"ok": false, "error": "internal error"}));
+                        (200, out)
+                    }
+                }
+            }
+        };
+        let resp = tiny_http::Response::from_string(body.to_string())
+            .with_status_code(code)
+            .with_header(
+                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+            );
+        let _ = request.respond(resp);
+    }
+}
+
 pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, live: bool) -> i32 {
     let addr = format!("{host}:{port}");
     let server = match tiny_http::Server::http(&addr) {
@@ -3731,6 +4113,16 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
             let _ =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sweeper.sweep_queue()));
         });
+        if let Some(fleet) = &shared.fleet {
+            // Each poll that lands wakes the window's streams.
+            let me = Arc::downgrade(&shared);
+            fleet.start(Arc::new(move || {
+                if let Some(s) = me.upgrade() {
+                    s.invalidate();
+                }
+            }));
+            start_tunnels(&shared, fleet);
+        }
     }
     println!("imperatorium (native) listening on http://{addr}");
     for request in server.incoming_requests() {

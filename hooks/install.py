@@ -285,12 +285,16 @@ def _ssh(host, command, data=None):
     return done.stdout.decode("utf-8", "replace")
 
 
-def install_remote(host, uninstall=False, dry_run=False, python="python3"):
+def install_remote(host, uninstall=False, dry_run=False, python="python3", native=False):
     """The same hooks, on another machine, reporting through its tunnel.
 
     cc_hook.py is copied to ~/.claude/imperatorium/ there and posts to
     127.0.0.1:8792, which the dispatcher's reverse tunnel carries back here.
     Paths are absolute because a hook runs with no shell to expand `~`.
+
+    With `native`, the hooks run the binary the dispatcher keeps on the host
+    (~/.claude/imperatorium/bin/imperatorium, pushed and SHA-256 checked on
+    first use) and the host needs no python3 at all.
     """
     home = _ssh(host, 'printf %s "$HOME"').strip()
     if not home.startswith("/"):
@@ -303,12 +307,22 @@ def install_remote(host, uninstall=False, dry_run=False, python="python3"):
     except ValueError as exc:
         raise SystemExit("%s:%s is not valid JSON (%s). Fix it by hand first."
                          % (host, path, exc))
-    events = {e: (EVENTS[e][0], script, EVENTS[e][2]) for e in REMOTE_EVENTS}
-    updated, changes = apply(settings, uninstall=uninstall, events=events,
-                             command=python)
+    binary = home + "/.claude/imperatorium/bin/imperatorium"
+    if native and not uninstall:
+        if _ssh(host, "[ -x %s ] && echo yes || true" % binary).strip() != "yes":
+            raise SystemExit("%s: %s is not there yet. The dispatcher puts it there on "
+                             "first use; to do it now: imperatorium remote-probe --read "
+                             "SESSION_ID %s" % (host, binary, host))
+        events = {e: (EVENTS[e][0], HOOK_SCRIPT, EVENTS[e][2]) for e in REMOTE_EVENTS}
+        updated, changes = apply(settings, uninstall=uninstall, events=events,
+                                 native=binary)
+    else:
+        events = {e: (EVENTS[e][0], script, EVENTS[e][2]) for e in REMOTE_EVENTS}
+        updated, changes = apply(settings, uninstall=uninstall, events=events,
+                                 command=python)
 
     print("settings : %s:%s" % (host, path))
-    print("hooks    : %s %s" % (python, script))
+    print("hooks    : %s" % ("%s hook" % binary if native else "%s %s" % (python, script)))
     for line in changes or ["(nothing to do)"]:
         print("  %s" % line)
     if dry_run:
@@ -316,7 +330,7 @@ def install_remote(host, uninstall=False, dry_run=False, python="python3"):
         print(json.dumps(updated.get("hooks", {}), indent=2))
         return 0
 
-    if not uninstall:
+    if not uninstall and not native:
         with open(HOOK_SCRIPT, "rb") as fh:
             _ssh(host, "mkdir -p %s/.claude/imperatorium && cat > %s"
                  % (home, script), fh.read())
@@ -352,8 +366,10 @@ def main():
     args = ap.parse_args()
 
     if args.remote:
+        # --native for a host takes no path: the binary is the one the
+        # dispatcher keeps there. Pass any value (`--native host`).
         return install_remote(args.remote, args.uninstall, args.dry_run,
-                              args.python)
+                              args.python, native=bool(args.native))
 
     path = args.settings or settings_path()
     global CONFIG_HOME

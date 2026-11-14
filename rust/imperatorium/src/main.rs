@@ -48,6 +48,7 @@ mod projects;
 mod prs;
 mod pyish;
 mod registry;
+mod remote;
 mod server;
 mod sessions;
 mod sessionstat;
@@ -184,6 +185,10 @@ fn main() {
         // Internal: closing.rs types into a session's console through this.
         Some("type-into") => closing::type_into_main(&args[1..]),
         Some("sessions") => sessions_main(&args),
+        // A remote host's side (phase 4), run over SSH by the dispatcher.
+        Some("remote-channel") => remote::channel_main(),
+        Some("inbox-send") => remote::inbox_send_main(&args[1..]),
+        Some("remote-probe") => remote::probe_main(&args[1..], home.as_deref()),
         Some("serve") => {
             let port = flag(&args, "--port")
                 .and_then(|p| p.parse().ok())

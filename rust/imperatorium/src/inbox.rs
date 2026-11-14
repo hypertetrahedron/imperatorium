@@ -40,6 +40,12 @@ pub fn send(socket: &str, token: Option<&str>, content: &str) -> Result<(), Stri
     write(socket, &payload)
 }
 
+/// The frames as built elsewhere (a remote dispatcher), written as they
+/// are: `imperatorium inbox-send` on a host.
+pub fn write_raw(socket: &str, payload: &[u8]) -> Result<(), String> {
+    write(socket, payload)
+}
+
 #[cfg(windows)]
 fn write(path: &str, payload: &[u8]) -> Result<(), String> {
     use std::io::Write;

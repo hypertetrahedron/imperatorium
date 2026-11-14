@@ -16,6 +16,8 @@ unicode-normalization = "0.1"
 # The HTTP API (phase 3): small, threaded, no async runtime.
 tiny_http = "0.12"
 sha1 = "0.10"
+# The binary pushed to a remote host is checked by SHA-256 (phase 4).
+sha2 = "0.10"
 # Python dict order, deletions included (sessionstat).
 indexmap = "2"
 # The window token, as secrets.token_urlsafe.
@@ -23,7 +25,14 @@ getrandom = "0.2"
 regex = "1"
 # http to 127.0.0.1 for the hooks; TLS (rustls) only for an ntfy push to
 # an https server.
-ureq = { version = "2", default-features = false, features = ["tls"] }
+ureq = { version = "2", default-features = false }
+
+[features]
+# TLS for an ntfy push to an https server - the dispatcher's only https.
+# A remote host's build leaves it out (`--no-default-features`): rustls'
+# ring needs a C compiler for the target, and the host never sends one.
+default = ["tls"]
+tls = ["ureq/tls"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -34,6 +43,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_System_Time",
     "Win32_UI_WindowsAndMessaging",
