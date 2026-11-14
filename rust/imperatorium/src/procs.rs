@@ -104,6 +104,97 @@ fn started(_pid: u32) -> Option<f64> {
     None
 }
 
+/// Every process beneath `root`, depth first, with what can be learned of each
+/// cheaply: its name, when it started, and (Windows) its executable, CPU time
+/// and memory.
+pub fn details(root: u32) -> Vec<Value> {
+    let table = process_table();
+    let mut children: HashMap<u32, Vec<&Proc>> = HashMap::new();
+    for p in &table {
+        children.entry(p.1).or_default().push(p);
+    }
+    let mut out = Vec::new();
+    let mut seen: HashSet<u32> = HashSet::from([root]);
+    let mut stack: Vec<(&Proc, usize)> = children
+        .get(&root)
+        .map(|k| k.iter().rev().map(|p| (*p, 1)).collect())
+        .unwrap_or_default();
+    while let Some((p, depth)) = stack.pop() {
+        if !seen.insert(p.0) {
+            continue;
+        }
+        let (exe, cpu, mem) = usage(p.0);
+        out.push(serde_json::json!({"pid": p.0, "ppid": p.1, "name": p.2, "depth": depth,
+            "started": p.3.or_else(|| started(p.0)), "exe": exe, "cpu_s": cpu, "mem_mb": mem}));
+        if let Some(kids) = children.get(&p.0) {
+            for k in kids.iter().rev() {
+                stack.push((k, depth + 1));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(windows)]
+fn usage(pid: u32) -> (Option<String>, Option<f64>, Option<f64>) {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return (None, None, None);
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let exe = (QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) != 0)
+            .then(|| String::from_utf16_lossy(&buf[..len as usize]));
+        let mut t: [FILETIME; 4] = std::mem::zeroed();
+        let ft = |f: &FILETIME| (((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64) as f64 / 1e7;
+        let cpu = (GetProcessTimes(h, &mut t[0], &mut t[1], &mut t[2], &mut t[3]) != 0)
+            .then(|| ft(&t[2]) + ft(&t[3]));
+        let mut m: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        m.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let mem = (K32GetProcessMemoryInfo(h, &mut m, m.cb) != 0)
+            .then(|| m.WorkingSetSize as f64 / (1024.0 * 1024.0));
+        CloseHandle(h);
+        (exe, cpu, mem)
+    }
+}
+
+#[cfg(not(windows))]
+fn usage(_pid: u32) -> (Option<String>, Option<f64>, Option<f64>) {
+    (None, None, None)
+}
+
+/// End one process. The caller has checked it is beneath the session.
+pub fn kill(pid: u32) -> Result<(), String> {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if h.is_null() {
+            return Err("it could not be opened (gone, or not ours)".into());
+        }
+        let ok = TerminateProcess(h, 1);
+        CloseHandle(h);
+        if ok == 0 {
+            return Err("it would not end".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+}
+
 /// {pid: shells beneath it that have outlived MIN_AGE}; a shell inside a
 /// shell is one task, so only the topmost on each branch counts.
 pub fn waiting_shells(pids: &[u32], table: &[Proc], now: f64) -> HashMap<u32, u64> {

@@ -36,6 +36,10 @@ NOTE = re.compile(r"<task-notification>(.*?)</task-notification>", re.S)
 TASK_ID = re.compile(r"<task-id>(.*?)</task-id>")
 STATUS = re.compile(r"<status>(.*?)</status>")
 SHELL_TOOLS = {"Bash", "PowerShell"}
+# Tasks that ended within this long are kept as `finished`, newest first.
+FINISHED_KEEP = 1800.0
+FINISHED_MAX = 20
+HOOK_ERRORS_KEEP = 10
 AGENT_TOOLS = {"Agent", "Task"}
 LABEL_CHARS = 80
 # Task ids for scheduled turns, which the transcript names differently.
@@ -103,6 +107,10 @@ class Fold:
         self.call_at = {}       # unanswered tool_use id -> when it was made
         self.tasks = {}         # task id -> {kind, label, started, expires}
         self.ended = set()      # task ids seen to end
+        self.ended_at = {}      # task id -> (when it ended, how)
+        self.done_calls = {}    # a foreground subagent that returned -> its record
+        self.mcp = []           # MCP servers connected, in the order they came
+        self.hook_errors = []   # the newest hook failures
         self.seen_msgs = set()
         self.tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         self.prompts = set()
@@ -135,6 +143,21 @@ class Fold:
                 out["turns"] += 1
                 if isinstance(entry.get("durationMs"), (int, float)):
                     out["last_turn_ms"] = entry["durationMs"]
+            elif sub == "stop_hook_summary":
+                for err in entry.get("hookErrors") or ():
+                    text = err if isinstance(err, str) else json.dumps(err, sort_keys=True)
+                    self.hook_errors.append({"at": at, "event": "Stop",
+                                             "error": " ".join(text.split())[:300]})
+                del self.hook_errors[:-HOOK_ERRORS_KEEP]
+        if kind == "attachment":
+            att = entry.get("attachment")
+            if isinstance(att, dict) and att.get("type") == "mcp_instructions_delta":
+                for name in att.get("addedNames") or ():
+                    if isinstance(name, str) and name not in self.mcp:
+                        self.mcp.append(name)
+                for name in att.get("removedNames") or ():
+                    if name in self.mcp:
+                        self.mcp.remove(name)
         msg = entry.get("message") or {}
         content = msg.get("content")
         if kind == "assistant":
@@ -166,14 +189,48 @@ class Fold:
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
                         cid = block.get("tool_use_id")
-                        _started(self.tasks, self.ended, entry, cid, self.calls, at)
+                        self._returned(entry, block, cid, at)
+                        _started(self.tasks, self.ended, entry, cid, self.calls, at,
+                                 self.ended_at)
                         self.calls.pop(cid, None)
                         self.call_at.pop(cid, None)
             for text in _texts(entry):
                 for note in NOTE.findall(text):
                     status = STATUS.search(note)
                     if status and status.group(1).strip() in TERMINAL:
-                        self.ended.update(t.strip() for t in TASK_ID.findall(note))
+                        for t in TASK_ID.findall(note):
+                            self.ended.add(t.strip())
+                            self.ended_at[t.strip()] = (at, status.group(1).strip())
+
+    def _returned(self, entry, block, cid, at):
+        """A subagent run in the foreground came back: it is finished."""
+        name, tool_input = self.calls.get(cid, (None, None))
+        if name not in AGENT_TOOLS:
+            return
+        result = entry.get("toolUseResult")
+        if isinstance(result, dict) and result.get("status") == "async_launched":
+            return
+        agent = result.get("agentId") if isinstance(result, dict) else None
+        self.done_calls[agent or cid] = {
+            "kind": "agents", "label": _label(tool_input), "started": self.call_at.get(cid),
+            "ended": at, "status": "failed" if block.get("is_error") else "completed"}
+
+    def finished(self, now):
+        """What ended in the last FINISHED_KEEP seconds, newest first."""
+        out = []
+        for tid, task in self.tasks.items():
+            if tid in self.ended:
+                when, how = self.ended_at.get(tid, (None, "completed"))
+            elif task.get("expires") and task["expires"] <= now:
+                when, how = task["expires"], "fired" if task["kind"] == "wakeups" else "timed out"
+            else:
+                continue
+            out.append(dict(task, id=tid, ended=when, status=how))
+        for aid, item in self.done_calls.items():
+            out.append(dict(item, id=aid))
+        out = [f for f in out if f.get("ended") and now - f["ended"] <= FINISHED_KEEP]
+        out.sort(key=lambda f: -f["ended"])
+        return out[:FINISHED_MAX]
 
     def summary(self, now):
         out = dict(self.out)
@@ -196,6 +253,9 @@ class Fold:
         # Every task id the transcript has named, running or not: an output
         # file under none of them belongs to a command still in the foreground.
         out["known_tasks"] = sorted(set(self.tasks) | self.ended)
+        out["finished"] = self.finished(now)
+        out["mcp_servers"] = list(self.mcp)
+        out["hook_errors"] = list(self.hook_errors)
         out["tokens"] = dict(self.tokens)
         out["prompts"] = len(self.prompts)
         if self.last:
@@ -217,12 +277,14 @@ class Fold:
         return out
 
 
-def _started(tasks, ended, entry, call_id, calls, at):
+def _started(tasks, ended, entry, call_id, calls, at, ended_at=None):
     """Record what one tool result says it put in the background."""
     name, tool_input = calls.get(call_id, (None, None))
     # Its result is only text, so the job it ended is read off the call.
     if name == "CronDelete" and isinstance(tool_input, dict) and tool_input.get("id"):
         ended.add(CRON + str(tool_input["id"]))
+        if ended_at is not None:
+            ended_at[CRON + str(tool_input["id"])] = (at, "cancelled")
     result = entry.get("toolUseResult")
     if not isinstance(result, dict):
         return
@@ -244,8 +306,12 @@ def _started(tasks, ended, entry, call_id, calls, at):
         when = _num(result.get("scheduledFor")) / 1000.0
         if result.get("stopped") or not when:
             ended.add(WAKEUP)
+            if ended_at is not None:
+                ended_at[WAKEUP] = (at, "cancelled")
         else:
             ended.discard(WAKEUP)
+            if ended_at is not None:
+                ended_at.pop(WAKEUP, None)
             reason = tool_input.get("reason") if isinstance(tool_input, dict) else None
             tasks[WAKEUP] = {"kind": "wakeups", "label": " ".join(str(reason or label).split())[:LABEL_CHARS],
                              "started": at, "fires_at": when, "expires": when}
@@ -260,6 +326,8 @@ def _started(tasks, ended, entry, call_id, calls, at):
             "expires": None if result.get("recurring") else when}
     if name == "TaskStop" and result.get("task_id"):
         ended.add(result["task_id"])
+        if ended_at is not None:
+            ended_at[result["task_id"]] = (at, "stopped")
 
 
 def projects_dir():

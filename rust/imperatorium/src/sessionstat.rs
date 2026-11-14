@@ -25,6 +25,10 @@ const CACHE_1H: f64 = 3600.0;
 const LABEL_CHARS: usize = 80;
 const WAKEUP: &str = "wakeup";
 const CRON: &str = "cron:";
+/// sessionstat.FINISHED_KEEP / FINISHED_MAX / HOOK_ERRORS_KEEP.
+const FINISHED_KEEP: f64 = 1800.0;
+const FINISHED_MAX: usize = 20;
+const HOOK_ERRORS_KEEP: usize = 10;
 
 /// A Python int or float, summed as Python sums them.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,6 +124,12 @@ pub struct Fold {
     /// task id -> task (key order as Python builds it)
     tasks: IndexMap<String, Map<String, Value>>,
     ended: IndexSet<String>,
+    /// task id -> (when it ended, how)
+    ended_at: HashMap<String, (Option<f64>, String)>,
+    /// a foreground subagent that returned -> its record
+    done_calls: IndexMap<String, Map<String, Value>>,
+    mcp: Vec<String>,
+    hook_errors: Vec<Value>,
     seen_msgs: HashSet<String>,
     tokens: [Num; 4], // input, output, cache_read, cache_write
     prompts: HashSet<String>,
@@ -181,7 +191,39 @@ impl Fold {
                         self.out.insert("last_turn_ms".into(), d.clone());
                     }
                 }
+                Some("stop_hook_summary") => {
+                    for err in entry.get("hookErrors").and_then(Value::as_array).into_iter().flatten() {
+                        let text = match err {
+                            Value::String(s) => s.clone(),
+                            other => crate::pyish::json_dumps_sorted(other),
+                        };
+                        let text: String = split_ws(&text).join(" ").chars().take(300).collect();
+                        self.hook_errors.push(json!({"at": at, "event": "Stop", "error": text}));
+                    }
+                    if self.hook_errors.len() > HOOK_ERRORS_KEEP {
+                        let cut = self.hook_errors.len() - HOOK_ERRORS_KEEP;
+                        self.hook_errors.drain(..cut);
+                    }
+                }
                 _ => {}
+            }
+        }
+        if kind == Some("attachment") {
+            if let Some(att) = entry.get("attachment").and_then(Value::as_object) {
+                if att.get("type").and_then(Value::as_str) == Some("mcp_instructions_delta") {
+                    for n in att.get("addedNames").and_then(Value::as_array).into_iter().flatten() {
+                        if let Some(n) = n.as_str() {
+                            if !self.mcp.iter().any(|m| m == n) {
+                                self.mcp.push(n.to_string());
+                            }
+                        }
+                    }
+                    for n in att.get("removedNames").and_then(Value::as_array).into_iter().flatten() {
+                        if let Some(n) = n.as_str() {
+                            self.mcp.retain(|m| m != n);
+                        }
+                    }
+                }
             }
         }
         let empty = Map::new();
@@ -246,6 +288,7 @@ impl Fold {
                     let Some(b) = b.as_object() else { continue };
                     if b.get("type").and_then(Value::as_str) == Some("tool_result") {
                         let k = key_of(b.get("tool_use_id"));
+                        self.returned(entry, b, &k, at);
                         self.started(entry, &k, at);
                         self.calls.shift_remove(&k);
                     }
@@ -256,15 +299,79 @@ impl Fold {
                 for m in note.captures_iter(&text) {
                     let body = &m[1];
                     if let Some(s) = status.captures(body) {
-                        if TERMINAL.contains(&strip(&s[1])) {
+                        let how = strip(&s[1]).to_string();
+                        if TERMINAL.contains(&how.as_str()) {
                             for t in task_id.captures_iter(body) {
                                 self.ended.insert(strip(&t[1]).to_string());
+                                self.ended_at.insert(strip(&t[1]).to_string(), (at, how.clone()));
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    /// Fold._returned: a subagent run in the foreground came back.
+    fn returned(&mut self, entry: &Map<String, Value>, block: &Map<String, Value>, call: &str, at: Option<f64>) {
+        let Some((id, name, input, made)) = self.calls.get(call).cloned() else { return };
+        if !matches!(name.as_str(), Some("Agent") | Some("Task")) {
+            return;
+        }
+        let result = entry.get("toolUseResult").and_then(Value::as_object);
+        if result.and_then(|r| r.get("status")).and_then(Value::as_str) == Some("async_launched") {
+            return;
+        }
+        let agent = result
+            .and_then(|r| r.get("agentId"))
+            .filter(|v| truthy(Some(v)))
+            .map(py_str)
+            .unwrap_or_else(|| py_str(&id));
+        let rec: Map<String, Value> = [
+            ("kind", json!("agents")),
+            ("label", json!(label(Some(&input)))),
+            ("started", made.map(|a| json!(a)).unwrap_or(Value::Null)),
+            ("ended", at.map(|a| json!(a)).unwrap_or(Value::Null)),
+            ("status", json!(if truthy(block.get("is_error")) { "failed" } else { "completed" })),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        self.done_calls.insert(agent, rec);
+    }
+
+    /// Fold.finished: what ended in the last FINISHED_KEEP seconds, newest first.
+    fn finished(&self, now: f64) -> Vec<Value> {
+        let mut out: Vec<Map<String, Value>> = Vec::new();
+        for (tid, task) in &self.tasks {
+            let expires = task.get("expires").and_then(Value::as_f64).filter(|e| *e != 0.0);
+            let (when, how) = if self.ended.contains(tid) {
+                match self.ended_at.get(tid) {
+                    Some((w, h)) => (w.map(|w| json!(w)).unwrap_or(Value::Null), h.clone()),
+                    None => (Value::Null, "completed".to_string()),
+                }
+            } else if expires.is_some_and(|e| e <= now) {
+                let how = if task.get("kind").and_then(Value::as_str) == Some("wakeups") { "fired" } else { "timed out" };
+                (task["expires"].clone(), how.to_string())
+            } else {
+                continue;
+            };
+            let mut item = task.clone();
+            item.insert("id".into(), json!(tid));
+            item.insert("ended".into(), when);
+            item.insert("status".into(), json!(how));
+            out.push(item);
+        }
+        for (aid, rec) in &self.done_calls {
+            let mut item = rec.clone();
+            item.insert("id".into(), json!(aid));
+            out.push(item);
+        }
+        let ended = |m: &Map<String, Value>| m.get("ended").and_then(Value::as_f64).filter(|e| *e != 0.0);
+        let mut out: Vec<Map<String, Value>> =
+            out.into_iter().filter(|m| ended(m).is_some_and(|e| now - e <= FINISHED_KEEP)).collect();
+        out.sort_by(|a, b| ended(b).partial_cmp(&ended(a)).unwrap_or(std::cmp::Ordering::Equal));
+        out.into_iter().take(FINISHED_MAX).map(Value::Object).collect()
     }
 
     /// sessionstat._started: what one tool result put in the background.
@@ -281,6 +388,7 @@ impl Fold {
                 .filter(|v| truthy(Some(v)))
             {
                 self.ended.insert(format!("{CRON}{}", py_str(id)));
+                self.ended_at.insert(format!("{CRON}{}", py_str(id)), (at, "cancelled".into()));
             }
         }
         let Some(result) = entry.get("toolUseResult").and_then(Value::as_object) else {
@@ -349,8 +457,10 @@ impl Fold {
             let w = num(result.get("scheduledFor")).f() / 1000.0;
             if truthy(result.get("stopped")) || w == 0.0 {
                 self.ended.insert(WAKEUP.into());
+                self.ended_at.insert(WAKEUP.into(), (at, "cancelled".into()));
             } else {
                 self.ended.shift_remove(WAKEUP);
+                self.ended_at.remove(WAKEUP);
                 let reason = input
                     .as_object()
                     .and_then(|i| i.get("reason"))
@@ -395,6 +505,7 @@ impl Fold {
         if name.as_deref() == Some("TaskStop") {
             if let Some(id) = result.get("task_id").filter(|v| truthy(Some(v))) {
                 self.ended.insert(py_str(id));
+                self.ended_at.insert(py_str(id), (at, "stopped".into()));
             }
         }
     }
@@ -441,6 +552,9 @@ impl Fold {
         known.sort();
         known.dedup();
         out.insert("known_tasks".into(), json!(known));
+        out.insert("finished".into(), Value::Array(self.finished(now)));
+        out.insert("mcp_servers".into(), json!(self.mcp));
+        out.insert("hook_errors".into(), Value::Array(self.hook_errors.clone()));
         out.insert(
             "tokens".into(),
             json!({"input": self.tokens[0].json(), "output": self.tokens[1].json(),

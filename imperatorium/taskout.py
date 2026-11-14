@@ -159,6 +159,37 @@ def agent_tail(path, limit=AGENT_TAIL_BYTES):
     """The end of a subagent's transcript as told by `story`. Returns
     (text, size, mtime); ("", 0, None) if gone. A line still being written
     is left for the next read."""
+    entries, size, mtime = agent_entries(path, limit)
+    if mtime is None:
+        return "", 0, None
+    return story(entries), size, mtime
+
+
+def agent_current(entries):
+    """The call a subagent is in the middle of - its last tool_use with no
+    result yet - as {name, summary}, or None."""
+    pending = {}
+    for entry in entries:
+        content = (entry.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                pending[block.get("id")] = block
+            elif block.get("type") == "tool_result":
+                pending.pop(block.get("tool_use_id"), None)
+    if not pending:
+        return None
+    block = list(pending.values())[-1]
+    return {"name": block.get("name") or "?",
+            "summary": _first_line(activity.summarise_input(block.get("input")))}
+
+
+def agent_entries(path, limit=AGENT_TAIL_BYTES):
+    """The entries at the end of a subagent's transcript, (entries, size,
+    mtime); ([], 0, None) if gone."""
     try:
         with open(path, "rb") as fh:
             st = os.fstat(fh.fileno())
@@ -166,7 +197,7 @@ def agent_tail(path, limit=AGENT_TAIL_BYTES):
             fh.seek(start)
             data = fh.read(st.st_size - start)
     except OSError:
-        return "", 0, None
+        return [], 0, None
     if start:
         cut = data.find(b"\n")
         data = data[cut + 1:] if cut >= 0 else b""
@@ -178,7 +209,7 @@ def agent_tail(path, limit=AGENT_TAIL_BYTES):
             continue
         if isinstance(entry, dict):
             entries.append(entry)
-    return story(entries), st.st_size, st.st_mtime
+    return entries, st.st_size, st.st_mtime
 
 
 def _created(path):
@@ -204,17 +235,27 @@ def awaited(stat, folder, limit=TAIL_BYTES, agents=None):
             files[os.path.basename(path)[:-len(".output")]] = path
     known = set(stat.get("known_tasks") or ())
 
-    def add(task_id, item, kind, path):
-        if not path:
+    def add(task_id, item, kind, path, **extra):
+        current = None
+        if kind == "wakeup":
+            text, size, mtime = item.get("label") or "", 0, None
+        elif not path:
             text, size, mtime = "", 0, None
         elif kind == "agent":
-            text, size, mtime = agent_tail(path)
+            entries, size, mtime = agent_entries(path)
+            text = story(entries) if mtime is not None else ""
+            if not extra.get("done"):
+                current = agent_current(entries)
         else:
             text, size, mtime = tail(path, limit)
-        out.append({"id": task_id, "kind": kind, "label": item.get("label") or "",
-                    "foreground": bool(item.get("foreground")),
-                    "started": item.get("started"), "size": size,
-                    "mtime": mtime, "text": text})
+        rec = {"id": task_id, "kind": kind, "label": item.get("label") or "",
+               "foreground": bool(item.get("foreground")),
+               "started": item.get("started"), "size": size,
+               "mtime": mtime, "text": text, "path": path or None}
+        if kind == "agent":
+            rec["current"] = current
+        rec.update(extra)
+        out.append(rec)
 
     foreground = []
     for kind, name in (("shells", "shell"), ("monitors", "monitor")):
@@ -233,11 +274,8 @@ def awaited(stat, folder, limit=TAIL_BYTES, agents=None):
     # will do when it fires is its label.
     for item in stat.get("wakeups") or ():
         if item.get("id"):
-            out.append({"id": item["id"], "kind": "wakeup", "label": item.get("label") or "",
-                        "foreground": False, "started": item.get("started"), "size": 0,
-                        "mtime": None, "text": item.get("label") or "",
-                        "fires_at": item.get("fires_at"),
-                        "recurring": bool(item.get("recurring"))})
+            add(item["id"], item, "wakeup", None, fires_at=item.get("fires_at"),
+                recurring=bool(item.get("recurring")))
 
     # A foreground call is matched to a file no transcript record names that
     # appeared after the call was made, in the order both happened.
@@ -255,4 +293,34 @@ def awaited(stat, folder, limit=TAIL_BYTES, agents=None):
                 match[2] if match else None)
 
     out.sort(key=lambda t: t.get("started") or 0)
+
+    # What ended lately, newest first, with its last output: `done`, and
+    # when and how it ended.
+    for item in stat.get("finished") or ():
+        kind = SINGULAR.get(item.get("kind"))
+        if not kind or not item.get("id"):
+            continue
+        path = transcripts.get(item["id"]) if kind == "agent" else \
+            files.get(item["id"]) if kind in ("shell", "monitor") else None
+        extra = {"done": True, "ended": item.get("ended"), "status": item.get("status")}
+        if kind == "wakeup":
+            extra.update(fires_at=item.get("fires_at"), recurring=bool(item.get("recurring")))
+        add(item["id"], item, kind, path, **extra)
+
+    # The session's MCP servers and its hooks' failures, as one row each.
+    servers = [s for s in stat.get("mcp_servers") or () if isinstance(s, str)]
+    if servers:
+        out.append({"id": "mcp", "kind": "mcp", "label": ", ".join(servers), "foreground": False,
+                    "started": None, "size": 0, "mtime": None, "text": "\n".join(servers),
+                    "path": None, "servers": servers})
+    errors = [e for e in stat.get("hook_errors") or () if isinstance(e, dict)]
+    if errors:
+        out.append({"id": "hooks", "kind": "hooks",
+                    "label": "%d hook error%s" % (len(errors), "" if len(errors) == 1 else "s"),
+                    "foreground": False, "started": None, "size": 0, "mtime": None,
+                    "text": "\n".join("%s: %s" % (e.get("event"), e.get("error")) for e in errors),
+                    "path": None, "errors": errors})
     return out
+
+
+SINGULAR = {"shells": "shell", "monitors": "monitor", "agents": "agent", "wakeups": "wakeup"}

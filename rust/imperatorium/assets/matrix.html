@@ -129,6 +129,13 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .tki .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .s .tki .a{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
 .s .tki .live{width:6px;height:6px;border-radius:50%;background:var(--busy);flex:none}
+.s .tki.sub{margin-left:14px}
+.s .tki.done{color:var(--muted)}
+.s .tki.done .k{color:var(--muted)}
+.s .tki.grp{color:var(--muted)}
+.s .tki.grp .ar{width:1em;flex:none}
+.s .tki .st,.s .tkh .st{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:0 5px;flex:none}
+.s .tki .st.bad,.s .tkh .st.bad{color:var(--fail);border-color:var(--fail)}
 @media (prefers-reduced-motion: reduce){.s .tkh .ar{transition:none}}
 /* A task shown in place of the chat. */
 #taskview{flex:1;display:flex;flex-direction:column;min-height:0}
@@ -142,6 +149,12 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 #tvtext{flex:1;min-height:0;margin:0;overflow:auto;padding:10px 16px;
   font:12.5px/18px var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--ink)}
 #tvtext .none{color:var(--muted);font-style:italic}
+#tvtext.chat{font-family:var(--ui);font-size:inherit;line-height:inherit;white-space:normal;padding:14px 16px}
+#tvhead .acts{display:flex;gap:6px;flex:none}
+#tvtext table.procs{border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+#tvtext table.procs th{text-align:left;color:var(--muted);font-weight:600;padding:2px 14px 4px 0}
+#tvtext table.procs td{padding:2px 14px 2px 0;vertical-align:middle}
+#tvtext table.procs td.exe{max-width:420px;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
 .s .stl{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s .stl.st-d-attn{color:var(--warn)}
 .s .stl.st-d-comp{color:var(--comp)}

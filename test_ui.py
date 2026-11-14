@@ -1410,23 +1410,30 @@ class TileTasks(unittest.TestCase):
         got = self.run_js(
             "const s = {status: 'busy', doing: 'Bash pytest', doing_since: 1, work: {processes: 2}};"
             "const l = taskList(s, [{id: 'b1', kind: 'shell', label: 'npm run dev'},"
-            "                      {id: 'a1', kind: 'agent', label: 'explore'}]);"
-            "process.stdout.write(JSON.stringify([l.map(t => [t.id, t.kind, !!t.static]),"
-            " taskSummary(l), taskSummary([])]));")
-        items, summary, empty = got
-        self.assertEqual(items, [["tool", "tool", False], ["b1", "shell", False],
-                                 ["a1", "agent", False], ["processes", "process", True]])
+            "                      {id: 'a1', kind: 'agent', label: 'explore'},"
+            "                      {id: 'b0', kind: 'shell', label: 'old', done: true, ended: 1},"
+            "                      {id: 'mcp', kind: 'mcp', label: 'chrome'}]);"
+            "process.stdout.write(JSON.stringify([l.running.map(t => [t.id, t.kind]),"
+            " l.done.map(t => t.id), l.extra.map(t => t.id),"
+            " taskSummary(l.running), taskSummary([])]));")
+        running, done, extra, summary, empty = got
+        self.assertEqual(running, [["tool", "tool"], ["b1", "shell"], ["a1", "agent"],
+                                   ["processes", "process"]])
+        # What ended stays out of the running list, under its own row.
+        self.assertEqual(done, ["b0"])
+        self.assertEqual(extra, ["mcp"])
         self.assertEqual(summary, "1 tool call \u00b7 1 shell \u00b7 1 subagent")
         self.assertEqual(empty, "none running")
 
-    def test_an_idle_session_has_no_tool_call_and_wakeups_say_when(self):
+    def test_an_idle_session_has_no_tool_call_and_times_read_right(self):
         got = self.run_js(
             "const now = Date.now()/1000;"
             "const l = taskList({status: 'idle', doing: 'Bash ls'}, []);"
-            "process.stdout.write(JSON.stringify([l.length,"
+            "process.stdout.write(JSON.stringify([l.running.length,"
             " taskWhen({kind: 'wakeup', fires_at: now + 600}, now),"
-            " taskWhen({kind: 'wakeup', fires_at: now - 5}, now)]));")
-        self.assertEqual(got, [0, "in 600s", "due"])
+            " taskWhen({kind: 'wakeup', fires_at: now - 5}, now),"
+            " taskWhen({kind: 'shell', done: true, ended: now - 30}, now)]));")
+        self.assertEqual(got, [0, "in 600s", "due", "30s ago"])
 
 
 @unittest.skipUnless(NODE, "node is not installed")

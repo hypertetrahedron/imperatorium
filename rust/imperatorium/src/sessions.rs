@@ -257,6 +257,23 @@ pub fn with_compacted(entries: &[Map<String, Value>], mut chain: Vec<usize>) -> 
     chain
 }
 
+/// The conversation chain of a transcript's entries, each cut to KEEP: what
+/// `chain_json` serves for a session, and taskout for a subagent.
+pub fn chain_values(entries: &[Map<String, Value>]) -> Vec<Value> {
+    let chain = with_compacted(entries, build_chain(entries));
+    chain
+        .into_iter()
+        .map(|i| {
+            let e = &entries[i];
+            let kept: Map<String, Value> = KEEP
+                .iter()
+                .filter_map(|k| e.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                .collect();
+            Value::Object(kept)
+        })
+        .collect()
+}
+
 pub fn chain_json(session_id: &str) -> Result<Value, String> {
     if !valid_uuid(session_id) {
         return Ok(json!([]));

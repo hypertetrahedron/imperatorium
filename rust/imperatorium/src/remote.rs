@@ -851,6 +851,24 @@ impl Channel {
         Ok((items, title))
     }
 
+    /// The task list, read on the host (taskout.awaited there).
+    pub fn awaited(&self, session_id: &str) -> Result<Vec<Value>, String> {
+        let req = json!({"op": "awaited", "session": session_id}).as_object().unwrap().clone();
+        let reply = self.call(req, READ_TIMEOUT)?;
+        Ok(reply.get("tasks").and_then(Value::as_array).cloned().unwrap_or_default())
+    }
+
+    /// A subagent as a chat, read on the host (taskout.subagent_view there).
+    pub fn subagent(&self, session_id: &str, agent: &str) -> Result<Value, String> {
+        let req = json!({"op": "subagent", "session": session_id, "agent": agent})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut reply = self.call(req, READ_TIMEOUT)?;
+        reply.remove("id");
+        Ok(Value::Object(reply))
+    }
+
     /// Stats.read: {session id: numbers} for those it has a transcript of.
     pub fn stats(&self, ids: &[String]) -> Result<Map<String, Value>, String> {
         let req = json!({"op": "stats", "sessions": ids}).as_object().unwrap().clone();
@@ -1058,6 +1076,16 @@ impl Fleet {
     pub fn inject(&self, host: &str, socket: &str, token: Option<&str>, content: &str) -> Result<(), String> {
         let p = self.per(host).ok_or_else(|| format!("host {host} is not configured"))?;
         inject(&p.host, &p.deploy, socket, token, content)
+    }
+
+    pub fn awaited(&self, host: &str, session_id: &str) -> Result<Vec<Value>, String> {
+        let p = self.per(host).ok_or_else(|| format!("host {host} is not configured"))?;
+        p.reader.awaited(session_id)
+    }
+
+    pub fn subagent(&self, host: &str, session_id: &str, agent: &str) -> Result<Value, String> {
+        let p = self.per(host).ok_or_else(|| format!("host {host} is not configured"))?;
+        p.reader.subagent(session_id, agent)
     }
 }
 
@@ -1384,6 +1412,29 @@ pub fn channel_main() -> i32 {
                     }
                 }
                 json!({"id": id, "ok": true, "stats": got})
+            }
+            Some("awaited") => {
+                let sid = req.get("session").map(py_str).unwrap_or_default();
+                let t = now();
+                let stat = stats.read(&sid, t).unwrap_or_else(|| json!({}));
+                let ran = stat.get("finished").and_then(Value::as_array).is_some_and(|f| {
+                    f.iter().any(|x| x.get("kind").and_then(Value::as_str) == Some("agents"))
+                });
+                let agents = if truthy(stat.get("agents")) || ran {
+                    crate::taskout::subagents_dir(crate::sessionstat::transcript_path(&sid).as_deref())
+                } else {
+                    None
+                };
+                let folder = crate::taskout::tasks_dir(&sid);
+                let tasks = crate::taskout::awaited(&stat, folder.as_deref(), agents.as_deref());
+                json!({"id": id, "ok": true, "tasks": tasks})
+            }
+            Some("subagent") => {
+                let sid = req.get("session").map(py_str).unwrap_or_default();
+                let agent = req.get("agent").map(py_str).unwrap_or_default();
+                let mut v = crate::taskout::subagent_view(&sid, &agent, now());
+                v.as_object_mut().unwrap().insert("id".into(), id.clone());
+                v
             }
             _ => json!({"id": id, "ok": false, "error": "ValueError: unknown op"}),
         };

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::pyish::{py_str, strip, take, truthy};
 
@@ -160,7 +160,7 @@ pub fn subagents_dir(transcript: Option<&Path>) -> Option<PathBuf> {
 
 /// {id: transcript} for each subagent, under its agent id and the id of the
 /// call that started it.
-fn agent_files(folder: Option<&Path>) -> std::collections::HashMap<String, PathBuf> {
+pub fn agent_files(folder: Option<&Path>) -> std::collections::HashMap<String, PathBuf> {
     let mut out = std::collections::HashMap::new();
     let Some(folder) = folder else { return out };
     let Ok(rd) = std::fs::read_dir(folder) else {
@@ -296,17 +296,53 @@ fn story(entries: &[Value]) -> String {
     }
 }
 
+/// taskout.agent_entries: the entries at the end of a subagent's transcript.
+fn agent_entries(path: &Path) -> Option<(Vec<Value>, u64, Value)> {
+    let (data, size, m) = read_end(path, AGENT_TAIL_BYTES, true)?;
+    let entries: Vec<Value> = String::from_utf8_lossy(&data)
+        .split('\n')
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(Value::is_object)
+        .collect();
+    Some((entries, size, json!(m)))
+}
+
+#[allow(dead_code)] // the tests; awaited reads entries once for both uses
 fn agent_tail(path: &Path) -> (String, u64, Value) {
-    match read_end(path, AGENT_TAIL_BYTES, true) {
-        Some((data, size, m)) => {
-            let entries: Vec<Value> = String::from_utf8_lossy(&data)
-                .split('\n')
-                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-                .filter(Value::is_object)
-                .collect();
-            (story(&entries), size, json!(m))
-        }
+    match agent_entries(path) {
+        Some((entries, size, m)) => (story(&entries), size, m),
         None => (String::new(), 0, Value::Null),
+    }
+}
+
+/// taskout.agent_current: the call a subagent is in the middle of.
+fn agent_current(entries: &[Value]) -> Value {
+    let mut pending: indexmap::IndexMap<String, &Value> = indexmap::IndexMap::new();
+    for e in entries {
+        let Some(blocks) = e.get("message").and_then(|m| m.get("content")).and_then(Value::as_array) else {
+            continue;
+        };
+        for b in blocks {
+            match b.get("type").and_then(Value::as_str) {
+                Some("tool_use") => {
+                    // dict assignment: a repeated id keeps its place.
+                    let id = b.get("id").map(|v| v.to_string()).unwrap_or_default();
+                    pending.insert(id, b);
+                }
+                Some("tool_result") => {
+                    let id = b.get("tool_use_id").map(|v| v.to_string()).unwrap_or_default();
+                    pending.shift_remove(&id);
+                }
+                _ => {}
+            }
+        }
+    }
+    match pending.values().last() {
+        None => Value::Null,
+        Some(b) => json!({
+            "name": b.get("name").filter(|v| truthy(Some(v))).cloned().unwrap_or(json!("?")),
+            "summary": first_line(&summarise_input(b.get("input")), 200),
+        }),
     }
 }
 
@@ -316,6 +352,57 @@ fn created(p: &Path) -> Option<f64> {
     let t = meta.created().or_else(|_| meta.modified()).ok()?;
     let d = t.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(d.as_secs() as f64 + d.subsec_nanos() as f64 * 1e-9)
+}
+
+/// A subagent's whole transcript as the chat shows a session's - its task,
+/// what it said, every call and result - with its model, tokens and cost.
+/// `agent` is its agent id or the id of the call that started it.
+pub fn subagent_view(session_id: &str, agent: &str, now: f64) -> Value {
+    // An agent id (a + hex) or the id of the call that started it (toolu_...).
+    let agent_ok = !agent.is_empty()
+        && agent.len() <= 64
+        && agent.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if !crate::sessions::valid_uuid(session_id) || !agent_ok {
+        return json!({"ok": false, "error": "not a session or subagent id"});
+    }
+    let Some(dir) = subagents_dir(crate::sessionstat::transcript_path(session_id).as_deref()) else {
+        return json!({"ok": false, "error": "this session has no subagents"});
+    };
+    let files = agent_files(Some(&dir));
+    let Some(path) = files.get(agent) else {
+        return json!({"ok": false, "error": "no such subagent"});
+    };
+    let Ok(raw) = std::fs::read(path) else {
+        return json!({"ok": false, "error": "its transcript could not be read"});
+    };
+    let content = String::from_utf8_lossy(&raw);
+    // Every entry of a subagent's transcript is a sidechain of the session's;
+    // read on its own, that sidechain is the main line.
+    let entries: Vec<Map<String, Value>> = crate::sessions::parse_entries(&content)
+        .into_iter()
+        .map(|mut e| {
+            e.insert("isSidechain".into(), json!(false));
+            e
+        })
+        .collect();
+    let chain = crate::sessions::chain_values(&entries);
+    let items = crate::conversation::to_items(&crate::conversation::messages(&chain), 0, true);
+    let mut fold = crate::sessionstat::Fold::new();
+    fold.feed(&entries);
+    let s = fold.summary(now);
+    let model = s.get("model_id").cloned().unwrap_or(Value::Null);
+    let t = s.get("tokens").cloned().unwrap_or(json!({}));
+    let n = |k: &str| t.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let (key, known) = crate::costs::resolve(Some(&model));
+    // Cache writes priced at the 5-minute rate: a subagent's are not split.
+    let cost = if known {
+        json!(crate::costs::price(&key, &[n("input"), n("output"), n("cache_read"), n("cache_write"), 0]))
+    } else {
+        Value::Null
+    };
+    json!({"ok": true, "agent": agent, "items": items, "sig": crate::server::signature(&items),
+           "model": model, "tokens": t, "context_tokens": s.get("context_tokens").cloned().unwrap_or(Value::Null),
+           "cost_usd": cost, "size": raw.len(), "mtime": mtime(path)})
 }
 
 /// taskout.awaited: each running shell, monitor and subagent, oldest first.
@@ -339,23 +426,47 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
         .flatten()
         .map(py_str)
         .collect();
-    let add =
-        |out: &mut Vec<Value>, id: &Value, item: &Value, kind: &str, path: Option<&PathBuf>| {
-            let (text, size, m) = match path {
+    let add = |out: &mut Vec<Value>,
+               id: &Value,
+               item: &Value,
+               kind: &str,
+               path: Option<&PathBuf>,
+               extra: Map<String, Value>| {
+        let label = item
+            .get("label")
+            .filter(|v| truthy(Some(v)))
+            .cloned()
+            .unwrap_or(json!(""));
+        let mut current = Value::Null;
+        let (text, size, m) = match path {
+            _ if kind == "wakeup" => (py_str(&label), 0, Value::Null),
+            None => (String::new(), 0, Value::Null),
+            Some(p) if kind == "agent" => match agent_entries(p) {
+                Some((entries, size, m)) => {
+                    if !truthy(extra.get("done")) {
+                        current = agent_current(&entries);
+                    }
+                    (story(&entries), size, m)
+                }
                 None => (String::new(), 0, Value::Null),
-                Some(p) if kind == "agent" => agent_tail(p),
-                Some(p) => tail(p, TAIL_BYTES),
-            };
-            let label = item
-                .get("label")
-                .filter(|v| truthy(Some(v)))
-                .cloned()
-                .unwrap_or(json!(""));
-            out.push(json!({"id": id, "kind": kind, "label": label,
-                        "foreground": truthy(item.get("foreground")),
-                        "started": item.get("started").cloned().unwrap_or(Value::Null),
-                        "size": size, "mtime": m, "text": text}));
+            },
+            Some(p) => tail(p, TAIL_BYTES),
         };
+        let mut rec = json!({"id": id, "kind": kind, "label": label,
+                    "foreground": truthy(item.get("foreground")),
+                    "started": item.get("started").cloned().unwrap_or(Value::Null),
+                    "size": size, "mtime": m, "text": text,
+                    "path": path.map(|p| json!(p.to_string_lossy())).unwrap_or(Value::Null)});
+        let o = rec.as_object_mut().unwrap();
+        if kind == "agent" {
+            o.insert("current".into(), current);
+        }
+        for (k, v) in extra {
+            o.insert(k, v);
+        }
+        out.push(rec);
+    };
+    let none = Map::new;
     let mut foreground: Vec<Value> = Vec::new();
     for (kind, name) in [("shells", "shell"), ("monitors", "monitor")] {
         for item in stat
@@ -367,7 +478,7 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
             if truthy(item.get("foreground")) {
                 foreground.push(item.clone());
             } else if let Some(id) = item.get("id").filter(|v| truthy(Some(v))) {
-                add(&mut out, id, item, name, files.get(&py_str(id)));
+                add(&mut out, id, item, name, files.get(&py_str(id)), none());
             }
         }
     }
@@ -379,7 +490,7 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
         .flatten()
     {
         if let Some(id) = item.get("id").filter(|v| truthy(Some(v))) {
-            add(&mut out, id, item, "agent", transcripts.get(&py_str(id)));
+            add(&mut out, id, item, "agent", transcripts.get(&py_str(id)), none());
         }
     }
     // A scheduled wakeup (ScheduleWakeup, CronCreate) prints nothing; what it
@@ -391,13 +502,10 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
         .flatten()
     {
         if let Some(id) = item.get("id").filter(|v| truthy(Some(v))) {
-            let label = item.get("label").filter(|v| truthy(Some(v))).cloned().unwrap_or(json!(""));
-            out.push(json!({"id": id, "kind": "wakeup", "label": label.clone(),
-                            "foreground": false,
-                            "started": item.get("started").cloned().unwrap_or(Value::Null),
-                            "size": 0, "mtime": null, "text": label,
-                            "fires_at": item.get("fires_at").cloned().unwrap_or(Value::Null),
-                            "recurring": truthy(item.get("recurring"))}));
+            let mut extra = Map::new();
+            extra.insert("fires_at".into(), item.get("fires_at").cloned().unwrap_or(Value::Null));
+            extra.insert("recurring".into(), json!(truthy(item.get("recurring"))));
+            add(&mut out, id, item, "wakeup", None, extra);
         }
     }
     if !foreground.is_empty() {
@@ -424,13 +532,14 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
         }
         for (i, item) in foreground.iter().enumerate() {
             match loose.get(i) {
-                Some((_, tid, p)) => add(&mut out, &json!(tid), item, "shell", Some(p)),
+                Some((_, tid, p)) => add(&mut out, &json!(tid), item, "shell", Some(p), none()),
                 None => add(
                     &mut out,
                     item.get("id").unwrap_or(&Value::Null),
                     item,
                     "shell",
                     None,
+                    none(),
                 ),
             }
         }
@@ -441,6 +550,62 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
             .partial_cmp(&started(b))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    // What ended lately, newest first, with its last output.
+    for item in stat.get("finished").and_then(Value::as_array).into_iter().flatten() {
+        let kind = match item.get("kind").and_then(Value::as_str) {
+            Some("shells") => "shell",
+            Some("monitors") => "monitor",
+            Some("agents") => "agent",
+            Some("wakeups") => "wakeup",
+            _ => continue,
+        };
+        let Some(id) = item.get("id").filter(|v| truthy(Some(v))) else { continue };
+        let path = match kind {
+            "agent" => transcripts.get(&py_str(id)),
+            "shell" | "monitor" => files.get(&py_str(id)),
+            _ => None,
+        };
+        let mut extra = Map::new();
+        extra.insert("done".into(), json!(true));
+        extra.insert("ended".into(), item.get("ended").cloned().unwrap_or(Value::Null));
+        extra.insert("status".into(), item.get("status").cloned().unwrap_or(Value::Null));
+        if kind == "wakeup" {
+            extra.insert("fires_at".into(), item.get("fires_at").cloned().unwrap_or(Value::Null));
+            extra.insert("recurring".into(), json!(truthy(item.get("recurring"))));
+        }
+        add(&mut out, id, item, kind, path, extra);
+    }
+    // The session's MCP servers and its hooks' failures, as one row each.
+    let servers: Vec<String> = stat
+        .get("mcp_servers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s.as_str().map(str::to_string))
+        .collect();
+    if !servers.is_empty() {
+        out.push(json!({"id": "mcp", "kind": "mcp", "label": servers.join(", "), "foreground": false,
+                        "started": null, "size": 0, "mtime": null, "text": servers.join("\n"),
+                        "path": null, "servers": servers}));
+    }
+    let errors: Vec<Value> = stat
+        .get("hook_errors")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.is_object())
+        .cloned()
+        .collect();
+    if !errors.is_empty() {
+        let text: Vec<String> = errors
+            .iter()
+            .map(|e| format!("{}: {}", py_str(&e["event"]), py_str(&e["error"])))
+            .collect();
+        out.push(json!({"id": "hooks", "kind": "hooks",
+                        "label": format!("{} hook error{}", errors.len(), if errors.len() == 1 { "" } else { "s" }),
+                        "foreground": false, "started": null, "size": 0, "mtime": null,
+                        "text": text.join("\n"), "path": null, "errors": errors}));
+    }
     out
 }
 

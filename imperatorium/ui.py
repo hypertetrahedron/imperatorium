@@ -151,6 +151,13 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .tki .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .s .tki .a{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
 .s .tki .live{width:6px;height:6px;border-radius:50%;background:var(--busy);flex:none}
+.s .tki.sub{margin-left:14px}
+.s .tki.done{color:var(--muted)}
+.s .tki.done .k{color:var(--muted)}
+.s .tki.grp{color:var(--muted)}
+.s .tki.grp .ar{width:1em;flex:none}
+.s .tki .st,.s .tkh .st{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:0 5px;flex:none}
+.s .tki .st.bad,.s .tkh .st.bad{color:var(--fail);border-color:var(--fail)}
 @media (prefers-reduced-motion: reduce){.s .tkh .ar{transition:none}}
 /* A task shown in place of the chat. */
 #taskview{flex:1;display:flex;flex-direction:column;min-height:0}
@@ -164,6 +171,12 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 #tvtext{flex:1;min-height:0;margin:0;overflow:auto;padding:10px 16px;
   font:12.5px/18px var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--ink)}
 #tvtext .none{color:var(--muted);font-style:italic}
+#tvtext.chat{font-family:var(--ui);font-size:inherit;line-height:inherit;white-space:normal;padding:14px 16px}
+#tvhead .acts{display:flex;gap:6px;flex:none}
+#tvtext table.procs{border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+#tvtext table.procs th{text-align:left;color:var(--muted);font-weight:600;padding:2px 14px 4px 0}
+#tvtext table.procs td{padding:2px 14px 2px 0;vertical-align:middle}
+#tvtext table.procs td.exe{max-width:420px;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
 .s .stl{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s .stl.st-d-attn{color:var(--warn)}
 .s .stl.st-d-comp{color:var(--comp)}
@@ -1802,6 +1815,7 @@ function drawSessions(){
   document.querySelectorAll(".s").forEach(el =>
     el.onclick = e => {
       if (e.target.closest("[data-tasks-toggle]")){ e.stopPropagation(); foldTasks(!tasksOpen); return; }
+      if (e.target.closest("[data-done-toggle]")){ e.stopPropagation(); foldDone(!doneOpen); return; }
       const item = e.target.closest("[data-task]");
       if (item && el.dataset.k === selected){ e.stopPropagation(); openTask(item.dataset.task); return; }
       closeTask();
@@ -2279,13 +2293,17 @@ function procView(tasks, pick){
 
 function procWanted(){
   const s = current(), w = (s && s.work) || {};
-  return view === "session" && tab === "log" && s && !s.remote && w.alive
-    && ((w.shells || 0) + (w.monitors || 0) + (w.agents || 0) + (w.wakeups || 0) > 0);
+  return view === "session" && tab === "log" && s && (s.remote ? !!s.pid || !!s.status : w.alive);
 }
 
+let remoteAskedAt = 0;
 async function loadProcs(){
   const want = selected;
   if (!procWanted()){ procTasks = []; procFor = want; drawProcs(); return; }
+  const s = current();
+  if (s && s.remote && procFor === want && Date.now() - remoteAskedAt < 3000) return;
+  if (s && s.remote) remoteAskedAt = Date.now();
+  loadTaskExtra();
   let d;
   try { d = await get("/api/awaited?session=" + encodeURIComponent(want)); } catch (e) { return; }
   if (want !== selected || !d.ok) return;
@@ -2299,7 +2317,8 @@ function drawProcs(){
   drawTaskView();
   if (held("#procs", drawProcs)) return;
   const box = $("#procs");
-  const v = procView((procFor === selected ? procTasks : []).filter(t => t.kind !== "wakeup"), procPick);
+  const v = procView((procFor === selected ? procTasks : []).filter(t =>
+    !t.done && ["shell", "monitor", "agent"].includes(t.kind)), procPick);
   procPick = v.pick;
   box.hidden = !v.show || taskShown();
   if (box.hidden){ procShown = ""; return; }
@@ -2323,26 +2342,38 @@ function drawProcs(){
 
 // -- the session's tasks, in its tile ------------------------------------------
 // The open tile ends in a folded list of what the session has going: the
-// tool call in flight, background shells, monitors, subagents, scheduled
-// wakeups and the processes its shells started. An item opens in place of
-// the chat (the tool call jumps to it in the chat instead); a click anywhere
-// else on the tile, Back, or Escape returns to the chat.
-let tasksOpen = false, taskView = null, taskLast = null, tvShown = "";
-try { tasksOpen = localStorage.getItem("imperatorium.tasksOpen") === "1"; } catch (e) {}
-const TASK_MARK = {tool: "tool", shell: "$", monitor: "mon", agent: "agent", wakeup: "wake", process: "proc"};
+// tool call in flight, background shells, monitors, subagents (each with the
+// call it is in the middle of beneath it), scheduled wakeups, the processes
+// its shells started, its MCP servers and any hook failures. What ended in
+// the last half hour waits under its own folded "Recently completed" row.
+// An item opens in place of the chat (the tool call jumps to it in the chat
+// instead); a click anywhere else on the tile, Chat, or Escape returns.
+let tasksOpen = false, doneOpen = false, taskView = null, taskLast = null, tvShown = "";
+try {
+  tasksOpen = localStorage.getItem("imperatorium.tasksOpen") === "1";
+  doneOpen = localStorage.getItem("imperatorium.doneOpen") === "1";
+} catch (e) {}
+const TASK_MARK = {tool: "tool", shell: "$", monitor: "mon", agent: "agent", wakeup: "wake",
+                   process: "proc", mcp: "mcp", hooks: "hook"};
 const TASK_KINDS_SAID = [["tool", "tool call"], ["shell", "shell"], ["monitor", "monitor"],
-                    ["agent", "subagent"], ["wakeup", "wakeup"]];
+                         ["agent", "subagent"], ["wakeup", "wakeup"]];
+const LIVE_KINDS = new Set(["shell", "monitor", "agent", "wakeup"]);
 
-// Pure: the list for row `s`, given what /api/awaited last said for it.
+// Pure: {running, done, extra} for row `s`, given what /api/awaited said.
+// `extra` is what describes the session rather than runs in it.
 function taskList(s, tasks){
-  if (!s) return [];
-  const out = [];
+  const out = {running: [], done: [], extra: []};
+  if (!s) return out;
   if (s.doing && (RUNNING[s.status] || s.state === "working"))
-    out.push({id: "tool", kind: "tool", label: s.doing, started: s.doing_since});
-  for (const t of tasks || []) out.push(t);
+    out.running.push({id: "tool", kind: "tool", label: s.doing, started: s.doing_since});
+  for (const t of tasks || []){
+    if (t.done) out.done.push(t);
+    else if (LIVE_KINDS.has(t.kind)) out.running.push(t);
+    else out.extra.push(t);
+  }
   const n = (s.work || {}).processes || 0;
-  if (n) out.push({id: "processes", kind: "process", static: true,
-                   label: n + (n === 1 ? " process" : " processes") + " started by its shells"});
+  if (n) out.running.push({id: "processes", kind: "process",
+                           label: n + (n === 1 ? " process" : " processes") + " started by its shells"});
   return out;
 }
 // Pure: "2 shells · 1 subagent", or "none running".
@@ -2350,31 +2381,54 @@ function taskSummary(list){
   const n = {};
   for (const t of list) n[t.kind] = (n[t.kind] || 0) + 1;
   return TASK_KINDS_SAID.filter(([k]) => n[k]).map(([k, w]) => n[k] + " " + w + (n[k] === 1 ? "" : "s"))
-    .join(" \u00b7 ") || "none running";
+    .join(" · ") || "none running";
 }
-const taskWhen = (t, now) => t.kind === "wakeup"
-  ? (t.fires_at ? (t.fires_at > now ? "in " + age(2 * now - t.fires_at) : "due") : "")
+const taskWhen = (t, now) => t.done ? (t.ended ? age(t.ended) + " ago" : "")
+  : t.kind === "wakeup" ? (t.fires_at ? (t.fires_at > now ? "in " + age(2 * now - t.fires_at) : "due") : "")
   : age(t.started);
+const STATUS_WORD = {completed: "done", failed: "failed", killed: "killed", stopped: "stopped",
+                     cancelled: "cancelled", fired: "fired", "timed out": "timed out"};
 function foldTasks(open){
   tasksOpen = open;
   try { localStorage.setItem("imperatorium.tasksOpen", open ? "1" : "0"); } catch (e) {}
   drawTileTasks();
 }
+function foldDone(open){
+  doneOpen = open;
+  try { localStorage.setItem("imperatorium.doneOpen", open ? "1" : "0"); } catch (e) {}
+  drawTileTasks();
+}
+function taskRow(t, now, sub){
+  const on = taskView && taskView.id === t.id ? " on" : "";
+  const live = !t.done && t.mtime && now - t.mtime < 5;
+  const why = t.kind === "tool" ? "show it in the chat: " : "show it: ";
+  const status = t.done && t.status && t.status !== "completed"
+    ? `<span class="st ${t.status === "failed" ? "bad" : ""}">${esc(STATUS_WORD[t.status] || t.status)}</span>` : "";
+  let html = `<div class="tki${on}${t.done ? " done" : ""}${sub ? " sub" : ""}" data-task="${esc(t.id)}" title="${
+    esc(why + (t.label || t.id))}"><span class=k>${TASK_MARK[t.kind] || "?"}</span><span class=l>${
+    esc(t.label || t.id)}</span>${status}${live ? "<span class=live></span>" : ""}<span class=a>${
+    esc(taskWhen(t, now))}</span></div>`;
+  // A subagent's own call in flight, beneath it.
+  if (t.kind === "agent" && t.current && !t.done)
+    html += `<div class="tki sub static" title="${esc(t.current.name + " " + (t.current.summary || ""))}">` +
+      `<span class=k>↳</span><span class=l>${esc(t.current.name)} ${esc(t.current.summary || "")}</span></div>`;
+  return html;
+}
 function drawTileTasks(){
   const box = document.querySelector("#sessions .s.on .tk");
   if (!box) return;
   const s = current(), now = Date.now() / 1000;
-  const list = taskList(s, procFor === selected ? procTasks : []);
-  const items = list.map(t => {
-    const on = taskView && taskView.id === t.id ? " on" : "";
-    const live = t.mtime && now - t.mtime < 5;
-    return `<div class="tki${on}${t.static ? " static" : ""}"${t.static ? "" : ` data-task="${esc(t.id)}"`} title="${
-      esc(t.static ? t.label : (t.kind === "tool" ? "show it in the chat: " : "show its output: ") + (t.label || t.id))}">` +
-      `<span class=k>${TASK_MARK[t.kind] || "?"}</span><span class=l>${esc(t.label || t.id)}</span>` +
-      `${live ? "<span class=live></span>" : ""}<span class=a>${esc(taskWhen(t, now))}</span></div>`;
-  }).join("") || `<div class="tki static">nothing running</div>`;
+  const l = taskList(s, procFor === selected ? procTasks : []);
+  let items = l.running.map(t => taskRow(t, now)).join("") ||
+    `<div class="tki static">nothing running</div>`;
+  if (l.done.length)
+    items += `<div class="tki grp" data-done-toggle title="tasks that ended in the last half hour">` +
+      `<span class=ar>${doneOpen ? "&#9662;" : "&#9656;"}</span><span class=l>Recently completed (${l.done.length})</span></div>` +
+      (doneOpen ? l.done.map(t => taskRow(t, now, true)).join("") : "");
+  items += l.extra.map(t => taskRow(t, now)).join("");
   const html = `<button type=button class=tkh data-tasks-toggle aria-expanded="${tasksOpen}">` +
-    `<span class=ar>&#9656;</span>Tasks \u00b7 ${esc(taskSummary(list))}</button><div class=tkl>${items}</div>`;
+    `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running))}${
+      l.extra.some(t => t.kind === "hooks") ? ` <span class="st bad">hook errors</span>` : ""}</button><div class=tkl>${items}</div>`;
   box.classList.toggle("open", tasksOpen);
   if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }
 }
@@ -2383,12 +2437,13 @@ function openTask(id){
   if (id === "tool"){ closeTask(); jumpToTool(); return; }
   if (taskView && taskView.id === id){ closeTask(); return; }
   if (tab !== "log") setTab("log");
-  taskView = {k: selected, id}; taskLast = null; tvShown = "";
+  taskView = {k: selected, id}; taskLast = null; tvShown = ""; tvExtra = null; tvArm = "";
   drawProcs();
+  loadTaskExtra(true);
 }
 function closeTask(){
   if (!taskView) return;
-  taskView = null; taskLast = null; tvShown = "";
+  taskView = null; taskLast = null; tvShown = ""; tvExtra = null; tvArm = "";
   drawProcs();
 }
 // The tool call in flight is the newest one in the chat.
@@ -2399,34 +2454,158 @@ function jumpToTool(){
   logFollow = logAtEnd($("#log"));
   markAway();
 }
+
+// What a view needs beyond the task list: a subagent's whole chat, or the
+// processes' numbers. Fetched when opened and every 2 s while it shows.
+let tvExtra = null, tvExtraAt = 0, tvArm = "";
+async function loadTaskExtra(force){
+  if (!taskShown()) return;
+  const v = taskView, t = currentTask();
+  const kind = v.id === "processes" ? "process" : t && t.kind;
+  if (kind !== "agent" && kind !== "process") return;
+  if (!force && Date.now() - tvExtraAt < 2000) return;
+  tvExtraAt = Date.now();
+  let d;
+  try {
+    d = kind === "agent"
+      ? await get("/api/subagent?session=" + encodeURIComponent(v.k) + "&agent=" + encodeURIComponent(v.id))
+      : await get("/api/processes?session=" + encodeURIComponent(v.k));
+  } catch (e) { return; }
+  if (taskView !== v) return;
+  tvExtra = d; tvShown = "";
+  drawTaskView();
+}
+function currentTask(){
+  if (!taskView) return null;
+  return (procFor === selected ? procTasks : []).find(x => x.id === taskView.id) || null;
+}
+
+// The head's buttons, by kind: copying needs nothing, the others are asked
+// twice (the first click arms, the second acts).
+function taskActions(t){
+  const out = [];
+  if (!t) return "";
+  if (t.text && (t.kind === "shell" || t.kind === "monitor")) out.push(`<button class="ghost sm" data-tvact="copy">Copy output</button>`);
+  if (t.path) out.push(`<button class="ghost sm" data-tvact="path" title="${esc(t.path)}">Copy path</button>`);
+  const s = current();
+  if (!t.done && (t.kind === "shell" || t.kind === "monitor" || t.kind === "agent") && s && s.dispatchable)
+    out.push(`<button class="ghost sm${tvArm === "stop" ? " danger" : ""}" data-tvact="stop" title="sends the session a prompt asking it to stop this task">${
+      tvArm === "stop" ? "Click again to ask" : "Ask Claude to stop it"}</button>`);
+  return out.join("");
+}
 function drawTaskView(){
-  if (taskView && taskView.k !== selected){ taskView = null; taskLast = null; tvShown = ""; }
+  if (taskView && taskView.k !== selected){ taskView = null; taskLast = null; tvShown = ""; tvExtra = null; }
   const on = taskShown();
   $("#taskview").hidden = !on;
   if (tab === "log") $("#log").hidden = on;
   if (!on) return;
-  const t = (procFor === selected ? procTasks : []).find(x => x.id === taskView.id);
+  const now = Date.now() / 1000;
+  if (taskView.id === "processes") return drawProcView(now);
+  const t = currentTask();
   if (t) taskLast = t;
   const show = t || taskLast;
-  const now = Date.now() / 1000;
-  if (!show){ $("#tvhead").innerHTML = `<button class="ghost sm" data-taskback>&#8592; Chat</button><b>loading\u2026</b>`; return; }
-  const when = !t ? `<span class="when ended">ended - its last output</span>`
+  if (!show){ setHead(`<button class="ghost sm" data-taskback>&#8592; Chat</button><b>loading…</b>`); return; }
+  const gone = !t || show.done;
+  const when = gone ? `<span class="when ended">${show.done ? esc((STATUS_WORD[show.status] || show.status || "ended") +
+      (show.ended ? " " + age(show.ended) + " ago" : "")) : "ended"} - its last output</span>`
     : `<span class=when>${show.kind === "wakeup" ? esc(taskWhen(show, now))
-      : "started " + esc(age(show.started)) + " ago"}</span>`;
-  const head = `<button class="ghost sm" data-taskback title="back to the chat (Esc)">&#8592; Chat</button>` +
-    `<span class=k>${TASK_MARK[show.kind] || "?"}</span><b title="${esc(show.label || show.id)}">${esc(show.label || show.id)}</b>${when}`;
-  if ($("#tvhead").dataset.sig !== head){ $("#tvhead").innerHTML = head; $("#tvhead").dataset.sig = head; }
+      : show.started ? "started " + esc(age(show.started)) + " ago" : ""}</span>`;
+  let numbers = "";
+  if (show.kind === "agent" && tvExtra && tvExtra.ok){
+    const tk = tvExtra.tokens || {}, all = (tk.input || 0) + (tk.output || 0) + (tk.cache_read || 0) + (tk.cache_write || 0);
+    numbers = `<span class=when title="this subagent's own model, tokens and list-price cost">${esc([
+      tvExtra.model, tvExtra.context_tokens ? "context " + fmtTokens(tvExtra.context_tokens) : "",
+      all ? fmtTokens(all) + " tokens" : "", tvExtra.cost_usd != null ? "≈ $" + tvExtra.cost_usd.toFixed(2) : ""]
+      .filter(Boolean).join(" · "))}</span>`;
+  }
+  setHead(`<button class="ghost sm" data-taskback title="back to the chat (Esc)">&#8592; Chat</button>` +
+    `<span class=k>${TASK_MARK[show.kind] || "?"}</span><b title="${esc(show.label || show.id)}">${esc(show.label || show.id)}</b>` +
+    numbers + when + `<span class=acts>${taskActions(show)}</span>`);
+  // A subagent reads as a chat once its transcript has come.
+  if (show.kind === "agent" && tvExtra && tvExtra.ok && (tvExtra.items || []).length){
+    const sig = show.id + "\nchat\n" + tvExtra.sig;
+    if (sig === tvShown) return;
+    const box = $("#tvtext"), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 24 || !tvShown.startsWith(show.id + "\n");
+    box.classList.add("chat");
+    box.innerHTML = tvExtra.items.map(it => `<div class="turn${it.speaker === "you" ? " you-turn" : ""}"><div class="who ${
+      esc(it.speaker || it.role)}">${esc(it.speaker === "you" ? "its task" : SPEAKER[it.speaker] || it.speaker || it.role)}</div>${
+      renderBlocks(it.blocks)}</div>`).join("");
+    tvShown = sig;
+    if (atEnd) box.scrollTop = box.scrollHeight;
+    return;
+  }
   const text = show.kind === "wakeup"
     ? (show.fires_at ? "Fires at " + clock(show.fires_at) + (show.recurring ? ", and again after that" : "") + ".\n\n" : "") + (show.label || "")
+    : show.kind === "hooks" ? (show.errors || []).map(e => (e.at ? clock(e.at) + "  " : "") + e.event + ": " + e.error).join("\n")
+    : show.kind === "mcp" ? "MCP servers connected to this session:\n\n" + (show.servers || []).map(n => "  " + n).join("\n")
     : show.text || "";
-  const pre = $("#tvtext"), sig = show.id + "\n" + text;
+  setText2(show.id, text);
+}
+function setHead(html){
+  if ($("#tvhead").dataset.sig !== html){ $("#tvhead").innerHTML = html; $("#tvhead").dataset.sig = html; }
+}
+function setText2(id, text){
+  const pre = $("#tvtext"), sig = id + "\n" + text;
   if (sig === tvShown) return;
-  const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4 || !tvShown.startsWith(show.id + "\n");
+  pre.classList.remove("chat");
+  const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4 || !tvShown.startsWith(id + "\n");
   pre.innerHTML = text.trim() ? esc(text.replace(/\n+$/, "")) : `<span class=none>no output yet</span>`;
   tvShown = sig;
   if (atEnd) pre.scrollTop = pre.scrollHeight;
 }
-$("#taskview").addEventListener("click", e => { if (e.target.closest("[data-taskback]")) closeTask(); });
+const fmtTokens = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+// The processes under the session, with what each costs; End is asked twice.
+function drawProcView(now){
+  setHead(`<button class="ghost sm" data-taskback title="back to the chat (Esc)">&#8592; Chat</button>` +
+    `<span class=k>proc</span><b>Processes started by its shells</b><span class=when>refreshed every 2 s</span>`);
+  const d = tvExtra;
+  if (!d){ setText2("processes", ""); return; }
+  const rows = (d.processes || []).map(p => `<tr><td style="padding-left:${(p.depth - 1) * 14}px">${esc(p.name)}</td><td>${p.pid}</td>` +
+    `<td>${p.started ? esc(age(p.started)) : ""}</td><td>${p.cpu_s != null ? p.cpu_s.toFixed(1) + " s" : ""}</td>` +
+    `<td>${p.mem_mb != null ? Math.round(p.mem_mb) + " MB" : ""}</td><td class=exe title="${esc(p.exe || "")}">${esc(p.exe || "")}</td>` +
+    `<td><button class="ghost sm${tvArm === "kill:" + p.pid ? " danger" : ""}" data-kill="${p.pid}">${
+      tvArm === "kill:" + p.pid ? "Click again to end" : "End"}</button></td></tr>`).join("");
+  const html = rows ? `<table class=procs><tr><th>process</th><th>pid</th><th>age</th><th>CPU</th><th>memory</th><th>executable</th><th></th></tr>${rows}</table>`
+    : `<span class=none>${esc(d.error || "no processes beneath the session")}</span>`;
+  const sig = "processes\n" + html;
+  if (sig === tvShown) return;
+  const box = $("#tvtext");
+  box.classList.remove("chat");
+  box.innerHTML = html;
+  tvShown = sig;
+}
+$("#taskview").addEventListener("click", async e => {
+  if (e.target.closest("[data-taskback]")) return closeTask();
+  const t = currentTask() || taskLast;
+  const act = e.target.closest("[data-tvact]");
+  if (act && t){
+    const what = act.dataset.tvact;
+    if (what === "copy" || what === "path"){
+      try { await navigator.clipboard.writeText(what === "copy" ? t.text : t.path); act.textContent = "copied"; }
+      catch (x) { act.textContent = "copy failed"; }
+      return;
+    }
+    if (what === "stop"){
+      if (tvArm !== "stop"){ tvArm = "stop"; $("#tvhead").dataset.sig = ""; return drawTaskView(); }
+      tvArm = "";
+      const r = await post("/api/dispatch", {session_id: taskView.k, prompt:
+        `Please stop the background task ${t.id} (${t.label || t.kind}) now, with TaskStop. ` +
+        `I asked for this from the Imperatorium window.`});
+      $("#say").textContent = r.ok ? "asked the session to stop it" : (r.error || "not sent");
+      $("#tvhead").dataset.sig = "";
+      return drawTaskView();
+    }
+  }
+  const kill = e.target.closest("[data-kill]");
+  if (kill){
+    const pid = +kill.dataset.kill;
+    if (tvArm !== "kill:" + pid){ tvArm = "kill:" + pid; tvShown = ""; return drawTaskView(); }
+    tvArm = "";
+    const r = await post("/api/kill_process", {session_id: taskView.k, pid});
+    $("#say").textContent = r.ok ? "ended process " + pid : (r.error || "not ended");
+    loadTaskExtra(true);
+  }
+});
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && taskShown() && !typing(e)){ e.preventDefault(); closeTask(); }
 });

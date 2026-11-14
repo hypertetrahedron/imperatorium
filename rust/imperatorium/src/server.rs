@@ -2350,6 +2350,29 @@ impl Shared {
                 (200, Body::Json(self.dispatch(store, p, from_window)))
             }
             "/api/voice/warm" => (200, Body::Json(self.warm_voice())),
+            "/api/kill_process" => {
+                // Ends one process a session's shell started: only from the
+                // window, and only one that is beneath that session.
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window"})));
+                }
+                let sid = p.get("session_id").and_then(Value::as_str).unwrap_or("");
+                let want = p.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32;
+                let Some(root) = self.row(sid).filter(|r| !truthy(r.get("remote")))
+                    .and_then(|r| r.get("pid").and_then(Value::as_u64)) else {
+                    return (200, Body::Json(json!({"ok": false, "error": "no such local session"})));
+                };
+                let under = crate::procs::details(root as u32)
+                    .iter()
+                    .any(|d| d.get("pid").and_then(Value::as_u64) == Some(want as u64));
+                if want == 0 || !under {
+                    return (200, Body::Json(json!({"ok": false, "error": "that process is not one this session started"})));
+                }
+                (200, Body::Json(match crate::procs::kill(want) {
+                    Ok(()) => json!({"ok": true}),
+                    Err(e) => json!({"ok": false, "error": e}),
+                }))
+            }
             "/api/dictate" => {
                 if !from_window {
                     return (403, Body::Json(json!({"ok": false, "error": "dictation opens the microphone: only the Imperatorium window and its herdr mods"})));
@@ -3449,6 +3472,16 @@ impl Shared {
         let now = Self::now();
         let alive =
             row.get("pid").is_some_and(|p| p.is_u64() || p.is_i64()) && truthy(row.get("status"));
+        if truthy(row.get("remote")) && alive {
+            // Read on the session's own machine.
+            let host = row.get("host").map(crate::pyish::py_str).unwrap_or_default();
+            let sid = row.get("sessionId").map(crate::pyish::py_str).unwrap_or_default();
+            return match self.fleet.as_ref().map(|f| f.awaited(&host, &sid)) {
+                Some(Ok(tasks)) => json!({"ok": true, "now": now, "tasks": tasks}),
+                Some(Err(e)) => json!({"ok": false, "error": format!("reading on {host}: {e}")}),
+                None => json!({"ok": true, "now": now, "tasks": []}),
+            };
+        }
         if truthy(row.get("remote")) || !alive {
             return json!({"ok": true, "now": now, "tasks": []});
         }
@@ -3459,13 +3492,46 @@ impl Shared {
             .to_string();
         let stat = self.stats.read(&sid, now).unwrap_or_else(|| json!({}));
         let folder = crate::taskout::tasks_dir(&sid);
-        let agents = if truthy(stat.get("agents")) {
+        let ran_agents = stat
+            .get("finished")
+            .and_then(Value::as_array)
+            .is_some_and(|f| f.iter().any(|x| x.get("kind").and_then(Value::as_str) == Some("agents")));
+        let agents = if truthy(stat.get("agents")) || ran_agents {
             crate::taskout::subagents_dir(sessionstat::transcript_path(&sid).as_deref())
         } else {
             None
         };
         let tasks = crate::taskout::awaited(&stat, folder.as_deref(), agents.as_deref());
         json!({"ok": true, "now": now, "tasks": tasks})
+    }
+
+    /// A subagent of `session` as a chat (taskout.subagent_view), read on the
+    /// session's own machine.
+    fn api_subagent(&self, session: &str, agent: &str) -> Value {
+        let Some(row) = self.row(session) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let sid = row.get("sessionId").map(crate::pyish::py_str).unwrap_or_default();
+        if truthy(row.get("remote")) {
+            let host = row.get("host").map(crate::pyish::py_str).unwrap_or_default();
+            return match self.fleet.as_ref().map(|f| f.subagent(&host, &sid, agent)) {
+                Some(Ok(v)) => v,
+                Some(Err(e)) => json!({"ok": false, "error": format!("reading on {host}: {e}")}),
+                None => json!({"ok": false, "error": format!("host {host} is not configured")}),
+            };
+        }
+        crate::taskout::subagent_view(&sid, agent, Self::now())
+    }
+
+    /// The processes beneath a local session's own, with their CPU and memory.
+    fn api_processes(&self, session: &str) -> Value {
+        let Some(row) = self.row(session) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let Some(pid) = row.get("pid").and_then(Value::as_u64).filter(|_| !truthy(row.get("remote"))) else {
+            return json!({"ok": true, "processes": []});
+        };
+        json!({"ok": true, "pid": pid, "processes": crate::procs::details(pid as u32)})
     }
 
     /// Control.errors: tool failures across recent sessions.
@@ -3744,6 +3810,8 @@ impl Shared {
                 (200, Body::Json(self.api_session_status(&arg("session"))))
             }
             ("GET", "/api/awaited") => (200, Body::Json(self.api_awaited(&arg("session")))),
+            ("GET", "/api/subagent") => (200, Body::Json(self.api_subagent(&arg("session"), &arg("agent")))),
+            ("GET", "/api/processes") => (200, Body::Json(self.api_processes(&arg("session")))),
             ("GET", "/api/errors") => {
                 let raw = arg("days");
                 let raw = if raw.is_empty() { "7".to_string() } else { raw };

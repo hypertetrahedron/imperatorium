@@ -115,13 +115,28 @@ whichever wrote last. Drag the drawer's top edge to resize it.
 A tile opens when you click it (not when the pointer passes over it), and
 the open tile ends in a folded **Tasks** line - `Tasks · 2 shells · 1
 subagent` - that lists what the session has going when clicked: the tool
-call in flight, background shells, Monitors, subagents, scheduled wakeups
-(with when they fire) and the processes its shells started. Click an item
-to see it in place of the chat: a shell's or Monitor's output, a subagent's
-story, a wakeup's prompt, kept on screen with "ended" once it finishes; the
-tool call jumps to itself in the chat instead. A click anywhere else on the
-tile, **Chat**, or Esc brings the chat back. The list stays open or folded
-for every session until you fold it again.
+call in flight, background shells, Monitors, subagents (with the call each
+is in the middle of beneath it), scheduled wakeups (with when they fire),
+the processes its shells started, its MCP servers, and any hook failures.
+What ended in the last half hour - with how it ended (done, failed, killed,
+stopped, timed out) - waits under its own folded **Recently completed (N)**
+row, so it never crowds the list until you open it. Click an item to see it
+in place of the chat:
+
+- a shell's or Monitor's output, live, with **Copy output**, **Copy path**
+  and **Ask Claude to stop it** (asked twice; it sends the session a prompt
+  to use TaskStop);
+- a subagent as a chat of its own - its task, every call and result, its
+  replies - with its model, context, tokens and list-price cost;
+- the processes beneath the session as a table: name, pid, age, CPU time,
+  memory and executable, each with **End** (asked twice, and refused for a
+  process the session did not start);
+- a wakeup's prompt and when it fires; the MCP servers; the hook errors.
+
+A finished item keeps its last output, marked with how it ended. The tool
+call jumps to itself in the chat instead. A click anywhere else on the
+tile, **Chat**, or Esc brings the chat back. Remote and container sessions
+list their tasks too, read on their own machine (processes are local only).
 
 Under the Send buttons, a status panel (click its line to fold it) shows the
 selected session in more detail than its tile: subagents, backgrounded
