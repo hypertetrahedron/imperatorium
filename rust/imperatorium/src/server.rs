@@ -723,6 +723,7 @@ impl Shared {
                 "host",
                 "work",
                 "hc",
+                "reviewed",
             ] {
                 tile.insert(k.into(), row.get(k).cloned().unwrap_or(Value::Null));
             }
@@ -835,6 +836,19 @@ impl Shared {
                 json!({"ok": ok})
             }
             "/api/dismiss" => self.dismiss_session(store, p.get("session_id")),
+            "/api/reviewed" => {
+                // Control.mark_reviewed.
+                let sid = p.get("session_id").and_then(Value::as_str).unwrap_or("");
+                let Some(row) = self.row(sid).filter(|_| !sid.is_empty()) else {
+                    return json!({"ok": false, "error": "no such session"});
+                };
+                if !truthy(row.get("attention")) {
+                    return json!({"ok": true, "reviewed": truthy(row.get("reviewed"))});
+                }
+                store.mark_reviewed(sid, Self::now());
+                self.invalidate();
+                json!({"ok": true, "reviewed": true})
+            }
             "/api/queue" => {
                 let prompt = p.get("prompt").and_then(Value::as_str).unwrap_or("");
                 if crate::pyish::strip(prompt).is_empty() {
@@ -2245,6 +2259,7 @@ impl Shared {
             "/api/new",
             "/api/close",
             "/api/dismiss",
+            "/api/reviewed",
             "/api/prefs",
             "/api/notify",
             "/api/settings",
@@ -2487,7 +2502,7 @@ impl Shared {
                 }
                 (200, Body::Json(self.save_settings(ch)))
             }
-            "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/queue" => {
+            "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/reviewed" | "/api/queue" => {
                 let Some(store) = &self.store else {
                     return (
                         200,
@@ -2840,6 +2855,9 @@ impl Shared {
         if hours > 0.0 {
             let cutoff = Self::now() - hours * 3600.0;
             rows.retain(|r| !(registry::finished(r) && finished_at(r) < cutoff));
+        }
+        if let Some(store) = &self.store {
+            registry::apply_reviewed(&mut rows, &store.reviewed());
         }
         rows
     }

@@ -334,6 +334,27 @@ def short_label(row):
     return name[len(_base(row.get("cwd"))) + 1:] or name
 
 
+def attention_start(row):
+    """When the current wait on a human began: the hook's clock, else the
+    status change Claude Code reported."""
+    return row.get("attention_since") or row.get("status_changed_at") or 0
+
+
+def apply_reviewed(rows, reviewed):
+    """Rows whose wait you have already looked at stop asking for you.
+
+    A row in attention whose session was reviewed at or after that attention
+    began is `reviewed` instead; attention that starts later shows again.
+    """
+    for row in rows:
+        at = reviewed.get(row.get("sessionId")) if reviewed else None
+        if row.get("attention") and at and at >= attention_start(row):
+            row["attention"] = False
+            row["reviewed"] = True
+            row["reviewed_at"] = at
+    return rows
+
+
 def needs_attention(row):
     """True when a human is the thing this session is waiting on."""
     if row.get("status") in ATTENTION_STATUSES:

@@ -255,6 +255,13 @@ def to_items(messages, limit=0, include_subagents=False, merge=True):
                 diff = edit_diff(block.get("name"), block.get("input"))
                 if diff:
                     tool["diff"] = diff
+                if block.get("name") == "AskUserQuestion":
+                    # The choices, so the chat shows what the terminal asks
+                    # even after the window's own offer of it has expired.
+                    from . import pending
+                    asked = pending._questions({"tool_input": block.get("input")})
+                    if asked:
+                        tool["questions"] = asked
                 blocks.append(tool)
             elif kind == "tool_result":
                 text = _text_of(block.get("content"))

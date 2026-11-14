@@ -412,6 +412,15 @@ pub fn to_items(messages: &[Message], limit: usize, merge: bool) -> Vec<Value> {
                     if !diff.is_empty() {
                         tool.insert("diff".into(), json!(diff));
                     }
+                    if b.get("name").and_then(Value::as_str) == Some(crate::pending::QUESTION_TOOL) {
+                        // The choices, so the chat shows what the terminal asks
+                        // even after the window's own offer of it has expired.
+                        let mut req = Map::new();
+                        req.insert("tool_input".into(), b.get("input").cloned().unwrap_or(Value::Null));
+                        if let Some(qs) = crate::pending::questions(&req) {
+                            tool.insert("questions".into(), Value::Array(qs));
+                        }
+                    }
                     blocks.push(Value::Object(tool));
                 }
                 Some("tool_result") => {

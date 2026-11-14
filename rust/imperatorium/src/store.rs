@@ -25,7 +25,7 @@ pub struct Store {
 }
 
 fn empty() -> Map<String, Value> {
-    json!({"tokens": {}, "events": [], "sessions": {}, "queue": {}, "prefs": {}, "dismissed": {}})
+    json!({"tokens": {}, "events": [], "sessions": {}, "queue": {}, "prefs": {}, "dismissed": {}, "reviewed": {}})
         .as_object()
         .unwrap()
         .clone()
@@ -61,6 +61,7 @@ impl Store {
                     "queue",
                     "prefs",
                     "dismissed",
+                    "reviewed",
                 ] {
                     if let Some(v) = loaded.get(key).filter(|v| v.is_object() || v.is_array()) {
                         data.insert(key.into(), v.clone());
@@ -223,6 +224,31 @@ impl Store {
 
     /// Store.dismiss: hide a tile with no process until it starts again;
     /// it leaves the archive too.
+    /// Store.mark_reviewed: a waiting session you have looked at, and when.
+    pub fn mark_reviewed(&self, sid: &str, at: f64) {
+        if sid.is_empty() {
+            return;
+        }
+        const KEEP: usize = 500;
+        self.with(|data| {
+            let seen = Self::table(data, "reviewed");
+            seen.insert(sid.into(), json!(at));
+            if seen.len() > KEEP {
+                let mut by_age: Vec<(String, f64)> =
+                    seen.iter().map(|(k, v)| (k.clone(), v.as_f64().unwrap_or(0.0))).collect();
+                by_age.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                for (k, _) in by_age.into_iter().take(seen.len() - KEEP) {
+                    seen.shift_remove(&k);
+                }
+            }
+            ((), true)
+        })
+    }
+
+    pub fn reviewed(&self) -> Map<String, Value> {
+        self.with(|data| (Self::table(data, "reviewed").clone(), false))
+    }
+
     pub fn dismiss(&self, key: &str) {
         self.with(|data| {
             Self::table(data, "dismissed").insert(key.into(), json!(now()));

@@ -194,7 +194,8 @@ On the Stream Deck the same session takes a key under its project's name.
 *The Changes tab of the same session. (Demo data.)*
 
 The gear at the top left of the sidebar opens **Settings**, a window of its
-own for what you would otherwise edit in `config.json`: project folders,
+own (categories on the left, the chosen one on the right, and *Find a
+setting* above them) for what you would otherwise edit in `config.json`: project folders,
 Send As Typed, quick phrases, background-session options, notifications, usage alerts, dictation, remote
 sessions, the palette hotkeys and the Stream Deck's pinned projects. Each
 setting says when it takes effect; notifications, alert thresholds and
@@ -251,7 +252,10 @@ condensing is done by the dispatcher (`imperatorium/matrix.py`, `GET
 goes to the next session waiting for you, alt+1-9 picks the nth tile, /
 filters, and ctrl+K opens a palette to jump to any session by name. A
 session that finished a turn while you were looking elsewhere carries a
-**new** badge until you open it. The window's title counts the sessions
+**new** badge until you open it. Opening a session that is waiting for you
+and reading its chat to the end marks it **reviewed**: a hollow grey diamond,
+no amber bar, no Matrix outline, no Stream Deck colour or notification, until
+it next needs you (`POST /api/reviewed`). The window's title counts the sessions
 waiting for you, "(2) Imperatorium", and its tab icon takes the most urgent
 state's colour and shape. A tile also warns `cold 178k` when a context sits
 behind an expired prompt cache, and the chat says so in words, with what the
@@ -395,6 +399,7 @@ python -m imperatorium.deeplink Y:/projects-software/gem-trip "fix it"
 | POST | `/api/new` | `{session_id, cwd, close}` - a fresh session in that project, in a new tab; answers its `session_id`. With `close`, the old session is then ended (typed `/exit`, killed if it stays) |
 | POST | `/api/close` | `{session_id}` - end a running local session and its terminal tab |
 | POST | `/api/dismiss` | `{session_id}` - take a local session with no process off the list until it starts again |
+| POST | `/api/reviewed` | `{session_id}` - you have looked at a session waiting for you: it stops being flagged until it next needs you |
 | GET/POST | `/api/queue`, `/api/unqueue` | prompts held until a session's turn ends |
 | GET | `/matrix` | the Chat Matrix window |
 | GET | `/settings` | the Settings window |
@@ -556,8 +561,10 @@ list and the first candidate Windows grants wins.
 
 ## Dictation
 
-**f9**, or the Dictate button, starts and stops recording; the text lands in
-the prompt box. The browser records and a dictation process beside the
+Hold **f9** and speak; letting go stops the recording, and the text lands in
+the prompt box. Settings > Dictation > *F9 records* (`voice.shortcut`) set to
+`toggle` makes f9 start on one press and stop on the next instead. The
+Dictate button always starts and stops. The browser records and a dictation process beside the
 dispatcher decodes and transcribes, so nothing leaves the machine.
 
 Voice fills the *prompt*, never the project. Project names here -

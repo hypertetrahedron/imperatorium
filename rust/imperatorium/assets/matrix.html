@@ -127,6 +127,8 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .d-busy{--c:var(--busy)}
 .d-attn{--c:var(--warn);border-radius:1.5px;transform:rotate(45deg) scale(.9)}
 .d-done{--c:var(--done);height:2px;border-radius:1px;vertical-align:3px}
+.d-rev{--c:var(--muted);background:transparent;box-shadow:inset 0 0 0 1.5px var(--c);
+  border-radius:1.5px;transform:rotate(45deg) scale(.9)}
 .d-fail{--c:var(--fail);background:transparent;border-radius:0}
 .d-fail::before,.d-fail::after{content:"";position:absolute;left:-1px;right:-1px;top:3px;
   height:2px;border-radius:1px;background:var(--c);transform:rotate(45deg)}
@@ -267,6 +269,18 @@ blockquote{border-left:3px solid var(--line);margin:6px 0;padding:0 0 0 10px;
   font:12px/1.45 var(--mono);white-space:pre-wrap;
   max-height:220px;overflow:auto;word-break:break-all}
 .res.err{border-left:2px solid var(--warn)}
+.askq{border-left:2px solid var(--warn);padding:4px 0 4px 10px;margin:7px 0}
+.askq .qh{font-size:12px;color:var(--muted);margin-bottom:3px}
+.askq .qt{font-weight:600;margin:5px 0 3px}
+.askq .qt .chip{font-weight:400;font-size:12px;color:var(--muted);border:1px solid var(--line);
+  border-radius:9px;padding:0 6px;margin-right:6px}
+.askq ul{margin:2px 0 4px;padding-left:18px}
+.askq li{margin:1px 0}
+.askq li small{color:var(--muted);margin-left:6px}
+.askq li.on{font-weight:600}
+.askq li.on::marker{content:"\2713  "}
+.askq .qans{margin:2px 0 4px;font-size:13px}
+.askq .qwait{font-size:12.5px;color:var(--warn);margin-top:4px}
 .think{color:var(--muted);font-style:italic;white-space:pre-wrap;margin:5px 0}
 /* Highlighting. Every mark is in the page; html.hl-<name> (Settings >
    Highlighting) shows it. Colours are the --hl-* above. */
@@ -928,6 +942,8 @@ function stateOf(s){
   if (s.attention) return [s.attention_kind === "failure" ? "d-fail" : "d-attn",
     s.attention_reason || s.waitingFor ||
     WAITING[s.last_notification] || s.last_notification || "waiting for you"];
+  // Waiting on you, but you have already looked (its chat read to the end).
+  if (s.reviewed) return ["d-rev", "reviewed"];
   // `done` is a background job that ran to completion: nothing to wait for.
   if (s.state === "done") return ["d-done", "finished"];
   if (s.state && s.state !== "working") return ["d-done", s.state];
@@ -1186,6 +1202,8 @@ const SHELL_TOOLS = /^(?:Bash|PowerShell|Monitor)$/;
 const QUIET_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "ToolSearch",
   "NotebookRead", "TaskOutput", "BashOutput", "TaskList", "TaskGet", "ListMcpResourcesTool", "ReadMcpResourceTool"]);
 let toolNames = new Map();   // tool call id -> tool name, for its result
+let toolResults = new Map(); // tool call id -> its result's text
+let pendingNow = [];         // the parked requests, as /api/pending last said
 function cmdLine(s){
   const {hold, back} = holder();
   const t = s
@@ -1195,7 +1213,40 @@ function cmdLine(s){
     .replace(PATH_RE, m => hold(pathSpan(m, "tp")));
   return back(esc(t));
 }
+// An AskUserQuestion in the chat: the questions and their choices, and the
+// answer once given. The window's card (#decide) answers it only while the
+// permission hook holds it; after that it is the terminal's to answer.
+function answersOf(text){
+  const out = new Map(), re = /"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(String(text || "")))) out.set(m[1], m[2]);
+  return out;
+}
+function askHtml(b){
+  const result = toolResults.get(b.id);
+  const got = answersOf(result);
+  const qs = b.questions.map(q => {
+    const ans = got.get(q.question);
+    // One choice is the answer whole (a label can hold ", "); several are
+    // the labels joined with ", ", so each is looked for in it.
+    const picked = new Set(ans == null ? [] : q.multiSelect
+      ? q.options.map(o => o.label).filter(l => (", " + ans + ", ").includes(", " + l + ", "))
+      : [String(ans)]);
+    const known = q.options.some(o => picked.has(o.label));
+    return `<div class="qt">${q.header ? `<span class="chip">${esc(q.header)}</span>` : ""}${esc(q.question)}${
+      q.multiSelect ? " <small>(choose any)</small>" : ""}</div><ul>${q.options.map(o =>
+      `<li${picked.has(o.label) ? ' class="on"' : ""}>${esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ""}</li>`).join("")}</ul>${
+      ans != null && !known ? `<div class="qans">answered: ${esc(ans)}</div>` : ""}`;
+  }).join("");
+  const parked = pendingNow.some(p => p.tool === "AskUserQuestion" && p.session_id === b.session &&
+                                      JSON.stringify(p.questions || []) === JSON.stringify(b.questions));
+  const wait = result != null ? ""
+    : parked ? `<div class="qwait">waiting for your answer - answer it in the box at the top</div>`
+    : `<div class="qwait">waiting for your answer in the session's terminal (or already answered there)</div>`;
+  return `<div class="askq"><div class="qh">AskUserQuestion</div>${qs}${wait}</div>`;
+}
 function toolHtml(b){
+  if (b.questions && b.questions.length) return askHtml(b);
   const s = String(b.summary || "");
   const arg = !s ? "" : SHELL_TOOLS.test(b.name) ? cmdLine(s)
     : /^(?:Grep|Glob)$/.test(b.name) ? `<span class="tq">${esc(s)}</span>`

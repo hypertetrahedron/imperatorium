@@ -259,6 +259,32 @@ class BackgroundCommand(unittest.TestCase):
         self.assertNotIn("_comment", " ".join(captured["cmd"]))
 
 
+class Reviewed(unittest.TestCase):
+    """A waiting session you have looked at stops asking until it next does."""
+
+    def test_reviewed_after_the_wait_began_clears_it(self):
+        rows = [{"sessionId": "a", "attention": True, "attention_since": 100.0},
+                {"sessionId": "b", "attention": True, "status_changed_at": 50.0},
+                {"sessionId": "c", "attention": True, "attention_since": 300.0},
+                {"sessionId": "d", "attention": False}]
+        registry.apply_reviewed(rows, {"a": 150.0, "b": 60.0, "c": 200.0, "d": 1.0})
+        self.assertEqual([r["attention"] for r in rows], [False, False, True, False])
+        self.assertTrue(rows[0]["reviewed"] and rows[1]["reviewed"])
+        # Attention that started after the review shows again.
+        self.assertNotIn("reviewed", rows[2])
+        self.assertNotIn("reviewed", rows[3])
+
+    def test_store_keeps_when(self):
+        d = tempfile.mkdtemp()
+        try:
+            path = os.path.join(d, "state.json")
+            s = Store(path)
+            s.mark_reviewed("a", at=123.0)
+            self.assertEqual(Store(path).reviewed(), {"a": 123.0})
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class StoreState(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

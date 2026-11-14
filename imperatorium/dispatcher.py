@@ -321,6 +321,7 @@ class Control:
         for row in snap["sessions"]:
             self._decorate(row, queued)
         snap["sessions"] = self._unhidden(self._undismissed(snap["sessions"]))
+        registry.apply_reviewed(snap["sessions"], self.store.reviewed())
         with self._lock:
             self._cache = {"at": time.time(), "snapshot": snap}
         return snap
@@ -592,7 +593,8 @@ class Control:
             tile = {k: row.get(k) for k in
                     ("key", "sessionId", "name", "cwd", "status", "state", "attention",
                      "attention_kind", "attention_reason", "waitingFor",
-                     "last_notification", "background_tasks", "remote", "host", "work", "hc")}
+                     "last_notification", "background_tasks", "remote", "host", "work", "hc",
+                     "reviewed")}
             mine = per.get(sid) or {}
             # The whole session's estimate; the statusline's figure only
             # covers Claude Code's current run, and is gone after a restart.
@@ -1678,6 +1680,19 @@ class Control:
         self.invalidate()
         return got
 
+    def mark_reviewed(self, session_id):
+        """You have looked at a session that is waiting on you: it stops
+        being flagged (diamond, Matrix outline, Stream Deck, notifications)
+        until it next needs you."""
+        row = self._row(session_id) if session_id else None
+        if row is None:
+            return {"ok": False, "error": "no such session"}
+        if not row.get("attention"):
+            return {"ok": True, "reviewed": bool(row.get("reviewed"))}
+        self.store.mark_reviewed(session_id)
+        self.invalidate()
+        return {"ok": True, "reviewed": True}
+
     def dismiss_session(self, session_id):
         """Take a session with no process off the list. There is nothing to
         end, and Claude Code goes on listing a finished background job or a
@@ -2573,7 +2588,7 @@ class Handler(BaseHTTPRequestHandler):
                                     payload.get("session_id")))
         elif path in ("/api/queue", "/api/unqueue", "/api/worktree",
                       "/api/resume", "/api/new", "/api/close", "/api/dismiss",
-                      "/api/prefs", "/api/notify", "/api/settings",
+                      "/api/reviewed", "/api/prefs", "/api/notify", "/api/settings",
                       "/api/remote/refresh"):
             if not isinstance(payload, dict):
                 self._send(400, {"error": "expected an object"})
@@ -2650,6 +2665,8 @@ class Handler(BaseHTTPRequestHandler):
             return c.close_session(p.get("session_id"))
         if path == "/api/dismiss":
             return c.dismiss_session(p.get("session_id"))
+        if path == "/api/reviewed":
+            return c.mark_reviewed(p.get("session_id"))
         if path == "/api/prefs":
             allowed = {k: p[k] for k in ("pinned", "archived", "group", "filter")
                        if k in p}

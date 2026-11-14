@@ -163,7 +163,7 @@ fn text_or_empty(v: Option<&Value>) -> String {
 
 /// pending._questions: an AskUserQuestion's questions in the window's shape,
 /// or None when the input is not what the tool takes.
-fn questions(request: &Map<String, Value>) -> Option<Vec<Value>> {
+pub fn questions(request: &Map<String, Value>) -> Option<Vec<Value>> {
     let raw = request
         .get("tool_input")?
         .as_object()?

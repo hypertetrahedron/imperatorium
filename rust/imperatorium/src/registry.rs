@@ -147,6 +147,59 @@ fn s<'a>(r: &'a Row, k: &str) -> Option<&'a str> {
     r.get(k).and_then(Value::as_str)
 }
 
+/// registry.attention_start: when the current wait on a human began.
+pub fn attention_start(row: &Row) -> f64 {
+    for k in ["attention_since", "status_changed_at"] {
+        if let Some(v) = row.get(k).filter(|v| truthy(Some(v))).and_then(Value::as_f64) {
+            return v;
+        }
+    }
+    0.0
+}
+
+/// registry.apply_reviewed: a row whose wait you have already looked at is
+/// `reviewed` rather than in attention; attention that starts later shows.
+pub fn apply_reviewed(rows: &mut [Row], reviewed: &Map<String, Value>) {
+    for row in rows.iter_mut() {
+        let Some(at) = row
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .and_then(|sid| reviewed.get(sid))
+            .and_then(Value::as_f64)
+        else {
+            continue;
+        };
+        if truthy(row.get("attention")) && at > 0.0 && at >= attention_start(row) {
+            row.insert("attention".into(), json!(false));
+            row.insert("reviewed".into(), json!(true));
+            row.insert("reviewed_at".into(), json!(at));
+        }
+    }
+}
+
+#[cfg(test)]
+mod reviewed_tests {
+    use super::*;
+
+    #[test]
+    fn reviewed_after_the_wait_began_clears_it() {
+        let mut rows: Vec<Row> = [
+            json!({"sessionId": "a", "attention": true, "attention_since": 100.0}),
+            json!({"sessionId": "b", "attention": true, "status_changed_at": 50.0}),
+            json!({"sessionId": "c", "attention": true, "attention_since": 300.0}),
+        ]
+        .into_iter()
+        .map(|v| v.as_object().unwrap().clone())
+        .collect();
+        let seen = json!({"a": 150.0, "b": 60.0, "c": 200.0});
+        apply_reviewed(&mut rows, seen.as_object().unwrap());
+        assert_eq!(rows[0]["attention"], json!(false));
+        assert_eq!(rows[1]["reviewed"], json!(true));
+        assert_eq!(rows[2]["attention"], json!(true));
+        assert!(!rows[2].contains_key("reviewed"));
+    }
+}
+
 pub fn needs_attention(row: &Row) -> bool {
     s(row, "status").is_some_and(|x| ATTENTION_STATUSES.contains(&x))
         || s(row, "state").is_some_and(|x| ATTENTION_STATES.contains(&x))

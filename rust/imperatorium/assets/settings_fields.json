@@ -260,6 +260,19 @@
    "help": "Local speech to text; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice)."
   },
   {
+   "key": "voice.shortcut",
+   "section": "voice",
+   "label": "F9 records",
+   "type": "choice",
+   "choices": [
+    "hold",
+    "toggle"
+   ],
+   "default": "hold",
+   "applies": "live",
+   "help": "hold: while F9 is held down, and stops when you let go. toggle: from one press of F9 to the next. The Dictate button always toggles."
+  },
+  {
    "key": "voice.model",
    "section": "voice",
    "label": "Model",
@@ -792,7 +805,7 @@
   {
    "where": "Window",
    "keys": "F9",
-   "what": "dictate into the prompt box; again to stop"
+   "what": "hold to dictate into the prompt box, let go to stop (Settings > Dictation: press once to start, again to stop)"
   },
   {
    "where": "Window",

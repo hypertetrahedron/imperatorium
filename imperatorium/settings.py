@@ -158,6 +158,10 @@ FIELDS = [
          default=_voice_on, applies=DISPATCHER,
          help="Local speech to text; nothing leaves the machine. Needs the voice extras "
               "(setup_machine.py --voice)."),
+    dict(key="voice.shortcut", section="voice", label="F9 records", type="choice",
+         choices=("hold", "toggle"), default="hold", applies=LIVE,
+         help="hold: while F9 is held down, and stops when you let go. toggle: from one press "
+              "of F9 to the next. The Dictate button always toggles."),
     dict(key="voice.model", section="voice", label="Model", type="name", default="large-v3-turbo",
          applies=DISPATCHER, help="A Whisper model: large-v3-turbo, medium, small, …"),
     dict(key="voice.cpu_model", section="voice", label="Model without a GPU", type="name",

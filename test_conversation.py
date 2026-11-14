@@ -82,6 +82,21 @@ class Shapes(unittest.TestCase):
         self.assertEqual(items[0]["blocks"][0]["text"], "plain")
 
 
+class Questions(unittest.TestCase):
+    def test_ask_user_question_carries_its_choices(self):
+        ask = {"type": "tool_use", "name": "AskUserQuestion", "id": "q1", "input": {"questions": [
+            {"question": "Which colour?", "header": "Colour", "multiSelect": False,
+             "options": [{"label": "Green", "description": "g"}, {"label": "Blue"}]}]}}
+        block = conv.to_items([assistant(ask)])[0]["blocks"][0]
+        self.assertEqual(block["questions"], [
+            {"question": "Which colour?", "header": "Colour", "multiSelect": False,
+             "options": [{"label": "Green", "description": "g"},
+                         {"label": "Blue", "description": ""}]}])
+
+    def test_other_tools_do_not(self):
+        self.assertNotIn("questions", conv.to_items([assistant(TOOL)])[0]["blocks"][0])
+
+
 class Filtering(unittest.TestCase):
     def test_subagent_messages_are_hidden_by_default(self):
         # A subagent's chatter is not what you are deciding about.

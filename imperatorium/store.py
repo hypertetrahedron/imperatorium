@@ -23,7 +23,7 @@ class Store:
         self.path = path
         self._lock = threading.Lock()
         self._data = {"tokens": {}, "events": [], "sessions": {}, "queue": {},
-                      "prefs": {}, "dismissed": {}}
+                      "prefs": {}, "dismissed": {}, "reviewed": {}}
         self.load()
 
     def load(self):
@@ -33,7 +33,7 @@ class Store:
         except (OSError, ValueError):
             return
         if isinstance(data, dict):
-            for key in ("tokens", "events", "sessions", "queue", "prefs", "dismissed"):
+            for key in ("tokens", "events", "sessions", "queue", "prefs", "dismissed", "reviewed"):
                 if isinstance(data.get(key), (dict, list)):
                     self._data[key] = data[key]
 
@@ -232,6 +232,27 @@ class Store:
     def dismissed(self):
         with self._lock:
             return dict(self._data["dismissed"])
+
+    # -- reviewed -------------------------------------------------------------
+    # A session waiting on you that you have looked at (its chat read to the
+    # bottom): when, by session id. It stops being flagged until it next
+    # needs you, which is any attention that started after this.
+    REVIEWED_KEEP = 500
+
+    def mark_reviewed(self, session_id, at=None):
+        if not session_id:
+            return
+        with self._lock:
+            seen = self._data.setdefault("reviewed", {})
+            seen[session_id] = at if at is not None else time.time()
+            if len(seen) > self.REVIEWED_KEEP:
+                for old in sorted(seen, key=seen.get)[:len(seen) - self.REVIEWED_KEEP]:
+                    seen.pop(old, None)
+            self._flush_locked()
+
+    def reviewed(self):
+        with self._lock:
+            return dict(self._data.get("reviewed") or {})
 
     # -- window preferences -------------------------------------------------
     # Pins, archived sessions and grouping. Kept here rather than in the
