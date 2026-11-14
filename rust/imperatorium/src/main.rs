@@ -61,6 +61,7 @@ mod store;
 #[cfg(feature = "streamdeck")]
 mod streamdeck;
 mod taskout;
+mod timeline;
 mod ui;
 mod update;
 mod usage;

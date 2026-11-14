@@ -3523,6 +3523,24 @@ impl Shared {
         crate::taskout::subagent_view(&sid, agent, Self::now())
     }
 
+    /// The session timeline (timeline.of_session), read on the session's own
+    /// machine.
+    fn api_timeline(&self, session: &str, known: &str) -> Value {
+        let Some(row) = self.row(session) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let sid = row.get("sessionId").map(crate::pyish::py_str).unwrap_or_default();
+        if truthy(row.get("remote")) {
+            let host = row.get("host").map(crate::pyish::py_str).unwrap_or_default();
+            return match self.fleet.as_ref().map(|f| f.timeline(&host, &sid, known)) {
+                Some(Ok(v)) => v,
+                Some(Err(e)) => json!({"ok": false, "error": format!("reading on {host}: {e}")}),
+                None => json!({"ok": false, "error": format!("host {host} is not configured")}),
+            };
+        }
+        crate::timeline::of_session(&sid, known)
+    }
+
     /// The processes beneath a local session's own, with their CPU and memory.
     fn api_processes(&self, session: &str) -> Value {
         let Some(row) = self.row(session) else {
@@ -3810,6 +3828,7 @@ impl Shared {
                 (200, Body::Json(self.api_session_status(&arg("session"))))
             }
             ("GET", "/api/awaited") => (200, Body::Json(self.api_awaited(&arg("session")))),
+            ("GET", "/api/timeline") => (200, Body::Json(self.api_timeline(&arg("session"), &arg("sig")))),
             ("GET", "/api/subagent") => (200, Body::Json(self.api_subagent(&arg("session"), &arg("agent")))),
             ("GET", "/api/processes") => (200, Body::Json(self.api_processes(&arg("session")))),
             ("GET", "/api/errors") => {

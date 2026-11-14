@@ -394,6 +394,9 @@ button:disabled{opacity:.45;cursor:default}
 #status .hd{display:flex;justify-content:space-between;gap:10px;cursor:pointer;user-select:none}
 #status .hd .sum{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #status.fold .bd{display:none}
+/* Open, it holds the timeline over the numbers: capped, so the chat keeps
+   its room, and scrolled within. */
+#status .bd{max-height:40vh;overflow-y:auto;overflow-x:hidden}
 #status .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
   gap:2px 16px;margin-top:5px}
 #status .c{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -405,6 +408,107 @@ button:disabled{opacity:.45;cursor:default}
   text-overflow:ellipsis}
 #status .ri .k{color:var(--busy);margin-right:6px}
 #status .run{margin-top:4px}
+/* -- the session timeline, after claude-lens (its own rules, scoped) ------ */
+/* claude-lens's tokens, on Imperatorium's surfaces and ink. */
+.tlx{--text-primary:var(--ink);--text-secondary:var(--muted);--text-muted:var(--muted);
+  --surface-1:var(--panel);--danger:var(--fail);--grid:#e1e0d9;--baseline:#c3c2b7;
+  --border:rgba(11,11,11,0.10);--hover-wash:rgba(11,11,11,0.04);
+  --series-1:#2a78d6;--series-2:#1baf7a;--series-3:#eda100;--series-4:#008300;--series-5:#4a3aa7;
+  margin:6px 0 10px;color:var(--text-secondary)}
+@media (prefers-color-scheme: dark){
+  .tlx{--grid:#2c2c2a;--baseline:#383835;--border:rgba(255,255,255,0.10);
+    --hover-wash:rgba(255,255,255,0.06);--series-1:#3987e5;--series-2:#199e70;
+    --series-3:#c98500;--series-4:#008300;--series-5:#9085e9}
+}
+.tlx .sec-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:4px}
+.tlx .tl-note:empty{display:none}
+.tlx .tl-note{color:var(--muted);font-style:italic}
+.tlx .seg button{border-radius:0}
+.tlx .seg{display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;}
+.tlx .seg button{background: var(--surface-1); color: var(--text-secondary); border: 0; padding: 5px 12px; font-family: inherit; font-size: 13px; cursor: pointer;}
+.tlx .seg button + button{border-left: 1px solid var(--border);}
+.tlx .seg button:hover{background: var(--hover-wash);}
+.tlx .seg button[aria-pressed="true"]{color: var(--text-primary); font-weight: 600;}
+.tlx .tick-label{fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums;}
+.tlx .grid-line{stroke: var(--grid); stroke-width: 1;}
+.tlx .base-line{stroke: var(--baseline); stroke-width: 1;}
+.tlx .fill-i1{fill: var(--iron-1);}
+.tlx .fill-i2{fill: var(--iron-2);}
+.tlx .fill-i3{fill: var(--iron-3);}
+.tlx .fill-i4{fill: var(--iron-4);}
+.tlx .fill-io{fill: var(--iron-other);}
+.tlx .sw-i1{background: var(--iron-1);}
+.tlx .sw-i2{background: var(--iron-2);}
+.tlx .sw-i3{background: var(--iron-3);}
+.tlx .sw-i4{background: var(--iron-4);}
+.tlx .sw-io{background: var(--iron-other);}
+.tlx .c-1{fill: var(--series-1);}
+.tlx .c-2{fill: var(--series-2);}
+.tlx .c-3{fill: var(--series-3);}
+.tlx .c-4{fill: var(--series-4);}
+.tlx .c-5{fill: var(--series-5);}
+.tlx .c-0{fill: var(--text-muted);}
+.tlx .sw-c1{background: var(--series-1);}
+.tlx .sw-c2{background: var(--series-2);}
+.tlx .sw-c3{background: var(--series-3);}
+.tlx .sw-c4{background: var(--series-4);}
+.tlx .sw-c5{background: var(--series-5);}
+.tlx .sw-c0{background: var(--text-muted);}
+.tlx .ctx-svg{display: block; width: 100%;}
+.tlx .ctx-line{fill: none; stroke: var(--text-primary); stroke-width: 1.2;}
+.tlx .ctx-miss{stroke: var(--surface-1); stroke-width: 1;}
+.tlx .ev-line{stroke: var(--text-secondary); stroke-width: 1; stroke-dasharray: 3 2;}
+.tlx .ev-hit{stroke: transparent; stroke-width: 7; cursor: pointer;}
+.tlx .turn-band{fill: var(--text-primary); opacity: 0.045;}
+.tlx .turn-strip-a{fill: var(--text-primary); opacity: 0.08;}
+.tlx .turn-strip-b{fill: var(--text-primary); opacity: 0.2;}
+.tlx .turn-tick{stroke: var(--text-muted); stroke-width: 1; opacity: 0.5;}
+.tlx .turn-cost{fill: var(--text-secondary); opacity: 0.6;}
+.tlx .tool-bar{fill: var(--text-secondary); opacity: 0.8;}
+.tlx .tool-bar-err{fill: var(--danger);}
+.tlx .tool-bar-over{fill: var(--text-primary);}
+.tlx .sw-tool{background: var(--text-secondary);}
+.tlx .sw-toolerr{background: var(--danger);}
+.tlx .lane-rule{stroke: var(--baseline); stroke-width: 1;}
+.tlx .xh{pointer-events: none;}
+.tlx .xh-line{stroke: var(--text-primary); stroke-width: 1; opacity: 0.45;}
+.tlx .xh-dot{fill: var(--text-primary); stroke: var(--surface-1); stroke-width: 1.5;}
+.tlx .turn-hot{pointer-events: none;}
+.tlx .turn-hot rect{fill: var(--text-primary); fill-opacity: 0.07; stroke: var(--text-primary); stroke-opacity: 0.35; stroke-width: 1;}
+.tlx .tl-readout{margin: 6px 0 0; padding: 6px 9px; min-height: 46px; box-sizing: border-box; background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; border-left-width: 3px; font-size: 12px;}
+.tlx .tl-readout{border-left-color: var(--border);}
+.tlx .tl-readout.ro-overall{border-left-color: var(--text-secondary);}
+.tlx .tl-readout.ro-intra{border-left-color: var(--series-1);}
+.tlx .ro-head{color: var(--text-primary); font-weight: 600; margin-bottom: 2px;}
+.tlx .ro-fields{display: flex; flex-wrap: wrap; gap: 3px 14px;}
+.tlx .ro-f .k{color: var(--text-muted); margin-right: 4px;}
+.tlx .ro-f .v{color: var(--text-primary); font-variant-numeric: tabular-nums;}
+.tlx .ro-line{color: var(--text-secondary); margin-top: 2px; min-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.tlx .turn-num{fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums;}
+.tlx .turn-hit{fill: transparent; cursor: default;}
+.tlx .turn-hit:focus-visible{outline: 1px solid var(--text-primary); outline-offset: -1px;}
+.tlx .agent-bar{fill: var(--series-5); opacity: 0.8;}
+.tlx .agent-run:hover .agent-bar,.tlx .agent-run:focus-visible .agent-bar{opacity: 1;}
+.tlx .agent-run{cursor: pointer;}
+.tlx .agent-run:focus-visible{outline: 1px solid var(--text-primary); outline-offset: 1px;}
+.tlx .agent-label{fill: var(--surface-1); font-size: 9px; pointer-events: none;}
+.tlx .lane-label{fill: var(--text-muted); font-size: 10px;}
+.tlx .gap-bg{fill: var(--surface-1);}
+.tlx .gap-hatch{stroke: var(--grid); stroke-width: 2;}
+.tlx .gap-band{cursor: help;}
+.tlx .gap-label{fill: var(--text-muted); font-size: 9.5px; pointer-events: none;}
+.tlx .sw-agent{background: var(--series-5);}
+.tlx .sec-head{display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;}
+.tlx .mini-seg button{padding: 2px 9px; font-size: 11px;}
+.tlx .tl-plot{min-height: 4px;}
+.tlx .tl-frame{position: relative;}
+.tlx .tl-scroll{overflow-x: auto; overflow-y: hidden;}
+.tlx .tl-scroll .ctx-svg{max-width: none;}
+.tlx .tl-gutter{position: absolute; left: 0; top: 0; pointer-events: none; background: linear-gradient(var(--hover-wash), var(--hover-wash)), var(--surface-1);}
+.tlx .tl-gutter svg{display: block;}
+.tlx .mini-legend{display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); margin: 6px 0 0;}
+.tlx .mini-legend .sw{display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px;}
+.tlx h3{font-size: 11px; font-weight: 600; color: var(--text-muted); margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em;}
 
 /* -- sidebar tools: filter, grouping, usage meter ---------------------- */
 #tools{display:flex;gap:6px;padding:0 10px 8px;align-items:center}

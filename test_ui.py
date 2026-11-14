@@ -634,7 +634,11 @@ class Controls(unittest.TestCase):
 
     def test_nothing_is_set_below_12px_but_the_fold_carets(self):
         import re
-        small = [m.group(0) for m in re.finditer(r"[^;{}]*font(?:-size)?:\s*(\d+(?:\.\d+)?)px[^;}]*", ui.CSS)
+        # The session timeline is claude-lens's drawing at claude-lens's sizes:
+        # its label spacing is reckoned from them (9-11px), so its own rules,
+        # all scoped under .tlx, are left as they are.
+        css = re.sub(r"\.tlx [^{}]*\{[^{}]*\}", "", ui.CSS)
+        small = [m.group(0) for m in re.finditer(r"[^;{}]*font(?:-size)?:\s*(\d+(?:\.\d+)?)px[^;}]*", css)
                  if float(m.group(1)) < 12]
         self.assertEqual(len(small), 2, small)
         self.assertTrue(all("10px" in x for x in small))

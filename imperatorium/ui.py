@@ -416,6 +416,9 @@ button:disabled{opacity:.45;cursor:default}
 #status .hd{display:flex;justify-content:space-between;gap:10px;cursor:pointer;user-select:none}
 #status .hd .sum{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #status.fold .bd{display:none}
+/* Open, it holds the timeline over the numbers: capped, so the chat keeps
+   its room, and scrolled within. */
+#status .bd{max-height:40vh;overflow-y:auto;overflow-x:hidden}
 #status .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
   gap:2px 16px;margin-top:5px}
 #status .c{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -427,6 +430,107 @@ button:disabled{opacity:.45;cursor:default}
   text-overflow:ellipsis}
 #status .ri .k{color:var(--busy);margin-right:6px}
 #status .run{margin-top:4px}
+/* -- the session timeline, after claude-lens (its own rules, scoped) ------ */
+/* claude-lens's tokens, on Imperatorium's surfaces and ink. */
+.tlx{--text-primary:var(--ink);--text-secondary:var(--muted);--text-muted:var(--muted);
+  --surface-1:var(--panel);--danger:var(--fail);--grid:#e1e0d9;--baseline:#c3c2b7;
+  --border:rgba(11,11,11,0.10);--hover-wash:rgba(11,11,11,0.04);
+  --series-1:#2a78d6;--series-2:#1baf7a;--series-3:#eda100;--series-4:#008300;--series-5:#4a3aa7;
+  margin:6px 0 10px;color:var(--text-secondary)}
+@media (prefers-color-scheme: dark){
+  .tlx{--grid:#2c2c2a;--baseline:#383835;--border:rgba(255,255,255,0.10);
+    --hover-wash:rgba(255,255,255,0.06);--series-1:#3987e5;--series-2:#199e70;
+    --series-3:#c98500;--series-4:#008300;--series-5:#9085e9}
+}
+.tlx .sec-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:4px}
+.tlx .tl-note:empty{display:none}
+.tlx .tl-note{color:var(--muted);font-style:italic}
+.tlx .seg button{border-radius:0}
+.tlx .seg{display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;}
+.tlx .seg button{background: var(--surface-1); color: var(--text-secondary); border: 0; padding: 5px 12px; font-family: inherit; font-size: 13px; cursor: pointer;}
+.tlx .seg button + button{border-left: 1px solid var(--border);}
+.tlx .seg button:hover{background: var(--hover-wash);}
+.tlx .seg button[aria-pressed="true"]{color: var(--text-primary); font-weight: 600;}
+.tlx .tick-label{fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums;}
+.tlx .grid-line{stroke: var(--grid); stroke-width: 1;}
+.tlx .base-line{stroke: var(--baseline); stroke-width: 1;}
+.tlx .fill-i1{fill: var(--iron-1);}
+.tlx .fill-i2{fill: var(--iron-2);}
+.tlx .fill-i3{fill: var(--iron-3);}
+.tlx .fill-i4{fill: var(--iron-4);}
+.tlx .fill-io{fill: var(--iron-other);}
+.tlx .sw-i1{background: var(--iron-1);}
+.tlx .sw-i2{background: var(--iron-2);}
+.tlx .sw-i3{background: var(--iron-3);}
+.tlx .sw-i4{background: var(--iron-4);}
+.tlx .sw-io{background: var(--iron-other);}
+.tlx .c-1{fill: var(--series-1);}
+.tlx .c-2{fill: var(--series-2);}
+.tlx .c-3{fill: var(--series-3);}
+.tlx .c-4{fill: var(--series-4);}
+.tlx .c-5{fill: var(--series-5);}
+.tlx .c-0{fill: var(--text-muted);}
+.tlx .sw-c1{background: var(--series-1);}
+.tlx .sw-c2{background: var(--series-2);}
+.tlx .sw-c3{background: var(--series-3);}
+.tlx .sw-c4{background: var(--series-4);}
+.tlx .sw-c5{background: var(--series-5);}
+.tlx .sw-c0{background: var(--text-muted);}
+.tlx .ctx-svg{display: block; width: 100%;}
+.tlx .ctx-line{fill: none; stroke: var(--text-primary); stroke-width: 1.2;}
+.tlx .ctx-miss{stroke: var(--surface-1); stroke-width: 1;}
+.tlx .ev-line{stroke: var(--text-secondary); stroke-width: 1; stroke-dasharray: 3 2;}
+.tlx .ev-hit{stroke: transparent; stroke-width: 7; cursor: pointer;}
+.tlx .turn-band{fill: var(--text-primary); opacity: 0.045;}
+.tlx .turn-strip-a{fill: var(--text-primary); opacity: 0.08;}
+.tlx .turn-strip-b{fill: var(--text-primary); opacity: 0.2;}
+.tlx .turn-tick{stroke: var(--text-muted); stroke-width: 1; opacity: 0.5;}
+.tlx .turn-cost{fill: var(--text-secondary); opacity: 0.6;}
+.tlx .tool-bar{fill: var(--text-secondary); opacity: 0.8;}
+.tlx .tool-bar-err{fill: var(--danger);}
+.tlx .tool-bar-over{fill: var(--text-primary);}
+.tlx .sw-tool{background: var(--text-secondary);}
+.tlx .sw-toolerr{background: var(--danger);}
+.tlx .lane-rule{stroke: var(--baseline); stroke-width: 1;}
+.tlx .xh{pointer-events: none;}
+.tlx .xh-line{stroke: var(--text-primary); stroke-width: 1; opacity: 0.45;}
+.tlx .xh-dot{fill: var(--text-primary); stroke: var(--surface-1); stroke-width: 1.5;}
+.tlx .turn-hot{pointer-events: none;}
+.tlx .turn-hot rect{fill: var(--text-primary); fill-opacity: 0.07; stroke: var(--text-primary); stroke-opacity: 0.35; stroke-width: 1;}
+.tlx .tl-readout{margin: 6px 0 0; padding: 6px 9px; min-height: 46px; box-sizing: border-box; background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; border-left-width: 3px; font-size: 12px;}
+.tlx .tl-readout{border-left-color: var(--border);}
+.tlx .tl-readout.ro-overall{border-left-color: var(--text-secondary);}
+.tlx .tl-readout.ro-intra{border-left-color: var(--series-1);}
+.tlx .ro-head{color: var(--text-primary); font-weight: 600; margin-bottom: 2px;}
+.tlx .ro-fields{display: flex; flex-wrap: wrap; gap: 3px 14px;}
+.tlx .ro-f .k{color: var(--text-muted); margin-right: 4px;}
+.tlx .ro-f .v{color: var(--text-primary); font-variant-numeric: tabular-nums;}
+.tlx .ro-line{color: var(--text-secondary); margin-top: 2px; min-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.tlx .turn-num{fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums;}
+.tlx .turn-hit{fill: transparent; cursor: default;}
+.tlx .turn-hit:focus-visible{outline: 1px solid var(--text-primary); outline-offset: -1px;}
+.tlx .agent-bar{fill: var(--series-5); opacity: 0.8;}
+.tlx .agent-run:hover .agent-bar,.tlx .agent-run:focus-visible .agent-bar{opacity: 1;}
+.tlx .agent-run{cursor: pointer;}
+.tlx .agent-run:focus-visible{outline: 1px solid var(--text-primary); outline-offset: 1px;}
+.tlx .agent-label{fill: var(--surface-1); font-size: 9px; pointer-events: none;}
+.tlx .lane-label{fill: var(--text-muted); font-size: 10px;}
+.tlx .gap-bg{fill: var(--surface-1);}
+.tlx .gap-hatch{stroke: var(--grid); stroke-width: 2;}
+.tlx .gap-band{cursor: help;}
+.tlx .gap-label{fill: var(--text-muted); font-size: 9.5px; pointer-events: none;}
+.tlx .sw-agent{background: var(--series-5);}
+.tlx .sec-head{display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;}
+.tlx .mini-seg button{padding: 2px 9px; font-size: 11px;}
+.tlx .tl-plot{min-height: 4px;}
+.tlx .tl-frame{position: relative;}
+.tlx .tl-scroll{overflow-x: auto; overflow-y: hidden;}
+.tlx .tl-scroll .ctx-svg{max-width: none;}
+.tlx .tl-gutter{position: absolute; left: 0; top: 0; pointer-events: none; background: linear-gradient(var(--hover-wash), var(--hover-wash)), var(--surface-1);}
+.tlx .tl-gutter svg{display: block;}
+.tlx .mini-legend{display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); margin: 6px 0 0;}
+.tlx .mini-legend .sw{display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px;}
+.tlx h3{font-size: 11px; font-weight: 600; color: var(--text-muted); margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em;}
 
 /* -- sidebar tools: filter, grouping, usage meter ---------------------- */
 #tools{display:flex;gap:6px;padding:0 10px 8px;align-items:center}
@@ -2164,6 +2268,7 @@ async function loadStatus(force){
     } catch (e) {}
   }
   drawStatus();
+  loadTimeline();
 }
 
 // Pure: the panel's HTML for row `s` and its /api/session_status answer `d`.
@@ -2264,8 +2369,1239 @@ function drawStatus(){
   const d = statusFor === selected && statusData ? statusData : {};
   box.classList.toggle("fold", statusFolded);
   const html = statusHtml(s, d, Date.now() / 1000 + statusSkew, statusFolded);
-  if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }
+  if (box.dataset.sig !== html){
+    if (!box.querySelector(":scope > .bd > .bdx")){
+      box.innerHTML = '<div class="hd"></div><div class="bd"><div class="bdx"></div></div>';
+      box.querySelector(".bd").prepend(tlBox);
+    }
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    box.querySelector(":scope > .hd").innerHTML = tmp.querySelector(".hd").innerHTML;
+    box.querySelector(".bdx").innerHTML = tmp.querySelector(".bd").innerHTML;
+    box.dataset.sig = html;
+  }
+  drawTimeline();
 }
+
+// -- the session timeline, atop the open status panel ------------------------
+// claude-lens's drawing, line for line (its context stack, turn ruler, cost per
+// turn, tool calls and subagent runs over one time axis), fed by
+// /api/timeline, which reads the same things out of the session's transcript.
+const TLX = (() => {
+const fmtC = (n) => {                       // compact: 12.9K / 4.2M
+  if (n == null) return "–";
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (a >= 1e4) return (n / 1e3).toFixed(1) + "K";
+  return n.toLocaleString("en-US");
+};
+const fmtFull = (n) => n == null ? "–" : n.toLocaleString("en-US");
+const fmtCost = (c, est) => (est ? "~$" : "$") + (c >= 100 ? c.toFixed(0) : c >= 1 ? c.toFixed(2) : c.toFixed(3));
+/* The window and each billing block say whether their cost is estimated and
+   how many requests were on a model with no price. A payload that predates
+   the fields says neither, which is read as estimated: absence of a claim
+   to precision is not one. Unpriced requests are counted as $0 on purpose, so
+   the number of them is stated wherever the cost is. The blocks table is
+   column-encoded, so its flag arrives as 1/0 rather than true/false: only a
+   missing flag defaults to estimated, and 0 is a real "measured". */
+
+const fmtDur = (s) => {
+  if (s == null) return "–";
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.round(s / 60) + "m";
+  return (s / 3600).toFixed(1) + "h";
+};
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;   // textContent only — data is untrusted
+  return e;
+};
+
+// Imperatorium shows local time, always.
+let tzLocal = true;
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const toMs = (x) => typeof x === "number" ? x : Date.parse(x || "");
+// [year, month0, day, hour, minute] of an instant in the chosen zone
+const zoned = (ms) => {
+  const d = new Date(ms);
+  return tzLocal
+    ? [d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()]
+    : [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes()];
+};
+// ISO string or epoch ms -> "YYYY-MM-DD", or "" when it does not parse
+const dayKey = (x) => {
+  const ms = toMs(x); if (isNaN(ms)) return "";
+  const [y, m, d] = zoned(ms);
+  return y + "-" + pad2(m + 1) + "-" + pad2(d);
+};
+const fmtHM = (x) => {
+  const ms = toMs(x); if (isNaN(ms)) return "";
+  const z = zoned(ms);
+  return pad2(z[3]) + ":" + pad2(z[4]);
+};
+// "YYYY-MM-DD HH:MM", the spelling every table and tooltip uses
+
+const fmtBytes = (n) => {
+  n = n || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + " MB";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + " KB";
+  return n + " B";
+};
+
+const SVGNS = "http://www.w3.org/2000/svg";
+const svgEl = (t, at) => {
+  const e = document.createElementNS(SVGNS, t);
+  for (const k in at) e.setAttribute(k, at[k]);
+  return e;
+};
+/* A <title> child is the only tooltip that works on a focused element as well
+   as a hovered one, and it costs no JavaScript. The floating #tooltip is
+   still worth its code on the daily bars, where several numbers are wanted at
+   once; everywhere else this is enough. */
+const svgTip = (node, text) => {
+  const t = document.createElementNS(SVGNS, "title");
+  t.textContent = text;
+  node.append(t);
+  return node;
+};
+/* Clean axis ceiling: 1, 2 or 5 times a power of ten. */
+const niceTop = (maxV) => {
+  const m = Math.max(maxV, 1e-9);
+  const pow = Math.pow(10, Math.floor(Math.log10(m)));
+  return [1, 2, 5, 10].map(k => k * pow).find(v => v >= m);
+};
+const hhmm = fmtHM;
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const CAUSES = [
+  ["model_switch", "model switch", 1],
+  ["effort_switch", "effort switch", 2],
+  ["speed_switch", "speed switch", 3],
+  ["idle_gap", "idle gap", 4],
+  ["compact", "compaction", 5],
+  ["unknown", "unknown", 0],
+];
+const CAUSE_BY = new Map(CAUSES.map(c => [c[0], c]));
+const causeMeta = (c) => CAUSE_BY.get(c) || CAUSE_BY.get("unknown");
+const EVENT_LABEL = { compact: "compaction", model_switch: "model switch",
+                      effort_switch: "effort switch",
+                      speed_switch: "speed switch" };
+
+/* The turns of one session (claude-lens turnsFor), against the prompt rows
+   the dispatcher read out of the same transcript: `ts` is in epoch seconds. */
+let TL_ROWS = [];
+function turnsFor(sid, points) {
+  const rows = TL_ROWS;
+  const out = [];
+  let ri = 0;
+  for (let i = 0; i < points.length; i++) {
+    if (!points[i].turn) continue;
+    const t = points[i].t;
+    while (ri + 1 < rows.length && rows[ri + 1].ts <= t) ri++;
+    const row = rows.length && rows[ri].ts <= t ? rows[ri] : null;
+    if (out.length) out[out.length - 1].end = i;
+    out.push({ n: out.length + 1, i: i, end: points.length, t: t, row: row });
+  }
+  return out;
+}
+
+/* ---------- the session's own clock ----------
+   A long session is mostly not happening. One in this database ran for 137
+   hours and worked for perhaps nine of them, so a linear axis drew every
+   burst of work as a sliver and the nights in between as most of the chart.
+   "activity" keeps time linear *inside* a working stretch and collapses any
+   idle run past IDLE_GAP_S into a fixed gutter, drawn as a hatched break and
+   labelled with what it swallowed - the compression is on the page rather
+   than hidden in the scale. "elapsed" is the plain linear axis, one button
+   away, because there are questions ("was this an evening or a fortnight?")
+   that only it answers. */
+const IDLE_GAP_S = 20 * 60;
+const IDLE_PX = 24;
+const LIVE_MIN_PX = 3;
+const RUN_MIN_W = 2;
+
+/* The series split at the same idle threshold the axis uses, so the areas and
+   the axis agree about where the session stopped happening. */
+function runsOf(points) {
+  const runs = [];
+  let cur = [];
+  for (const p of points) {
+    if (cur.length && p.t - cur[cur.length - 1].t > IDLE_GAP_S) {
+      runs.push(cur);
+      cur = [];
+    }
+    cur.push(p);
+  }
+  if (cur.length) runs.push(cur);
+  return runs;
+}
+
+/* Sorted times split into working stretches and the idle runs between them. */
+function segmentsOf(times) {
+  const segs = [];
+  let start = times[0], prev = times[0];
+  for (let i = 1; i < times.length; i++) {
+    if (times[i] - prev > IDLE_GAP_S) {
+      segs.push({ t0: start, t1: prev, idle: false });
+      segs.push({ t0: prev, t1: times[i], idle: true });
+      start = times[i];
+    }
+    prev = times[i];
+  }
+  segs.push({ t0: start, t1: prev, idle: false });
+  return segs;
+}
+
+/* Every time the timeline places a mark at, sorted: the requests and both
+   ends of every subagent run. */
+function timelineTimes(points, spans) {
+  const times = [];
+  for (const p of points) times.push(p.t);
+  for (const sp of spans) { times.push(sp.t0); times.push(sp.t1); }
+  return times.sort((a, b) => a - b);
+}
+
+/* ---------- how wide the timeline is drawn ----------
+   Up to TL_VIEW_S of drawn time, the whole session fits the visible width, as
+   it always has. Past that the drawing keeps the scale at which TL_VIEW_S
+   fills the view and grows wider than it, and the plot scrolls sideways: a
+   five-day session squeezed into one screen drew every turn as a hairline,
+   and the reader could not point at any of them.
+
+   "Drawn time" is what the axis spends its width on, so it depends on the
+   mode. On the elapsed axis it is wall-clock time, first request to last. On
+   the activity axis the idle runs are fixed gutters that take no share of the
+   scale, so it is the working time alone, and each gutter is added on at its
+   own width - a session that worked nine hours across six days fits the view
+   in activity mode and scrolls in elapsed, which is the difference between
+   the two axes stated in pixels.
+
+   TL_MAX_W bounds the SVG for a session that ran for weeks on the elapsed
+   axis; past it the scale gives way rather than the browser. */
+const TL_VIEW_S = 12 * 3600;
+const TL_MAX_W = 120000;
+const TL_PAD_L = 52, TL_PAD_R = 12;
+function timelineWidth(points, spans, visW, mode) {
+  visW = Math.max(visW || 860, 320);
+  const times = timelineTimes(points, spans);
+  if (times.length < 2) return visW;
+  const segs = segmentsOf(times);
+  let drawn = 0, gutters = 0;
+  for (const s of segs) {
+    if (!s.idle) drawn += s.t1 - s.t0;
+    else if (mode === "activity") gutters++;
+    else drawn += s.t1 - s.t0;
+  }
+  if (drawn <= TL_VIEW_S) return visW;
+  const visPlot = visW - TL_PAD_L - TL_PAD_R;
+  const plotW = visPlot * drawn / TL_VIEW_S + gutters * IDLE_PX;
+  return Math.min(Math.ceil(plotW + TL_PAD_L + TL_PAD_R), TL_MAX_W);
+}
+
+function timeScale(times, x0, plotW, mode) {
+  const t0 = times[0], t1 = times[times.length - 1];
+  if (times.length < 2 || t1 <= t0) {
+    const mid = x0 + plotW / 2;
+    return { t0: t0, t1: t1, breaks: [], starts: [t0], px: () => mid };
+  }
+  /* Both modes split the session at its idle runs; what differs is what a
+     break is given. In "activity" it is a fixed gutter, in "elapsed" its true
+     share of the width. Either way the split exists, because the drawing has
+     to know where not to join one working stretch to the next. */
+  const segs = segmentsOf(times);
+  const live = segs.filter(s => !s.idle);
+  const idleN = segs.length - live.length;
+  /* A fortnight of nights would otherwise spend the whole chart on gutters,
+     so in activity mode the breaks never take more than a third of it
+     between them. A null idlePx is the linear axis: an idle run is scaled
+     like any other stretch of time. */
+  const idlePx = mode === "activity"
+    ? (idleN ? Math.min(IDLE_PX, plotW * 0.34 / idleN) : 0) : null;
+  const liveSecs = live.reduce((a, s) => a + (s.t1 - s.t0), 0);
+  const idleSecs = segs.reduce((a, s) => a + (s.idle ? s.t1 - s.t0 : 0), 0);
+  const scaled = liveSecs + (idlePx === null ? idleSecs : 0);
+  let avail = plotW - (idlePx === null ? 0 : idleN * idlePx);
+  const floor = Math.min(LIVE_MIN_PX, avail / live.length);
+  avail -= floor * live.length;
+  const width = (s) => scaled > 0 ? avail * (s.t1 - s.t0) / scaled
+                                  : avail / segs.length;
+  let x = x0;
+  const breaks = [], starts = [];
+  for (const s of segs) {
+    s.x0 = x;
+    if (s.idle) {
+      x += idlePx === null ? width(s) : idlePx;
+      breaks.push({ x0: s.x0, x1: x, secs: s.t1 - s.t0 });
+    } else {
+      starts.push(s.t0);
+      x += floor + width(s);
+    }
+    s.x1 = x;
+  }
+  const px = (t) => {
+    if (!(t > t0)) return x0;
+    if (t >= t1) return x0 + plotW;
+    for (const s of segs) {
+      if (t > s.t1) continue;
+      const d = s.t1 - s.t0;
+      return d > 0 ? s.x0 + (s.x1 - s.x0) * (t - s.t0) / d : s.x0;
+    }
+    return x0 + plotW;
+  };
+  return { t0: t0, t1: t1, breaks: breaks, starts: starts, px: px };
+}
+
+/* Subagents run concurrently far more often than not, so their bars are
+   packed into as few rows as will hold them without overlapping - first fit,
+   in start order, with a few pixels of clearance so two touching runs still
+   read as two. */
+/* Twice the 95th percentile of the requests that carried any tool results at
+   all, never above the real maximum and never below two - a session where
+   every request carried exactly one would otherwise divide by a ceiling of
+   two and draw every bar at half height, which says less than a full one. */
+function toolCeiling(points, toolMax) {
+  const nz = points.map(p => p.tools || 0).filter(n => n > 0).sort((a, b) => a - b);
+  if (!nz.length) return 1;
+  const p95 = nz[Math.min(nz.length - 1, Math.floor(0.95 * nz.length))];
+  return Math.max(1, Math.min(toolMax, Math.max(2, 2 * p95)));
+}
+
+const AGENT_LANE_H = 12, AGENT_LANE_GAP = 3, AGENT_LANE_MAX = 8;
+const AGENT_MIN_W = 6;
+const COST_LANE_H = 24, TOOL_LANE_H = 22;
+/* The clear space between one lane and the next. Small on purpose: with a
+   hairline in the middle of it, seven pixels is the difference between four
+   lanes and one block with stripes through it. */
+const LANE_GAP = 9;
+function packAgents(spans, px) {
+  const ends = [], bars = [];
+  for (const sp of spans) {
+    // A subagent that answered in ninety seconds of a nine-hour session is
+    // half a pixel wide honestly drawn. AGENT_MIN_W is the width below which
+    // a bar stops being a mark at all; it overstates a short run's duration
+    // and the tooltip carries the real one.
+    const x0 = px(sp.t0), x1 = Math.max(px(sp.t1), x0 + AGENT_MIN_W);
+    let row = 0;
+    while (row < ends.length && ends[row] > x0 - 4) row++;
+    if (row >= AGENT_LANE_MAX) row = AGENT_LANE_MAX - 1;
+    ends[row] = Math.max(ends[row] || 0, x1);
+    bars.push({ sp: sp, x0: x0, x1: x1, row: row });
+  }
+  return { bars: bars, rows: Math.min(ends.length, AGENT_LANE_MAX) };
+}
+
+const agentLabel = (sp) => sp.desc || sp.type || "subagent";
+const fmtGap = (s) => s >= 86400 ? Math.round(s / 86400) + "d"
+                    : s >= 3600 ? Math.round(s / 3600) + "h"
+                    : Math.round(s / 60) + "m";
+// Epoch seconds, not the ISO day string dayOf() takes.
+const calDay = (t) => dayKey(t * 1000);
+const dayTime = (t) => {
+  const z = zoned(t * 1000);
+  return MONTHS[z[1]] + " " + z[2] + ", " + pad2(z[3]) + ":" + pad2(z[4]);
+};
+
+/* The three parts of a request's context - what was read from cache, what was
+   uncached input, and what was written to cache - add up to the context total
+   exactly, so the stack's own outline is the context curve and no fourth
+   series is needed. Order is cost order, cheapest at the bottom, the same
+   order the cost-composition bars use. */
+const CTX_LAYERS = [
+  ["cache read", 1, p => p.cr || 0],
+  ["uncached input", 2, p => Math.max((p.ctx || 0) - (p.cr || 0) - (p.cw || 0), 0)],
+  ["cache write", 3, p => p.cw || 0],
+];
+
+/* One drawing, four lanes over a single time axis: the turn ruler (which
+   prompt is this?), the context stack, the subagent runs, and the axis. They
+   share an x, which is the whole reason they are one chart rather than four -
+   a spike in context can be read off against the turn that caused it and
+   against whatever was running underneath at the time.
+
+   `mode` is "activity" or "elapsed"; see timeScale. */
+function sessionTimelineSvg(points, spans, sid, W, mode, readout) {
+  W = Math.max(W || 860, 320);
+  const padL = TL_PAD_L, padR = TL_PAD_R, padT = 6, axisH = 20;
+  const rulerH = 16, ctxH = 176;
+  const turns = turnsFor(sid, points);
+  const times = timelineTimes(points, spans);
+  const plotW = W - padL - padR;
+  const sc = timeScale(times, padL, plotW, mode);
+  const pack = packAgents(spans, sc.px);
+  // Exactly the packed rows: a trailing AGENT_LANE_GAP would put the lane's
+  // bottom - and so the bottom of every full-height mark - below the last bar.
+  const agentH = pack.rows
+    ? pack.rows * (AGENT_LANE_H + AGENT_LANE_GAP) - AGENT_LANE_GAP : 0;
+  /* A lane that would be empty is not drawn at all, rather than drawn blank:
+     a session whose prompts are all outside the payload's row cap has no
+     costs to show, and one that called no tools has no density to show. */
+  const costMax = Math.max(...turns.map(t => (t.row && t.row.cost) || 0), 0);
+  const costH = costMax > 0 ? COST_LANE_H : 0;
+  const toolMax = Math.max(...points.map(p => p.tools || 0), 0);
+  const toolH = toolMax > 0 ? TOOL_LANE_H : 0;
+  /* The tool lane is scaled to twice its 95th percentile, not to its maximum,
+     for the reason ironScale() gives about the calendar: one request that
+     unpacked forty tool results pushes every ordinary one - and ordinary is
+     one or two - onto a bar less than a pixel tall. Anything above the
+     ceiling is drawn at full height and capped, so it reads as off the scale
+     rather than as merely tall, and the crosshair still gives the number. */
+  const toolCap = toolCeiling(points, toolMax);
+  // One request's bar in the tool lane: two or three pixels on a long
+  // session, so they butt together, and capped so a short one does not draw
+  // a row of slabs. The pointer tracking hit-tests against the same width.
+  const toolBw = Math.max(1.5, Math.min(6, plotW / Math.max(points.length, 1)));
+  /* Lanes are separated by a gap and a rule rather than butted together. The
+     cost bars used to stand on the context plot's own ceiling line, which
+     saved a line and cost the reader the boundary: the two lanes read as one
+     block with a stripe through it. Small is enough - LANE_GAP plus a hairline
+     is all it takes for four lanes to read as four. */
+  const rulerY = padT;
+  const costY = rulerY + rulerH;
+  const ctxY = costY + costH + (costH ? LANE_GAP : 0);
+  const toolY = ctxY + ctxH + LANE_GAP;
+  const agentY = toolY + toolH + LANE_GAP;
+  /* The bands the whole drawing is ruled into, top to bottom, and *only*
+     where something is actually drawn. Anything that belongs to every lane -
+     a turn's wash, a compressed-idle hatch, a turn tick, the hover highlight
+     - is drawn once per entry rather than as one rect down the whole chart.
+     One rect was the obvious thing and it defeated the point of separating
+     the lanes at all: it painted the gaps back in with the same wash, so the
+     clear space between the lanes was never clear and four lanes went on
+     reading as one block with stripes through it.
+
+     The ruler and the cost bars are a single entry because they are a single
+     zone - the half of the chart that is about a whole prompt - and a gap
+     between them would say otherwise. */
+  const lanes = [[rulerY, rulerY + rulerH + costH], [ctxY, ctxY + ctxH]];
+  if (toolH) lanes.push([toolY, toolY + toolH]);
+  if (agentH) lanes.push([agentY, agentY + agentH]);
+  const bandTop = rulerY, bandBot = lanes[lanes.length - 1][1];
+  const H = bandBot + axisH;
+  // Draw `make(y, height)` once for every lane.
+  const perLane = (make) => { for (const l of lanes) make(l[0], l[1] - l[0]); };
+  // Where a turn column can be clicked or focused: the ruler and the cost
+  // bar under it are one target, so a turn too narrow to number is still a
+  // comfortable thing to hit.
+  const turnHitH = rulerH + costH;
+  /* The two halves of the drawing, and the y that divides them. Above it
+     everything is a property of a whole prompt (which turn, what it cost);
+     below it everything happened *inside* one (this request's context, these
+     tool results, that subagent). The readout under the chart follows the
+     pointer across this line and changes what it is reporting, which is why
+     the line has to be one number both it and the layout agree on. */
+  const zoneSplit = costH ? costY + costH + LANE_GAP / 2 : rulerY + rulerH;
+
+  // Not role="img": that flattens the whole subtree into one opaque picture
+  // for a screen reader's browse mode, which would bury the tabindex="0"
+  // turn columns, subagent bars, event ticks and cache-miss marks inside it -
+  // native Tab order still reaches them, but browse mode might never surface
+  // them. role="group" keeps the children as their own focusable stops, each
+  // with its own <title> for a name; the group's own aria-label says what the
+  // whole drawing is.
+  const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H,
+                             preserveAspectRatio: "xMinYMin meet",
+                             class: "ctx-svg", role: "group",
+                             "aria-label": "Session timeline: context, " +
+                               "turns, tool calls and subagent runs over time" });
+  const cap = svgEl("title", {});
+  cap.textContent = points.length + " requests, " + turns.length +
+    " turn(s), " + spans.length + " subagent run(s), " +
+    (mode === "activity" ? "idle time compressed" : "linear time");
+  svg.append(cap);
+  if (!points.length && !spans.length) return svg;
+
+  // The hatch the compressed-idle gutters are filled with. The id carries the
+  // session so two open detail panels cannot collide over it.
+  const hid = "hatch-" + sid;
+  const defs = svgEl("defs", {});
+  const pat = svgEl("pattern", { id: hid, width: 6, height: 6,
+                                 patternUnits: "userSpaceOnUse",
+                                 patternTransform: "rotate(45)" });
+  pat.append(svgEl("rect", { width: 6, height: 6, class: "gap-bg" }));
+  pat.append(svgEl("line", { x1: 0, y1: 0, x2: 0, y2: 6, class: "gap-hatch" }));
+  defs.append(pat);
+  svg.append(defs);
+
+  /* Turn bands run the full height of the drawing rather than just the
+     context lane, so a subagent bar can be read against the turn that
+     launched it without tracing a line up the chart. */
+  for (const t of turns) {
+    const x0 = sc.px(t.t);
+    const x1 = t.end < points.length ? sc.px(points[t.end].t) : padL + plotW;
+    const w = Math.max(x1 - x0, 1);
+    // The wash marks every other turn: through the plot it is a boundary
+    // marker, and two adjacent washes would not be one.
+    if (!(t.n % 2))
+      perLane((y, h) => svg.append(svgEl("rect", { x: x0, y: y, width: w,
+                                                   height: h,
+                                                   class: "turn-band" })));
+    /* The wash alone disappears under the filled area, which covers most of
+       the plot on any session that got anywhere. The ruler strip is the same
+       banding at a strength that survives, in the lanes nothing is drawn
+       over - and *every* turn gets one, in one of two tones. Filling only the
+       even turns left the odd ones as bare background, which read as gaps
+       between the bands rather than as bands, so nothing suggested they could
+       be hovered either. */
+    svg.append(svgEl("rect", { x: x0, y: rulerY, width: w, height: rulerH,
+                               class: t.n % 2 ? "turn-strip-a"
+                                              : "turn-strip-b" }));
+  }
+
+  const top = niceTop(Math.max(...points.map(p => p.ctx || 0), 1));
+  const py = (v) => ctxY + ctxH - ctxH * Math.min(v, top) / top;
+  for (let i = 0; i <= 4; i++) {
+    const v = top * i / 4, y = py(v);
+    svg.append(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y,
+                               class: i ? "grid-line" : "base-line" }));
+    const t = svgEl("text", { x: padL - 6, y: y + 4, "text-anchor": "end",
+                              class: "tick-label y-gutter" });
+    t.textContent = v ? fmtC(v) : "0";
+    svg.append(t);
+  }
+
+  /* Stacked areas, bottom-up, one shape per working stretch rather than one
+     across the session. An area that spans an idle run draws a straight ramp
+     from the last request before a night to the first after it - a climb of
+     context that never happened, and on a linear axis it is most of the
+     chart. Splitting leaves the gap empty, which is what is true. */
+  for (const run of runsOf(points)) {
+    // A stretch of one request has no width to fill; RUN_MIN_W gives it just
+    // enough to be a mark rather than an invisible zero-area polygon.
+    const xs = run.map(p => sc.px(p.t));
+    if (run.length === 1) xs.push(xs[0] + RUN_MIN_W);
+    const rp = run.length === 1 ? [run[0], run[0]] : run;
+    let base = rp.map(() => 0);
+    for (const layer of CTX_LAYERS) {
+      const get = layer[2], slot = layer[1];
+      const upper = rp.map((p, i) => base[i] + get(p));
+      const fwd = rp.map((p, i) => xs[i] + "," + py(upper[i]));
+      const back = [];
+      for (let i = rp.length - 1; i >= 0; i--)
+        back.push(xs[i] + "," + py(base[i]));
+      svg.append(svgEl("polygon", { points: fwd.concat(back).join(" "),
+                                    class: "fill-i" + slot, opacity: 0.85 }));
+      base = upper;
+    }
+    svg.append(svgEl("polyline", { class: "ctx-line",
+      points: rp.map((p, i) => xs[i] + "," + py(p.ctx || 0)).join(" ") }));
+  }
+
+  /* Compressed idle runs, drawn over the areas so the curve cannot appear to
+     carry on through a night it did not. */
+  for (const b of sc.breaks) {
+    const w = b.x1 - b.x0;
+    if (w < 1) continue;
+    const tip = fmtGap(b.secs) + " idle" +
+                (mode === "activity" ? ", not drawn to scale" : "");
+    perLane((y, h) => {
+      const r = svgEl("rect", { x: b.x0, y: y, width: w, height: h,
+                                fill: "url(#" + hid + ")", class: "gap-band" });
+      svgTip(r, tip);
+      svg.append(r);
+    });
+    /* The duration is written down the gutter rather than under it: a 24px
+       column has no room for "23h idle" beside a clock time, and the axis row
+       is worth more to the working stretches either side of it than to the
+       thing that did not happen. A break wide enough to read across gets it
+       the right way up. */
+    const cx = (b.x0 + b.x1) / 2, cy = ctxY + ctxH / 2;
+    if (w >= 12 && ctxH >= 40) {
+      const at = { x: cx, y: cy, class: "gap-label", "text-anchor": "middle" };
+      if (w < 60) at.transform = "rotate(-90 " + cx + " " + cy + ")";
+      const lab = svgEl("text", at);
+      lab.textContent = fmtGap(b.secs) + " idle";
+      svg.append(lab);
+    }
+  }
+
+  for (const p of points) {
+    if (!p.event) continue;
+    const x = sc.px(p.t);
+    svg.append(svgEl("line", { x1: x, x2: x, y1: ctxY, y2: ctxY + ctxH,
+                               class: "ev-line" }));
+    const hit = svgEl("line", { x1: x, x2: x, y1: ctxY, y2: ctxY + ctxH,
+                                class: "ev-hit", tabindex: 0 });
+    svgTip(hit, hhmm(p.t * 1000) + " " + (EVENT_LABEL[p.event] || p.event) +
+                (p.model ? " · " + shortModel(p.model) : ""));
+    svg.append(hit);
+  }
+  for (const p of points) {
+    if (!p.miss) continue;
+    const m = causeMeta(p.cause);
+    const c = svgEl("circle", { cx: sc.px(p.t), cy: py(p.ctx || 0), r: 4,
+                                class: "ctx-miss c-" + m[2], tabindex: 0 });
+    svgTip(c, hhmm(p.t * 1000) + " cache miss · " + m[1] +
+              " · " + fmtC(p.cw || 0) + " tokens re-written");
+    svg.append(c);
+  }
+
+  /* Tool-call density: one bar per request, as tall as the results that
+     request was carrying. It sits directly under the curve because the two
+     are the same measurement seen twice - a turn that reads twenty files is
+     a turn whose context climbs, and this is where you see which of the
+     climbs were reading and which were writing. Whatever failed is drawn in
+     the error colour over its share of the bar, so a run of red under a flat
+     stretch of curve explains the flatness. */
+  if (toolH) {
+    const cap = svgEl("text", { x: padL - 6, y: toolY + toolH - 1,
+                                "text-anchor": "end", class: "lane-label" });
+    cap.textContent = "tools";
+    svg.append(cap);
+    // The floor of this lane is drawn once, with the other lane rules.
+    // One request is two or three pixels on a long session, so the bars are
+    // butted together rather than gapped, and capped so a short session does
+    // not draw a row of slabs.
+    const bw = toolBw;
+    for (const p of points) {
+      const n = p.tools || 0;
+      if (!n) continue;
+      const h = Math.max(1.5, (toolH - 2) * Math.min(n, toolCap) / toolCap);
+      const x = sc.px(p.t) - bw / 2;
+      svg.append(svgEl("rect", { x: x, y: toolY + toolH - h, width: bw,
+                                 height: h, class: "tool-bar" }));
+      if (n > toolCap)
+        svg.append(svgEl("rect", { x: x, y: toolY + toolH - h, width: bw,
+                                   height: 2, class: "tool-bar-over" }));
+      if (p.terr) {
+        const eh = Math.max(1.5, h * Math.min(p.terr, n) / n);
+        svg.append(svgEl("rect", { x: x, y: toolY + toolH - eh, width: bw,
+                                   height: eh, class: "tool-bar-err" }));
+      }
+    }
+  }
+
+  /* Cost per turn, in the strip under the ruler. Deliberately one flat
+     colour: height already carries the magnitude, and every colour in this
+     drawing is spoken for by a category (miss cause, stack layer, subagent
+     run), so a fourth palette would read as membership in one of them. */
+  if (costH) {
+    // At the top of its own lane, not the bottom: the bottom of the cost lane
+    // is the top of the context plot, where the y axis prints its ceiling, and
+    // the two captions landed on each other.
+    const cap = svgEl("text", { x: padL - 6, y: costY + 10,
+                                "text-anchor": "end", class: "lane-label" });
+    cap.textContent = "cost";
+    svg.append(cap);
+    for (const t of turns) {
+      const c = (t.row && t.row.cost) || 0;
+      if (!(c > 0)) continue;
+      const x0 = sc.px(t.t);
+      const x1 = t.end < points.length ? sc.px(points[t.end].t) : padL + plotW;
+      // Standing on the context plot's own ceiling line, which is at exactly
+      // this y and saves drawing a second baseline over it.
+      const h = Math.max(1.5, (costH - 3) * c / costMax);
+      svg.append(svgEl("rect", { x: x0 + 1,
+                                 width: Math.max(x1 - x0 - 2, 1),
+                                 y: costY + costH - h, height: h,
+                                 class: "turn-cost" }));
+    }
+  }
+
+  /* The turn ruler. Every boundary gets a tick; a number only where the last
+     one left room, because a two-hundred-prompt session would otherwise draw
+     a grey smear. The whole column - ruler plus the cost bar under it - is
+     the hit area, so a turn too narrow to number is still comfortable to
+     hover. */
+  let lastLabel = -1e9;
+  for (const t of turns) {
+    const x = sc.px(t.t);
+    const x1 = t.end < points.length ? sc.px(points[t.end].t) : padL + plotW;
+    perLane((y, h) => svg.append(svgEl("line", { x1: x, x2: x, y1: y,
+                                                 y2: y + h,
+                                                 class: "turn-tick" })));
+    if (x - lastLabel >= 20) {
+      const lab = svgEl("text", { x: x + 3, y: rulerY + 11, class: "turn-num" });
+      lab.textContent = t.n;
+      svg.append(lab);
+      lastLabel = x;
+    }
+    const hit = svgEl("rect", { x: x, y: rulerY, width: Math.max(x1 - x, 2),
+                                height: turnHitH, class: "turn-hit",
+                                tabindex: 0 });
+    /* The turn itself rides on the node, so focus can report it without
+       re-deriving anything. Its <title> is deliberately one short line: the
+       readout under the chart carries the detail now, and a four-line native
+       tooltip over the ruler would sit on top of exactly what moving the
+       readout out of the way was meant to stop covering. */
+    hit.__turn = t;
+    svgTip(hit, "Turn " + t.n + " · " + dayTime(t.t));
+    svg.append(hit);
+  }
+
+  /* Subagent runs: launch to last request, one bar each. Nothing anywhere
+     records that an agent *ended*, so the right edge is the last request it
+     made - the end of its work, if not quite the end of its life. */
+  if (pack.rows) {
+    const cap = svgEl("text", { x: padL - 6, y: agentY + AGENT_LANE_H - 2,
+                                "text-anchor": "end", class: "lane-label" });
+    cap.textContent = "agents";
+    svg.append(cap);
+  }
+  for (const bar of pack.bars) {
+    const y = agentY + bar.row * (AGENT_LANE_H + AGENT_LANE_GAP);
+    const w = Math.max(bar.x1 - bar.x0, AGENT_MIN_W);
+    const sp = bar.sp;
+    const g = svgEl("g", { class: "agent-run", tabindex: 0 });
+    g.append(svgEl("rect", { x: bar.x0, y: y, width: w, height: AGENT_LANE_H,
+                             rx: 3, class: "agent-bar" }));
+    if (w >= 46) {
+      const lab = svgEl("text", { x: bar.x0 + 4, y: y + AGENT_LANE_H - 3,
+                                  class: "agent-label" });
+      // Trimmed to what the bar can hold, at the ~5.4px a 9px character
+      // averages, rather than clipped - a clip path per bar would be a lot of
+      // defs for a label that is only ever a hint at the tooltip.
+      const room = Math.floor((w - 8) / 5.4);
+      const text = agentLabel(sp);
+      lab.textContent = text.length > room
+        ? text.slice(0, Math.max(room - 1, 1)) + "…" : text;
+      g.append(lab);
+    }
+    g.__span = sp;
+    const lab = agentLabel(sp);
+    svgTip(g, lab + (sp.type && sp.type !== lab ? " · " + sp.type : "") +
+              " · " + fmtDur(sp.t1 - sp.t0));
+    svg.append(g);
+  }
+
+  /* Time axis. In activity mode every working stretch is labelled where it
+     starts, because after the gutters those are the only x positions that
+     mean anything definite; in elapsed mode five even ticks do. Either way
+     the date is spelled out whenever it changes, which on a session that ran
+     over four days is most of them. */
+  /* Lane rules, drawn after everything they separate: the compressed-idle
+     hatch spans the full height and would otherwise cover them.
+
+     Each one is the floor of the lane above it *and* the boundary with the
+     lane below, which is why there are only two: the context plot's own zero
+     line already does the job between the curve and the tool lane, and a
+     second rule 9px under it would only be a second rule. */
+  for (const y of [costH ? costY + costH : null,
+                   toolH ? toolY + toolH : null]) {
+    if (y == null) continue;
+    svg.append(svgEl("line", { x1: padL, x2: W - padR, y1: y, y2: y,
+                               class: "lane-rule" }));
+  }
+
+  addTracking(svg, points, spans, sc, readout,
+              { W: W, py: py, top: bandTop, bot: bandBot, split: zoneSplit,
+                turns: turns, padL: padL, plotW: plotW, mode: mode,
+                lanes: lanes, toolY: toolY, toolH: toolH, toolBw: toolBw });
+
+  const axisY = H - 6;
+  /* Labels are placed by the box each one would occupy rather than by how
+     far apart their anchors are: a centred "Aug 24, 08:12 PM" is 90px wide
+     and two of them 64px apart still print on top of each other, which is
+     what the old spacing test let through. CHAR_W is the average advance of
+     the 11px tick font, near enough for a reservation. */
+  const CHAR_W = 5.6, placed = [];
+  const claim = (x0, x1) => {
+    for (const p of placed) if (x0 < p[1] + 7 && x1 > p[0] - 7) return false;
+    placed.push([x0, x1]);
+    return true;
+  };
+  const putLabel = (x, text, anchor) => {
+    const w = text.length * CHAR_W;
+    const x0 = anchor === "start" ? x : anchor === "end" ? x - w : x - w / 2;
+    if (!claim(x0, x0 + w)) return false;
+    const lab = svgEl("text", { x: x, y: axisY, class: "tick-label",
+                                "text-anchor": anchor });
+    lab.textContent = text;
+    svg.append(lab);
+    return true;
+  };
+  const cand = [];
+  if (mode === "activity") {
+    for (const t of sc.starts) cand.push(t);
+  } else {
+    // Four ticks across one view's width, and as many more as the drawing
+    // is wider than that, so a timeline that scrolls is labelled all the
+    // way along rather than at four points spread over its whole length.
+    const nT = Math.max(4, Math.round(plotW / 200));
+    for (let i = 0; i < nT; i++) cand.push(sc.t0 + (sc.t1 - sc.t0) * i / nT);
+  }
+  // Both ends first, so a session always says when it began and ended however
+  // crowded the middle gets; then the working stretches, left to right.
+  const shown = [];
+  const put = (t, anchor) => {
+    const day = calDay(t);
+    const long = dayTime(t);
+    // A time on the same day as a label already shown needs no date on it -
+    // but only once that neighbour is on the page, so the date is decided
+    // after placement rather than in candidate order.
+    const near = shown.some(s => s.day === day);
+    if (putLabel(sc.px(t), near ? hhmm(t * 1000) : long, anchor))
+      shown.push({ day: day, t: t });
+  };
+  put(sc.t0, "start");
+  if (sc.t1 > sc.t0) put(sc.t1, "end");
+  for (const t of cand) if (t > sc.t0) put(t, "middle");
+  return svg;
+}
+
+/* ---------- the readout ----------
+   What the pointer is over, written into a strip under the chart rather than
+   into a panel that follows the pointer. The panel was the obvious thing and
+   the wrong thing: on a drawing this dense it covered the marks it was
+   describing, the crosshair included, so reading a value meant losing sight
+   of where the value was. A fixed strip cannot occlude anything, and it has
+   room for a line of prompt text that a tooltip did not.
+
+   Its height is reserved rather than fitted, so moving between the two halves
+   of the chart does not shuffle everything below it up and down. */
+function roFields(pairs) {
+  const row = el("div", "ro-fields");
+  for (const [k, v] of pairs) {
+    if (v == null) continue;
+    const s = el("span", "ro-f");
+    s.append(el("span", "k", k), el("span", "v", v));
+    row.append(s);
+  }
+  return row;
+}
+
+function setReadout(box, head, pairs, line, cls) {
+  if (!box) return;
+  const h = el("div", "ro-head");
+  h.textContent = head;
+  const l = el("div", "ro-line");
+  l.textContent = line || "";
+  box.className = "tl-readout" + (cls ? " " + cls : "");
+  box.replaceChildren(h, roFields(pairs), l);
+}
+
+/* What the strip says with the pointer somewhere else: the session in one
+   line, and a note about the two halves - which is the only place the split
+   is explained, and it is worth explaining once. */
+function restReadout(box, points, spans, turns, mode) {
+  if (!box) return;
+  setReadout(box, "Session", [
+    ["requests", fmtFull(points.length)],
+    ["turns", turns.length ? fmtFull(turns.length) : null],
+    ["subagents", spans.length ? fmtFull(spans.length) : null],
+    ["axis", mode === "activity" ? "activity (idle compressed)" : "elapsed"],
+  ], "Point at the top band for a whole prompt, at the context lane for one " +
+     "request, at a tool bar for its calls, or at a subagent bar for its run.");
+}
+
+/* Which subagents were running at an instant, and which were launched inside
+   a turn: the same list read two ways, one per half of the chart. */
+const spansAt = (spans, t) => spans.filter(s => s.t0 <= t && t <= s.t1);
+const spansIn = (spans, t0, t1) => spans.filter(s => s.t0 >= t0 && s.t0 < t1);
+
+/* ---------- pointer tracking ----------
+   One listener on the SVG root. A hit rectangle would be one element instead
+   of thousands, but it would also sit on top of every mark underneath it and
+   take their hovers away; a listener per point would be several thousand of
+   them on a panel the reader may have opened only to glance at.
+
+   Above geo.split the pointer is reading a *prompt* and the whole turn column
+   lights up; below it the pointer is reading a *request* and a crosshair
+   snaps to the nearest one. The readout changes with it. Keyboard reaches the
+   same two states through focusin, because every turn column and subagent run
+   is focusable and carries the object it stands for. */
+function addTracking(svg, points, spans, sc, readout, geo) {
+  if (!points.length && !spans.length) return;
+  const xs = points.map(p => sc.px(p.t));
+  const xh = svgEl("g", { class: "xh", visibility: "hidden" });
+  const line = svgEl("line", { y1: geo.top, y2: geo.bot, class: "xh-line" });
+  const dot = svgEl("circle", { r: 3.5, class: "xh-dot" });
+  xh.append(line, dot);
+  /* One highlight rect per lane, for the reason the turn bands are drawn
+     that way: a single rect over the whole column would fill the gaps that
+     separate the lanes, and the highlight would be the one thing on the chart
+     that put them back together. */
+  const hot = svgEl("g", { class: "turn-hot", visibility: "hidden" });
+  for (const l of geo.lanes)
+    hot.append(svgEl("rect", { y: l[0], height: l[1] - l[0] }));
+  svg.append(hot, xh);
+
+  /* Nearest by drawn x, not by index: the activity axis is piecewise, so
+     equal pixel steps are not equal steps in time and only a search over the
+     positions actually drawn agrees with what the reader is pointing at. */
+  const nearest = (x) => {
+    let lo = 0, hi = xs.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (xs[mid] < x) lo = mid + 1; else hi = mid;
+    }
+    if (lo > 0 && Math.abs(xs[lo - 1] - x) <= Math.abs(xs[lo] - x)) lo--;
+    return lo;
+  };
+  const turnAt = (i) => {
+    for (let k = geo.turns.length - 1; k >= 0; k--)
+      if (geo.turns[k].i <= i) return geo.turns[k];
+    return null;
+  };
+  const turnEndT = (t) =>
+    t.end < points.length ? points[t.end].t : Number.POSITIVE_INFINITY;
+
+  const clear = () => {
+    xh.setAttribute("visibility", "hidden");
+    hot.setAttribute("visibility", "hidden");
+    restReadout(readout, points, spans, geo.turns, geo.mode);
+  };
+
+  // ---- the overall half: one whole prompt
+  const showTurn = (t) => {
+    xh.setAttribute("visibility", "hidden");
+    const x0 = sc.px(t.t);
+    const x1 = t.end < points.length ? sc.px(points[t.end].t)
+                                     : geo.padL + geo.plotW;
+    for (const r of hot.children) {
+      r.setAttribute("x", x0);
+      r.setAttribute("width", Math.max(x1 - x0, 2));
+    }
+    hot.setAttribute("visibility", "visible");
+    let tools = 0, terr = 0, miss = 0;
+    for (let i = t.i; i < t.end; i++) {
+      tools += points[i].tools || 0;
+      terr += points[i].terr || 0;
+      miss += points[i].miss || 0;
+    }
+    const r = t.row;
+    const launched = spansIn(spans, t.t, turnEndT(t));
+    setReadout(readout, "Turn " + t.n + " · " + dayTime(t.t), [
+      ["cost", r ? fmtCost(r.cost, r.est) : null],
+      ["output", r ? fmtFull(r.out) : null],
+      ["wall", r ? fmtDur(r.wall_s || 0) : null],
+      ["API calls", fmtFull(t.end - t.i)],
+      ["tools", tools ? fmtFull(tools) + (terr ? " (" + terr + " failed)" : "")
+                      : null],
+      ["cache misses", miss ? fmtFull(miss) : null],
+      ["subagents", launched.length ? fmtFull(launched.length) : null],
+      ["context at end", points[t.end - 1]
+        ? fmtC(points[t.end - 1].ctx || 0) : null],
+    ], r && r.text ? r.text.replace(/\s+/g, " ")
+                   : "(this prompt's row is not in the payload)", "ro-overall");
+  };
+
+  // ---- the intra half: one request
+  const showPoint = (i) => {
+    hot.setAttribute("visibility", "hidden");
+    const p = points[i];
+    xh.setAttribute("visibility", "visible");
+    line.setAttribute("x1", xs[i]);
+    line.setAttribute("x2", xs[i]);
+    dot.setAttribute("cx", xs[i]);
+    dot.setAttribute("cy", geo.py(p.ctx || 0));
+    const t = turnAt(i);
+    const running = spansAt(spans, p.t);
+    const notes = [];
+    if (p.miss) notes.push("cache miss: " + causeMeta(p.cause)[1]);
+    if (p.event) notes.push(EVENT_LABEL[p.event] || p.event);
+    if (running.length)
+      notes.push("running: " + running.map(agentLabel).join(", "));
+    setReadout(readout, dayTime(p.t) + (t ? " · in turn " + t.n : ""), [
+      ["context", fmtFull(p.ctx || 0)],
+      ["cache read", fmtFull(p.cr || 0)],
+      ["cache write", fmtFull(p.cw || 0)],
+      ["uncached in",
+       fmtFull(Math.max((p.ctx || 0) - (p.cr || 0) - (p.cw || 0), 0))],
+      ["tool results", p.tools
+        ? fmtFull(p.tools) + (p.terr ? " (" + p.terr + " failed)" : "") : null],
+      ["model", p.model ? shortModel(p.model) : null],
+    ], notes.join(" · "), "ro-intra");
+  };
+
+  /* ---- the tool calls under the pointer, in the tool lane
+     The requests whose bars the pointer is actually over. On a long session
+     bars are a pixel or two wide and several share the pointer's column, so
+     all of them are reported together - what the reader sees as one bar is
+     reported as one bar. The first and last pick the crosshair and say the
+     window: a request's calls are the ones made since the request before it,
+     so the window opens at that earlier request, not at the first bar. */
+  const toolsNear = (x) => {
+    const reach = Math.max(geo.toolBw / 2, 3);
+    const out = [];
+    let i = nearest(x);
+    while (i > 0 && xs[i - 1] >= x - reach) i--;
+    for (; i < xs.length && xs[i] <= x + reach; i++)
+      if (points[i].tools && Math.abs(xs[i] - x) <= reach) out.push(i);
+    return out;
+  };
+  const fmtMs = (ms) => ms == null ? null
+    : ms < 1000 ? Math.round(ms) + "ms"
+    : ms < 60000 ? (ms / 1000).toFixed(1) + "s"
+    : fmtDur(Math.round(ms / 1000));
+  const TOOL_FIELDS_MAX = 8;
+  const showTools = (idx) => {
+    hot.setAttribute("visibility", "hidden");
+    // The crosshair on the busiest of them, which is the bar most likely to
+    // be the one the reader is looking at.
+    let at = idx[0];
+    for (const i of idx) if (points[i].tools > points[at].tools) at = i;
+    xh.setAttribute("visibility", "visible");
+    line.setAttribute("x1", xs[at]);
+    line.setAttribute("x2", xs[at]);
+    dot.setAttribute("cx", xs[at]);
+    dot.setAttribute("cy", geo.py(points[at].ctx || 0));
+    const byName = new Map();
+    let n = 0, err = 0, ms = null, bytes = null;
+    for (const i of idx) {
+      for (const a of points[i].tl) {
+        let g = byName.get(a.name);
+        if (!g) byName.set(a.name, g = { n: 0, err: 0 });
+        g.n += a.n;
+        g.err += a.err;
+        if (a.ms != null) ms = (ms || 0) + a.ms;
+        if (a.bytes != null) bytes = (bytes || 0) + a.bytes;
+      }
+      n += points[i].tools;
+      err += points[i].terr || 0;
+    }
+    const first = idx[0], last = idx[idx.length - 1];
+    const from = first > 0 && points[first - 1].session === points[first].session
+      ? points[first - 1].t : null;
+    const t = turnAt(last);
+    const names = [...byName.entries()]
+      .sort((a, b) => b[1].n - a[1].n || (a[0] < b[0] ? -1 : 1));
+    const pairs = [
+      ["calls", fmtFull(n) + (err ? " (" + fmtFull(err) + " failed)" : "")],
+      ["run time", fmtMs(ms)],
+      ["results", bytes != null ? fmtBytes(bytes) : null],
+    ];
+    for (const [name, g] of names.slice(0, TOOL_FIELDS_MAX))
+      pairs.push([name, fmtFull(g.n) + (g.err ? " (" + g.err + " failed)" : "")]);
+    if (names.length > TOOL_FIELDS_MAX)
+      pairs.push(["+" + (names.length - TOOL_FIELDS_MAX) + " more",
+                  fmtFull(names.slice(TOOL_FIELDS_MAX)
+                    .reduce((s, e) => s + e[1].n, 0))]);
+    const line2 =
+      (from != null ? "Called between " + hhmm(from * 1000) + " and "
+                    : "Called before ") + hhmm(points[last].t * 1000) +
+      (idx.length > 1 ? ", " + idx.length + " requests' worth" : "") +
+      "; the results went back with the request under the crosshair.";
+    setReadout(readout, "Tool calls · " + dayTime(points[last].t) +
+                        (t ? " · in turn " + t.n : ""),
+               pairs, line2, "ro-intra");
+  };
+
+  // ---- one subagent, when the pointer is actually on its bar
+  const showSpan = (sp) => {
+    xh.setAttribute("visibility", "hidden");
+    hot.setAttribute("visibility", "hidden");
+    // An agent whose `agents` row never arrived has neither a description
+    // nor a type, so agentLabel() falls back to the word "subagent" - and
+    // printing it again as the type would be the same word twice.
+    const label = agentLabel(sp);
+    setReadout(readout, label, [
+      ["type", sp.type && sp.type !== label ? sp.type : null],
+      ["model", sp.model ? shortModel(sp.model) : null],
+      ["ran", fmtDur(sp.t1 - sp.t0)],
+      ["API calls", sp.calls ? fmtFull(sp.calls) : "none recorded"],
+      ["output", sp.calls ? fmtFull(sp.out) : null],
+      ["cost", sp.calls ? fmtCost(sp.cost, sp.est) : null],
+    ], dayTime(sp.t0) + " → " + hhmm(sp.t1 * 1000), "ro-intra");
+  };
+
+  svg.addEventListener("mousemove", (e) => {
+    /* getScreenCTM rather than arithmetic on the bounding box. .ctx-svg is
+       width:100% over a viewBox that is usually narrower - the drawing is
+       sized to the visible width and the cell it sits in is as wide as the
+       sessions table - so preserveAspectRatio letterboxes it, and a plain
+       (client - left) * viewBox/box ratio lands the crosshair a few hundred
+       pixels from the pointer. The CTM knows the whole transform. */
+    const m = svg.getScreenCTM();
+    if (!m) return;
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
+    if (pt.y < geo.top || pt.y > geo.bot) { clear(); return; }
+    const run = e.target.closest && e.target.closest(".agent-run");
+    if (run && run.__span) { showSpan(run.__span); return; }
+    if (pt.y < geo.split) {
+      const t = turnAt(nearest(pt.x));
+      if (t) showTurn(t); else clear();
+      return;
+    }
+    if (!points.length) return;
+    // The tool lane, and half the gap either side of it: a bar the pointer
+    // is over reports its calls; a stretch of the lane with no bar under the
+    // pointer falls through to the request, as it did before.
+    if (geo.toolH && pt.y >= geo.toolY - LANE_GAP / 2 &&
+        pt.y <= geo.toolY + geo.toolH + LANE_GAP / 2) {
+      const idx = toolsNear(pt.x);
+      if (idx.length) { showTools(idx); return; }
+    }
+    showPoint(nearest(pt.x));
+  });
+  svg.addEventListener("mouseleave", clear);
+  // Keyboard reaches the same two states: a focused turn column reports its
+  // prompt, a focused subagent run reports itself.
+  svg.addEventListener("focusin", (e) => {
+    if (e.target.__turn) showTurn(e.target.__turn);
+    else if (e.target.__span) showSpan(e.target.__span);
+  });
+  // focusin has no matching cleanup of its own: Tab past the last turn-hit or
+  // agent-run leaves the hot rect and readout pinned to whatever was focused
+  // last, the same staleness mouseleave exists to prevent. relatedTarget is
+  // where focus is going *to*, so this only fires the same clear() mouseleave
+  // uses once focus has actually left the svg subtree - not on every move
+  // between two focusable children inside it. It can be null (focus left the
+  // document entirely, e.g. Tab to the browser chrome), which is also outside
+  // the svg.
+  svg.addEventListener("focusout", (e) => {
+    if (!e.relatedTarget || !svg.contains(e.relatedTarget)) clear();
+  });
+  clear();
+}
+/* The chart's own legend: the three stacked layers, then only the marks this
+   session actually put on the page - a cause swatch per miss that happened,
+   the event line, the subagent bar, the compressed-gap hatch. */
+function ctxLegend(points, spans, mode) {
+  const box = el("div", "mini-legend");
+  for (const layer of CTX_LAYERS) {
+    const s = el("span");
+    s.append(el("span", "sw sw-i" + layer[1]), document.createTextNode(layer[0]));
+    box.append(s);
+  }
+  const seen = [];
+  for (const p of points)
+    if (p.miss) {
+      const m = causeMeta(p.cause);
+      if (!seen.includes(m)) seen.push(m);
+    }
+  for (const m of seen) {
+    const s = el("span");
+    s.append(el("span", "sw sw-c" + m[2]), document.createTextNode("miss: " + m[1]));
+    box.append(s);
+  }
+  if (points.some(p => p.event))
+    box.append(el("span", null, "dashed line: model switch / compaction"));
+  if (points.some(p => p.turn))
+    box.append(el("span", null, "numbered bands: prompts, in order"));
+  if (points.some(p => p.tools)) {
+    const s = el("span");
+    s.append(el("span", "sw sw-tool"), document.createTextNode("tool results"));
+    box.append(s);
+  }
+  if (points.some(p => p.terr)) {
+    const s = el("span");
+    s.append(el("span", "sw sw-toolerr"),
+             document.createTextNode("failed tool calls"));
+    box.append(s);
+  }
+  if (spans.length) {
+    const s = el("span");
+    s.append(el("span", "sw sw-agent"), document.createTextNode("subagent run"));
+    box.append(s);
+  }
+  if (mode === "activity" && points.length)
+    box.append(el("span", null, "hatched: idle time, compressed"));
+  return box;
+}
+
+const SHORT_MODEL = new Map();
+function shortModel(m) {
+  let s = SHORT_MODEL.get(m);
+  if (s === undefined) {
+    s = m.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+    SHORT_MODEL.set(m, s);
+  }
+  return s;
+}
+
+  /* claude-lens's drawTimeline, for one panel: sized to the panel, scrolled
+     sideways past twelve hours of drawn time, and - the first time a session
+     is drawn - scrolled to its latest stretch rather than its first. */
+  function render(plot, d, sid, mode, toEnd){
+    TL_ROWS = d.rows || [];
+    const points = d.points || [], spans = d.spans || [];
+    for (const p of points){ p.session = sid; if (!p.tl) p.tl = []; }
+    const hid = String(sid).replace(/[^A-Za-z0-9_-]/g, "_");
+    plot.style.maxWidth = "";
+    const w = plot.clientWidth;
+    if (w > 0) plot.style.maxWidth = w + "px";
+    const old = plot.querySelector(".tl-scroll");
+    const frac = old && old.scrollWidth > old.clientWidth
+      ? old.scrollLeft / (old.scrollWidth - old.clientWidth) : 0;
+    const fullW = timelineWidth(points, spans, w, mode);
+    const readout = el("div", "tl-readout");
+    const svg = sessionTimelineSvg(points, spans, hid, fullW, mode, readout);
+    if (fullW <= Math.max(w || 860, 320)){
+      plot.replaceChildren(svg, readout, ctxLegend(points, spans, mode));
+      return;
+    }
+    svg.style.width = fullW + "px";
+    const sc = el("div", "tl-scroll");
+    sc.append(svg);
+    const gut = svgEl("svg", { width: TL_PAD_L, height: svg.getAttribute("height"),
+                               "aria-hidden": "true" });
+    for (const n of svg.querySelectorAll(".y-gutter, .lane-label"))
+      gut.append(n.cloneNode(true));
+    const pin = el("div", "tl-gutter");
+    pin.append(gut);
+    const frame = el("div", "tl-frame");
+    frame.append(sc, pin);
+    plot.replaceChildren(frame, readout, ctxLegend(points, spans, mode));
+    if (toEnd) sc.scrollLeft = sc.scrollWidth;
+    else if (frac > 0) sc.scrollLeft = frac * (sc.scrollWidth - sc.clientWidth);
+  }
+  return {render};
+})();
+
+let tlData = null, tlFor = null, tlAt = 0, tlDrawn = "", tlAxis = "activity";
+try { if (localStorage.getItem("imperatorium.tlAxis") === "elapsed") tlAxis = "elapsed"; } catch (e) {}
+const tlBox = document.createElement("div");
+tlBox.className = "tlx";
+tlBox.innerHTML = `<div class="sec-head"><h3>Session timeline</h3><div class="seg mini-seg" role=group aria-label="Time axis">` +
+  `<button type=button class=btn data-axis=activity title="Idle stretches collapsed to a hatched gutter, so the work fills the chart">activity</button>` +
+  `<button type=button class=btn data-axis=elapsed title="Real elapsed time, linear - idle stretches at their true width">elapsed</button>` +
+  `</div></div><div class="tl-plot"></div><div class="tl-note"></div>`;
+tlBox.addEventListener("click", e => {
+  const b = e.target.closest("[data-axis]");
+  if (!b || b.dataset.axis === tlAxis) return;
+  tlAxis = b.dataset.axis;
+  try { localStorage.setItem("imperatorium.tlAxis", tlAxis); } catch (e) {}
+  tlDrawn = "";
+  drawTimeline();
+});
+
+// Every 5 s while the panel is open; the dispatcher answers "same" when the
+// transcript has not moved, so an idle session costs nothing to watch.
+async function loadTimeline(){
+  const s = current();
+  if (!s || statusFolded || view !== "session" || tab !== "log") return;
+  if (tlFor === selected && Date.now() - tlAt < 5000){ drawTimeline(); return; }
+  tlAt = Date.now();
+  const want = selected, mine = tlFor === want && tlData && tlData.sig;
+  let d;
+  try {
+    d = await get("/api/timeline?session=" + encodeURIComponent(want) + (mine ? "&sig=" + encodeURIComponent(tlData.sig) : ""));
+  } catch (e) {
+    d = {ok: false, error: "this dispatcher does not draw timelines"};
+  }
+  if (want !== selected) return;
+  if (!(d.same && tlFor === want)){ tlData = d; tlFor = want; }
+  drawTimeline();
+}
+
+function drawTimeline(){
+  const plot = tlBox.querySelector(".tl-plot"), note = tlBox.querySelector(".tl-note");
+  for (const b of tlBox.querySelectorAll("[data-axis]"))
+    b.setAttribute("aria-pressed", String(b.dataset.axis === tlAxis));
+  if (!tlBox.isConnected || statusFolded) return;
+  const d = tlFor === selected ? tlData : null;
+  const ok = !!(d && d.ok && ((d.points || []).length || (d.spans || []).length));
+  tlBox.querySelector(".seg").hidden = !ok;
+  note.textContent = !d ? "reading the transcript\u2026" : !d.ok ? (d.error || "")
+    : ok ? "" : "No requests in this session yet.";
+  if (!ok){ plot.replaceChildren(); plot.style.maxWidth = ""; tlDrawn = ""; return; }
+  plot.style.maxWidth = "";
+  const w = plot.clientWidth;
+  if (!w) return;
+  const key = selected + "|" + d.sig + "|" + tlAxis + "|" + w;
+  if (key === tlDrawn){ if (w) plot.style.maxWidth = w + "px"; return; }
+  const fresh = !tlDrawn.startsWith(selected + "|");
+  // Not under the pointer: a redraw would take the readout out from under it.
+  if (!fresh && plot.matches(":hover") && tlDrawn.endsWith("|" + w)){ plot.style.maxWidth = w + "px"; return; }
+  tlDrawn = key;
+  TLX.render(plot, d, selected, tlAxis, fresh);
+}
+window.addEventListener("resize", () => drawTimeline());
 
 // -- what the session is waiting on ------------------------------------------
 // A tab per shell, monitor or subagent the selected session is waiting on,
@@ -4007,6 +5343,7 @@ $("#status").addEventListener("click", e => {
   statusFolded = !statusFolded;
   try { localStorage.setItem("imperatorium.statusFolded", statusFolded ? "1" : ""); } catch (e) {}
   drawStatus();
+  loadTimeline();
 });
 $("#jnext").onclick = () => jump(1);
 drawShape();

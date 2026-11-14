@@ -869,6 +869,14 @@ impl Channel {
         Ok(Value::Object(reply))
     }
 
+    /// The session timeline, read on the host (timeline.of_session there).
+    pub fn timeline(&self, session_id: &str, known: &str) -> Result<Value, String> {
+        let req = json!({"op": "timeline", "session": session_id, "sig": known}).as_object().unwrap().clone();
+        let mut reply = self.call(req, READ_TIMEOUT)?;
+        reply.remove("id");
+        Ok(Value::Object(reply))
+    }
+
     /// Stats.read: {session id: numbers} for those it has a transcript of.
     pub fn stats(&self, ids: &[String]) -> Result<Map<String, Value>, String> {
         let req = json!({"op": "stats", "sessions": ids}).as_object().unwrap().clone();
@@ -1086,6 +1094,11 @@ impl Fleet {
     pub fn subagent(&self, host: &str, session_id: &str, agent: &str) -> Result<Value, String> {
         let p = self.per(host).ok_or_else(|| format!("host {host} is not configured"))?;
         p.reader.subagent(session_id, agent)
+    }
+
+    pub fn timeline(&self, host: &str, session_id: &str, known: &str) -> Result<Value, String> {
+        let p = self.per(host).ok_or_else(|| format!("host {host} is not configured"))?;
+        p.reader.timeline(session_id, known)
     }
 }
 
@@ -1433,6 +1446,13 @@ pub fn channel_main() -> i32 {
                 let sid = req.get("session").map(py_str).unwrap_or_default();
                 let agent = req.get("agent").map(py_str).unwrap_or_default();
                 let mut v = crate::taskout::subagent_view(&sid, &agent, now());
+                v.as_object_mut().unwrap().insert("id".into(), id.clone());
+                v
+            }
+            Some("timeline") => {
+                let sid = req.get("session").map(py_str).unwrap_or_default();
+                let known = req.get("sig").map(py_str).unwrap_or_default();
+                let mut v = crate::timeline::of_session(&sid, &known);
                 v.as_object_mut().unwrap().insert("id".into(), id.clone());
                 v
             }
