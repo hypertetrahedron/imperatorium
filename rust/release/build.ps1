@@ -16,7 +16,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Out = '',
-    [switch]$Voice
+    [switch]$Voice,
+    [string]$Notes = ''
 )
 $ErrorActionPreference = 'Stop'
 $rust = Split-Path -Parent $PSScriptRoot
@@ -53,4 +54,5 @@ try {
     Pop-Location
     Remove-Item Env:\IMPERATORIUM_BUILD_VERSION -ErrorAction SilentlyContinue
 }
-python (Join-Path $PSScriptRoot 'package.py') --version $Version --out $Out @assets
+$extra = @(); if ($Notes) { $extra = @('--notes', $Notes) }
+python (Join-Path $PSScriptRoot 'package.py') --version $Version --out $Out @extra @assets

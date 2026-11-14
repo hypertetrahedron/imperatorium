@@ -64,6 +64,7 @@ SECTIONS = [
     ("remote", "Remote machines"),
     ("palette", "Palette"),
     ("streamdeck", "Stream Deck"),
+    ("updates", "Updates"),
 ]
 
 # key, section, label, type, default, applies, help, extra
@@ -188,6 +189,16 @@ FIELDS = [
     dict(key="streamdeck.keys", section="streamdeck", label="Pinned projects", type="names",
          default=[], applies=STREAMDECK,
          help="Projects on fixed keys, in order, one per line. Live sessions fill the rest."),
+    # Read by the native binary only: the Python dispatcher updates by git.
+    dict(key="updates.check", section="updates", label="Check for updates", type="bool",
+         default=True, applies=LIVE,
+         help="Asks the project's releases for a newer version a few minutes after start and every "
+              "six hours, and shows a badge by the Settings button when there is one. "
+              "Nothing is installed until you press Update."),
+    dict(key="updates.channel", section="updates", label="Channel", type="choice",
+         choices=("stable", "preview"), default="stable", applies=LIVE,
+         help="stable: tagged releases. preview: the newest preview build, which comes sooner "
+              "and breaks more often."),
 ]
 
 # Highlighting in the conversation (ui.py draws every mark; these switches

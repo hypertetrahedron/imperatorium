@@ -116,7 +116,11 @@ jobs:
             f="built/macos/$t/release/imperatorium"
             [ -f "$f" ] && assets+=("$t=$f")
           done
-          python3 rust/release/package.py --version "$v" --out dist "${assets[@]}"
+          # What's new: the tag's annotation (git tag -a vX -m "..."), which
+          # the window's update panel shows.
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.txt
+          python3 rust/release/package.py --version "$v" --out dist --notes notes.txt "${assets[@]}"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

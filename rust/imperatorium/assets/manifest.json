@@ -4,15 +4,15 @@
     "look": true
   },
   "settings.html": {
-    "sha256": "0f47d4351eefbbe0fac2516bceec3b206bb7eae70348ad1adef78c99bda11a54",
+    "sha256": "c097403ab25e9df683a41effc6680e1d15c7357cf89012e5c39d04fcf1b7ba2f",
     "look": false
   },
   "settings_fields.json": {
-    "sha256": "22cc2ffced694217e183a04c36961a768e9ab87627ff2cdd420114be2f354415",
+    "sha256": "152d110c8c7d2f34ebb7b9ea7b30767ba2db56999c291b286fedc35e9cef356f",
     "look": null
   },
   "shell.html": {
-    "sha256": "df5fbc37a93c1af638da0f07c4fcc8d6ef5f0e7fd68366ef35826ff71dc44679",
+    "sha256": "8a110394109a653428b6f88d2ce98847a857e83cd3fd2979dacb9d11e109a6fc",
     "look": true
   }
 }

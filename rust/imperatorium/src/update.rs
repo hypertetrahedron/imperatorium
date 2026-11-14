@@ -136,42 +136,196 @@ fn restart_services(prefix: &str) {
     #[cfg(windows)]
     {
         let exe = std::env::current_exe().unwrap_or_default();
-        for (task, sub) in [("Dispatcher", "serve"), ("StreamDeck", "streamdeck"), ("Hotkey", "hotkey")] {
-            let task = format!("{prefix}{task}");
-            let q = std::process::Command::new("schtasks").args(["/Query", "/TN", &task]).output();
-            if !q.is_ok_and(|o| o.status.success()) {
-                continue;
-            }
-            let _ = std::process::Command::new("schtasks").args(["/End", "/TN", &task]).output();
-            let filter = format!("Name='{}'", exe.file_name().and_then(|n| n.to_str()).unwrap_or("imperatorium.exe"));
-            // Only processes started from this install's exe, by the path in
-            // their command line (the task put it there): another install's
-            // dispatcher - the live one, beside a test copy - is not ours to
-            // stop. Not by image path: after the swap that names the old,
-            // renamed file.
-            let path = regex::escape(&exe.to_string_lossy()).replace('\'', "''");
-            let script = format!(
-                "Get-CimInstance Win32_Process -Filter \"{filter}\" | Where-Object {{ $_.CommandLine -match '{path}' -and $_.CommandLine -match ' {sub}( |$)' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
-            );
-            let _ = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).output();
-            let _ = std::process::Command::new("schtasks").args(["/Run", "/TN", &task]).output();
-            println!("   restarted {task}");
-        }
+        let lit = |s: &str| s.replace('\'', "''");
+        let image = exe.file_name().and_then(|n| n.to_str()).unwrap_or("imperatorium.exe").to_string();
+        // The tasks are found by what they run - this exe - not by name:
+        // an install made with --task-prefix is restarted too (the window's
+        // Update button does not know the prefix), and another install's
+        // tasks - the live one, beside a test copy - are left alone, however
+        // they are named. Processes likewise: only those started from this
+        // exe, by the path in their command line (the task put it there);
+        // not by image path, which after the swap names the old, renamed
+        // file. The dispatcher goes last: on Linux its restart ends us.
+        let script = format!(
+            "$p = '{p}'.ToLower()\n\
+             $all = @(Get-ScheduledTask -ErrorAction SilentlyContinue)\n\
+             $mine = @($all | Where-Object {{ (($_.Actions | ForEach-Object {{ \"$($_.Execute) $($_.Arguments)\" }}) -join ' ').ToLower().Contains($p) }})\n\
+             foreach ($t in $all) {{ if ($t.TaskName -like '{prefix}*' -and -not ($mine | Where-Object TaskName -eq $t.TaskName)) {{ \"   $($t.TaskName) runs another copy of imperatorium - left alone\" }} }}\n\
+             foreach ($sub in 'streamdeck', 'hotkey', 'serve') {{\n\
+               foreach ($t in $mine) {{\n\
+                 $a = ($t.Actions | ForEach-Object {{ \"$($_.Arguments)\" }}) -join ' '\n\
+                 if ($a -notmatch \" $sub( |$)\") {{ continue }}\n\
+                 Stop-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName\n\
+                 Get-CimInstance Win32_Process -Filter \"Name='{i}'\" | Where-Object {{ $_.CommandLine -and $_.CommandLine.ToLower().Contains($p) -and $_.CommandLine -match \" $sub( |$)\" }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}\n\
+                 \"   restarted $($t.TaskName)\"\n\
+                 Start-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName\n\
+               }}\n\
+             }}",
+            p = lit(&exe.to_string_lossy()),
+            i = lit(&image),
+            prefix = lit(prefix),
+        );
+        // Printed as it goes: once the dispatcher's restart kills the
+        // processes, a later line might never arrive.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(std::process::Stdio::null())
+            .status();
     }
     #[cfg(target_os = "linux")]
-    for name in ["dispatcher", "streamdeck", "hotkey"] {
+    for name in ["streamdeck", "hotkey", "dispatcher"] {
         let unit = format!("{}-{name}.service", prefix.to_lowercase());
-        let ok = std::process::Command::new("systemctl").args(["--user", "is-enabled", &unit]).output();
-        if ok.is_ok_and(|o| o.status.success()) {
+        let enabled = std::process::Command::new("systemctl")
+            .args(["--user", "is-enabled", &unit])
+            .output()
+            .is_ok_and(|o| o.status.success());
+        // As on Windows: only a unit that runs this exe.
+        let exe = std::env::current_exe().unwrap_or_default();
+        let runs = std::process::Command::new("systemctl")
+            .args(["--user", "show", "-p", "ExecStart", "--value", &unit])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&*exe.to_string_lossy()));
+        if enabled && !runs {
+            println!("   {unit} runs another copy of imperatorium - left alone");
+        } else if enabled {
             let _ = std::process::Command::new("systemctl").args(["--user", "restart", &unit]).output();
             println!("   restarted {unit}");
         }
     }
     #[cfg(target_os = "macos")]
-    for name in ["dispatcher", "streamdeck", "hotkey"] {
+    for name in ["streamdeck", "hotkey", "dispatcher"] {
         let label = format!("local.{}.{name}", prefix.to_lowercase());
         let uid = unsafe { libc::getuid() };
         let _ = std::process::Command::new("launchctl").args(["kickstart", "-k", &format!("gui/{uid}/{label}")]).output();
+    }
+}
+
+// -- the dispatcher's check and the window's Update button (gap J3) --------
+
+/// Asked once a few minutes after the dispatcher starts, then every six
+/// hours, when `updates.check` is on (it is by default). Nothing is
+/// installed until the window asks; then `imperatorium update` runs as a
+/// child that outlives us, swaps the binary and restarts the services
+/// (this dispatcher last).
+pub struct Checker {
+    state: std::sync::Mutex<Value>,
+}
+
+const FIRST_CHECK: Duration = Duration::from_secs(180);
+const EVERY: Duration = Duration::from_secs(6 * 3600);
+
+impl Default for Checker {
+    fn default() -> Self {
+        Checker { state: std::sync::Mutex::new(serde_json::json!({})) }
+    }
+}
+
+fn channel_of(cfg: &Value) -> String {
+    match crate::settings::value(cfg, "updates.channel").as_str() {
+        Some("preview") => "preview".into(),
+        _ => "stable".into(),
+    }
+}
+
+fn epoch() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+impl Checker {
+    /// What the window shows: this version, the newest one the last check
+    /// saw, its notes, and whether an update is under way.
+    pub fn status(&self, cfg: &Value) -> Value {
+        let mut s = self.state.lock().unwrap().clone();
+        if let Some(o) = s.as_object_mut() {
+            o.insert("current".into(), Value::from(version()));
+            o.insert("channel".into(), Value::from(channel_of(cfg)));
+            o.insert("check".into(), Value::Bool(crate::pyish::truthy(Some(&crate::settings::value(cfg, "updates.check")))));
+            o.insert("ok".into(), Value::Bool(true));
+        }
+        s
+    }
+
+    /// Ask the release now; the answer replaces the last one.
+    pub fn check(&self, cfg: &Value) -> Value {
+        let channel = channel_of(cfg);
+        let base = base(None, &channel);
+        let mut next = serde_json::json!({"checked_at": epoch(), "checked_channel": channel});
+        match manifest(&base) {
+            Ok(m) => {
+                let latest = m.get("version").and_then(Value::as_str).unwrap_or("").to_string();
+                next["newer"] = Value::Bool(newer(&latest, version()));
+                next["latest"] = Value::from(latest);
+                next["notes"] = m.get("notes").cloned().unwrap_or(Value::Null);
+                // A release without our build cannot be installed from here.
+                next["installable"] = Value::Bool(m.get("assets").and_then(|a| a.get(this_triple())).is_some());
+            }
+            Err(e) => next["error"] = Value::from(e),
+        }
+        {
+            let mut st = self.state.lock().unwrap();
+            if let Some(a) = st.get("applying").cloned() {
+                next["applying"] = a;
+            }
+            *st = next;
+        }
+        self.status(cfg)
+    }
+
+    /// The background check. `cfg` is None once the dispatcher is gone.
+    pub fn start(self: &std::sync::Arc<Self>, cfg: impl Fn() -> Option<Value> + Send + 'static) {
+        let me = std::sync::Arc::clone(self);
+        std::thread::spawn(move || {
+            std::thread::sleep(FIRST_CHECK);
+            loop {
+                let Some(c) = cfg() else { return };
+                if crate::pyish::truthy(Some(&crate::settings::value(&c, "updates.check"))) {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| me.check(&c)));
+                }
+                std::thread::sleep(EVERY);
+            }
+        });
+    }
+
+    /// Run `imperatorium update` for the version the last check found. Its
+    /// output goes to `update.log` in the state folder.
+    pub fn apply(&self, cfg: &Value, log: &Path) -> Value {
+        let mut st = self.state.lock().unwrap();
+        if st.get("newer") != Some(&Value::Bool(true)) {
+            return serde_json::json!({"ok": false, "error": "no newer version known - check first"});
+        }
+        if st.get("installable") == Some(&Value::Bool(false)) {
+            return serde_json::json!({"ok": false, "error": format!("the release has no build for {}", this_triple())});
+        }
+        if st.get("applying").and_then(Value::as_f64).is_some_and(|t| epoch() - t < 600.0) {
+            return serde_json::json!({"ok": false, "error": "an update is already under way"});
+        }
+        let latest = st.get("latest").cloned().unwrap_or(Value::Null);
+        let channel = st.get("checked_channel").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| channel_of(cfg));
+        let out = match std::fs::File::create(log) {
+            Ok(f) => f,
+            Err(e) => return serde_json::json!({"ok": false, "error": format!("{}: {e}", log.display())}),
+        };
+        let err = out.try_clone().ok();
+        let mut c = std::process::Command::new(std::env::current_exe().unwrap_or_default());
+        c.args(["update", "--channel", &channel]).stdin(std::process::Stdio::null()).stdout(out);
+        if let Some(e) = err {
+            c.stderr(e);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW:
+            // it must outlive the dispatcher it is about to restart.
+            c.creation_flags(0x0000_0008 | 0x0000_0200 | 0x0800_0000);
+        }
+        match c.spawn() {
+            Ok(child) => {
+                st["applying"] = Value::from(epoch());
+                serde_json::json!({"ok": true, "version": latest, "pid": child.id(), "log": log.to_string_lossy()})
+            }
+            Err(e) => serde_json::json!({"ok": false, "error": format!("cannot start the update: {e}")}),
+        }
     }
 }
 
@@ -281,6 +435,27 @@ mod tests {
         assert!(!newer("0.2.9", "0.3.0-dev"));
         assert!(newer("v1.0", "0.9.9"));
         assert!(!newer("garbage", "0.3.0"));
+    }
+
+    #[test]
+    fn checker_status_and_refusals() {
+        let c = Checker::default();
+        let cfg = serde_json::json!({});
+        let s = c.status(&cfg);
+        assert_eq!(s["current"], version());
+        assert_eq!(s["channel"], "stable");
+        assert_eq!(s["check"], true);
+        assert!(s.get("checked_at").is_none());
+        let cfg = serde_json::json!({"updates": {"channel": "preview", "check": false}});
+        assert_eq!(c.status(&cfg)["channel"], "preview");
+        assert_eq!(c.status(&cfg)["check"], false);
+        // Nothing to install before a check has found something newer.
+        let log = std::env::temp_dir().join("imperatorium-update-test.log");
+        assert_eq!(c.apply(&cfg, &log)["ok"], false);
+        *c.state.lock().unwrap() = serde_json::json!({"newer": true, "latest": "9.9.9", "installable": false});
+        assert!(c.apply(&cfg, &log)["error"].as_str().unwrap().contains("no build"));
+        *c.state.lock().unwrap() = serde_json::json!({"newer": true, "latest": "9.9.9", "applying": epoch()});
+        assert!(c.apply(&cfg, &log)["error"].as_str().unwrap().contains("under way"));
     }
 
     #[test]

@@ -493,6 +493,25 @@ through). The worker's `--devices` prints the backend and the GPU ggml
 sees; GPU detection asks ggml's device list rather than looking for
 `nvcuda.dll`.
 
+**6e the update badge and What's New** (gap J3; `update::Checker`,
+`/api/update`, `/api/update/check`, `/api/update/apply`; settings
+`updates.check`, `updates.channel`). The dispatcher asks the release three
+minutes after start and every six hours; the window shows an `update`
+badge by the Settings button while a newer version is out, and Settings >
+Updates shows this version, the newest, the release's notes (`notes` in
+manifest.json: the tag's annotation in the workflow, `-Notes FILE` in
+build.ps1) and an Update button. Only the window may apply (its token); it
+runs `imperatorium update` as a detached child, which outlives the
+dispatcher it restarts. `update` now finds the tasks to restart by what
+they run - this exe - not by name, so a `--task-prefix` install is
+restarted and another install's tasks are left alone (it prints which);
+systemd units likewise by ExecStart. The dispatcher restarts last.
+Tested with a throwaway task running a sandbox dispatcher on 8811 against
+a mock release: badge, panel, notes shown as text, Update -> binary
+swapped and checked, task restarted on the new version, the live tasks
+untouched. The Python dispatcher answers 404, and the window shows no
+badge and says it updates by git.
+
 ## Building
 
 ```

@@ -3441,6 +3441,23 @@ $("#setbtn").onclick = () => {
   else w.focus();
 };
 setInterval(showMatrixButton, 1000);
+// The update badge (gap J3): while the native binary's last check saw a
+// newer release. A click opens Settings at its Updates section, which shows
+// what is new and installs it. The Python dispatcher answers 404: no badge.
+async function showUpdate(){
+  let d = null;
+  try { const r = await fetch("/api/update", {cache: "no-store"}); if (r.ok) d = await r.json(); } catch (e) { return; }
+  const b = $("#updbtn"), on = !!(d && d.ok && d.check && d.newer && !d.applying);
+  b.hidden = !on;
+  if (on) b.title = `Imperatorium ${d.latest} is out (this is ${d.current}): see what is new and update`;
+}
+$("#updbtn").onclick = () => {
+  const w = window.open("/settings#updates", "imperatorium-settings", "popup,width=760,height=820");
+  if (!w) $("#say").textContent = "the browser blocked the Settings window - allow pop-ups for this page";
+  else w.focus();
+};
+showUpdate();
+setInterval(showUpdate, 10 * 60 * 1000);
 
 $("#new").onclick = async () => {
   if ($("#picker").hidden){
@@ -3784,6 +3801,7 @@ def render_shell(token="", boot="", look=None):
         '<div id=side><h1><span class=ttl>'
         '<button id=setbtn class="tiny icon" title="Settings" aria-label="Settings">'
         '<svg viewBox="0 0 16 16" width=14 height=14 aria-hidden=true><circle cx=8 cy=8 r=2.1 /><path d="M6.9 1.5h2.2l.4 1.9 1.3.6 1.6-1.1 1.6 1.6-1.1 1.6.6 1.3 1.9.4v2.2l-1.9.4-.6 1.3 1.1 1.6-1.6 1.6-1.6-1.1-1.3.6-.4 1.9H6.9l-.4-1.9-1.3-.6-1.6 1.1-1.6-1.6 1.1-1.6-.6-1.3-1.9-.4V6.9l1.9-.4.6-1.3-1.1-1.6 1.6-1.6 1.6 1.1 1.3-.6z" stroke-linejoin=round /></svg></button>'
+        '<button id=updbtn class="tiny on" hidden>update</button>'
         '<button id=matrixbtn class="tiny icon" title="Chat Matrix: every running session in one window" '
         'aria-label="Chat Matrix" aria-pressed=false>'
         '<svg viewBox="0 0 16 16" width=14 height=14 aria-hidden=true>'
@@ -4214,6 +4232,9 @@ body{overflow:auto}
 #set .hosts{margin:0;padding-left:18px;font-size:13px}
 #set .hosts .hst{color:var(--muted);font-size:12px}
 #set .hosts .hst.bad{color:var(--fail)}
+#set #updst.bad{color:var(--fail)}
+#set #updnotes{white-space:pre-wrap;font:inherit;font-size:13px;margin:6px 0;padding:8px 10px;
+  border:1px solid var(--line);border-radius:6px;max-height:260px;overflow:auto}
 #set button.small{font:12px var(--ui);padding:3px 10px;border-radius:5px;border:1px solid var(--line);
   background:var(--panel);color:var(--ink);cursor:pointer;margin-top:6px}
 #set table.keys{border-collapse:collapse;font-size:13px;width:100%}
@@ -4312,19 +4333,23 @@ function draw(d){
   const wait = (d.waiting || []).map(p => `<div>${esc(WHEN[p] || p)}: <code>${esc(d.restart[p] || "")}</code></div>`).join("");
   $("#set").innerHTML = `<h1>Settings</h1><div class="path">${esc(d.path || "")}</div>` +
     (wait ? `<div id="wait"><b>Saved, waiting for a restart</b>${wait}</div>` : "") +
-    d.sections.map(sec => `<section><h2>${esc(sec.title)}</h2>` + (by[sec.id] || []).map(f => {
+    d.sections.map(sec => `<section id="sec-${esc(sec.id)}"><h2>${esc(sec.title)}</h2>` + (by[sec.id] || []).map(f => {
       const id = "f-" + f.key.replace(/\W/g, "_");
       return `<div class="f" data-key="${esc(f.key)}"><label for="${id}">${esc(f.label)}</label><div class="ctl">` +
         control(f) + (f.help ? `<span class="help">${esc(f.help)}</span>` : "") +
         `<span class="when ${f.applies === "live" ? "live" : ""}">${esc(WHEN[f.applies] || "")}</span>` +
         `<span class="err" hidden></span></div></div>`;
     }).join("") + (sec.id === "remote" ? hostsHtml(d.hosts) : "") +
-      (sec.id === "notify" ? notifyExtrasHtml(d) : "") + `</section>`).join("") +
+      (sec.id === "notify" ? notifyExtrasHtml(d) : "") +
+      (sec.id === "updates" ? updatesHtml() : "") + `</section>`).join("") +
     shortcutsHtml(d);
   $("#set").oninput = $("#set").onchange = mark;
   wireColors();
   wireDesk();
   wireHosts();
+  wireUpdates();
+  // Opened from the window's update badge: straight to the Updates section.
+  if (location.hash === "#updates") { const u = document.getElementById("sec-updates"); if (u) u.scrollIntoView(); }
   // A key field takes the combination pressed in it rather than typed text.
   for (const el of document.querySelectorAll("#set [data-record]")) el.onkeydown = e => {
     if (e.key === "Tab" || (!e.ctrlKey && !e.altKey && !e.metaKey && e.key !== "Backspace")) return;
@@ -4429,6 +4454,73 @@ function wireHosts(){
     // An answering host is back within seconds; one that times out, in ~30.
     for (const ms of [3000, 10000, 35000]) setTimeout(drawHosts, ms);
     setTimeout(() => { btn.disabled = false; }, 3000);
+  };
+}
+// The native binary's update check (`/api/update`): this version, the newest
+// release the last check saw and what is new in it, and the button that
+// installs it. The Python dispatcher has none and updates by git.
+function updatesHtml(){
+  return `<div class="f"><label>Version</label><div class="ctl"><span id="updst" class="help">…</span>` +
+    `<pre id="updnotes" hidden></pre>` +
+    `<span><button type=button class="small" id="updcheck">Check now</button> ` +
+    `<button type=button class="small" id="updapply" hidden>Update</button></span>` +
+    `<span class="help">Update downloads the new binary, checks its SHA-256 and restarts the ` +
+    `dispatcher, the hotkey and the Stream Deck; Claude Code sessions keep running, and this ` +
+    `window reloads when the dispatcher is back.</span></div></div>`;
+}
+function updateLine(d, now){
+  if (!d || !d.ok) return {text: "Updates come with the native binary; this dispatcher updates by git.", bad: false};
+  const head = `Imperatorium ${d.current} · ${d.channel}`;
+  if (d.applying) return {text: head + ` · updating to ${d.latest}…`, bad: false};
+  if (!d.checked_at) return {text: head + (d.check ? " · not checked yet" : " · checking is off"), bad: false};
+  const s = Math.max(0, Math.round(now - d.checked_at));
+  const ago = s < 60 ? s + "s" : s < 7200 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h";
+  if (d.error) return {text: head + ` · the check ${ago} ago failed: ${d.error}`, bad: true};
+  return {text: head + (d.newer ? ` · ${d.latest} is out` : " · up to date") + ` (checked ${ago} ago)`, bad: false};
+}
+async function drawUpdates(d){
+  if (d === undefined) {
+    try { const r = await fetch("/api/update", {cache: "no-store"}); d = r.ok ? await r.json() : null; } catch (e) { d = null; }
+  }
+  const st = document.getElementById("updst");
+  if (!st) return d;
+  const line = updateLine(d, Date.now() / 1000);
+  st.textContent = line.text; st.classList.toggle("bad", line.bad);
+  const notes = document.getElementById("updnotes"), apply = document.getElementById("updapply");
+  const fresh = !!(d && d.ok && d.newer);
+  notes.hidden = !(fresh && d.notes);
+  notes.textContent = fresh && d.notes ? `What's new in ${d.latest}\n\n${d.notes}` : "";
+  apply.hidden = !(fresh && d.installable !== false && !d.applying);
+  apply.textContent = fresh ? `Update to ${d.latest}` : "Update";
+  document.getElementById("updcheck").hidden = !(d && d.ok);
+  return d;
+}
+async function postUpdate(path){
+  const r = await fetch(path, {method: "POST", cache: "no-store",
+    headers: {"Content-Type": "application/json", "X-Imperatorium-Window":
+      (document.querySelector("meta[name=imp-window]") || {}).content || ""},
+    body: "{}"});
+  return r.ok || r.status === 403 ? r.json() : {ok: false, error: "not answered (" + r.status + ")"};
+}
+function wireUpdates(){
+  const check = document.getElementById("updcheck"), apply = document.getElementById("updapply");
+  if (!check) return;
+  drawUpdates();
+  check.onclick = async () => {
+    check.disabled = true; say("checking for updates…");
+    let d;
+    try { d = await postUpdate("/api/update/check"); } catch (e) { say("dispatcher not answering", true); check.disabled = false; return; }
+    drawUpdates(d);
+    say(d.error ? "the check failed" : d.newer ? `${d.latest} is out` : "Imperatorium is up to date", !!d.error);
+    check.disabled = false;
+  };
+  apply.onclick = async () => {
+    apply.disabled = true;
+    let d;
+    try { d = await postUpdate("/api/update/apply"); } catch (e) { say("dispatcher not answering", true); apply.disabled = false; return; }
+    say(d.ok ? `Updating to ${d.version}: the dispatcher restarts in a moment.` : (d.error || "not updated"), !d.ok);
+    apply.disabled = false;
+    drawUpdates();
   };
 }
 function changes(){

@@ -83,6 +83,8 @@ pub struct Shared {
     fleet: Option<Arc<crate::remote::Fleet>>,
     /// Host name -> its hook tunnel, started by serve().
     tunnels: Mutex<HashMap<String, Arc<crate::remote::Tunnel>>>,
+    /// The newest release, asked every few hours (gap J3).
+    updates: Arc<crate::update::Checker>,
 }
 
 /// dispatcher.remote_key: where a remote session's hook records live.
@@ -254,6 +256,7 @@ impl Shared {
             errors_cache: Mutex::new(None),
             tallies: Mutex::new(HashMap::new()),
             prs: Default::default(),
+            updates: Default::default(),
             voice: {
                 let cfg = load_config(home);
                 match cfg.get("voice").filter(|v| v.is_object()) {
@@ -2294,6 +2297,17 @@ impl Shared {
         }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p, None))),
+            "/api/update/check" => (200, Body::Json(self.updates.check(&self.config()))),
+            "/api/update/apply" => {
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window installs an update"})));
+                }
+                if self.store.is_none() {
+                    return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
+                }
+                let log = self.state_dir().join("update.log");
+                (200, Body::Json(self.updates.apply(&self.config(), &log)))
+            }
             "/api/remote/refresh" => {
                 let n = self.fleet.as_ref().map(|f| f.refresh()).unwrap_or(0);
                 (200, Body::Json(json!({"ok": true, "hosts": n})))
@@ -3629,6 +3643,7 @@ impl Shared {
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
             // Remote hosts are phase 4: until then this dispatcher polls none.
             ("GET", "/api/hosts") => (200, Body::Json(self.hosts_status())),
+            ("GET", "/api/update") => (200, Body::Json(self.updates.status(&self.config()))),
             ("GET", "/api/events") => {
                 // store.events(100): the newest hundred, newest first.
                 let st = self.state();
@@ -4109,6 +4124,8 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
                 warm.spend(now, 120.0, &limits);
             }));
         });
+        let me = Arc::downgrade(&shared);
+        shared.updates.start(move || me.upgrade().map(|s| s.config()));
         let sweeper = Arc::clone(&shared);
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(15));

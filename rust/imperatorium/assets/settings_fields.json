@@ -391,6 +391,28 @@
    "help": "Projects on fixed keys, in order, one per line. Live sessions fill the rest."
   },
   {
+   "key": "updates.check",
+   "section": "updates",
+   "label": "Check for updates",
+   "type": "bool",
+   "default": true,
+   "applies": "live",
+   "help": "Asks the project's releases for a newer version a few minutes after start and every six hours, and shows a badge by the Settings button when there is one. Nothing is installed until you press Update."
+  },
+  {
+   "key": "updates.channel",
+   "section": "updates",
+   "label": "Channel",
+   "type": "choice",
+   "choices": [
+    "stable",
+    "preview"
+   ],
+   "default": "stable",
+   "applies": "live",
+   "help": "stable: tagged releases. preview: the newest preview build, which comes sooner and breaks more often."
+  },
+  {
    "key": "highlight.code",
    "section": "highlight",
    "label": "Code blocks",
@@ -695,6 +717,10 @@
   [
    "streamdeck",
    "Stream Deck"
+  ],
+  [
+   "updates",
+   "Updates"
   ]
  ],
  "restart": {

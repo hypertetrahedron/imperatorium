@@ -33,11 +33,16 @@ def main():
     ap.add_argument("--version", required=True)
     ap.add_argument("--channel", default=None, help="stable, or preview (default: from the version)")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--notes", default=None,
+                    help="a text file: what is new, shown by the window's update panel")
     ap.add_argument("assets", nargs="+", help="KEY=PATH")
     args = ap.parse_args()
     channel = args.channel or ("preview" if "-" in args.version else "stable")
     os.makedirs(args.out, exist_ok=True)
     manifest = {"version": args.version.lstrip("v"), "channel": channel, "assets": {}}
+    if args.notes:
+        with open(args.notes, encoding="utf-8") as fh:
+            manifest["notes"] = fh.read().strip()
     sums = []
     for spec in args.assets:
         key, _, path = spec.partition("=")
