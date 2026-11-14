@@ -13,8 +13,10 @@
 //! tool hook's live activity, the statusline's usage, the mod's beats, and
 //! the PR badges it polls `gh` for. Those come with step 2.
 
+use crate::locks::{LockExt, RwLockExt};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
@@ -68,13 +70,21 @@ pub struct Shared {
     restart_needed: Mutex<std::collections::BTreeSet<String>>,
     settings_lock: Mutex<()>,
     boot: String,
-    /// The dispatcher's snapshot cache: (when, rows), the rows still holding
-    /// their tokens - only `public()` copies leave the process.
-    snap: Mutex<Option<(f64, Vec<Row>)>>,
+    /// The dispatcher's snapshot cache, the rows still holding their tokens
+    /// - only `public()` copies leave the process.
+    snap: Mutex<Option<Arc<Snap>>>,
+    /// Held while a snapshot is built, so callers that find the cache stale
+    /// together wait for one `claude agents` rather than each running one.
+    snap_build: Mutex<()>,
+    /// Bumped by invalidate(): a snapshot built before the last bump is
+    /// stale, and the event streams wait on `changed` for the next one.
+    changes: Mutex<u64>,
+    changed: std::sync::Condvar,
     stats: sessionstat::Reader,
     /// _doing_line's cache: sid -> (when, line).
     doing: Mutex<HashMap<String, (f64, String)>>,
-    convs: Mutex<HashMap<String, Arc<Cached>>>,
+    /// convcache: the parsed conversations, least recently used first.
+    convs: Mutex<indexmap::IndexMap<String, Arc<Cached>>>,
     /// convcache._paths: each session's transcript, found once.
     paths: Mutex<HashMap<String, PathBuf>>,
     /// Sessions on other machines (remote.Fleet): only for a dispatcher with
@@ -85,11 +95,30 @@ pub struct Shared {
     tunnels: Mutex<HashMap<String, Arc<crate::remote::Tunnel>>>,
     /// The newest release, asked every few hours (gap J3).
     updates: Arc<crate::update::Checker>,
+    /// Delayed jobs (the idle check after Stop), all on one thread.
+    timer: crate::timer::Timer,
 }
 
 /// dispatcher.remote_key: where a remote session's hook records live.
 fn remote_key(host: &str, sid: &str) -> String {
     format!("{host}/{sid}")
+}
+
+/// One session snapshot: when it was taken, which invalidate() it
+/// followed, its rows, and their public JSON, made at most once however
+/// many streams and polls send it.
+struct Snap {
+    at: f64,
+    generation: u64,
+    rows: Arc<Vec<Row>>,
+    public: std::sync::OnceLock<Arc<PublicSnap>>,
+}
+
+/// A snapshot as it leaves the process: `data` is `{"at", "sessions"}` as
+/// sent, `same` the sessions alone, sorted, to tell whether anything moved.
+struct PublicSnap {
+    data: String,
+    same: String,
 }
 
 struct Cached {
@@ -165,28 +194,19 @@ pub fn look(config: &Value) -> Value {
     })
 }
 
-/// sessionstat.transcript_path: the newest projects/*/<id>.jsonl.
+/// sessionstat.transcript_path (the newest projects/*/<id>.jsonl, a miss
+/// remembered for a moment so a poll for a session with no transcript yet
+/// does not list every folder each time), with its size and mtime.
 fn transcript_stamp(sid: &str) -> Option<(PathBuf, u64, u128)> {
-    if sid.len() != 36 || !sid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
-        return None;
-    }
-    let mut best: Option<(PathBuf, u64, u128)> = None;
-    for dir in std::fs::read_dir(sessions::projects_dir()).ok()?.flatten() {
-        let p = dir.path().join(format!("{sid}.jsonl"));
-        let Ok(meta) = std::fs::metadata(&p) else {
-            continue;
-        };
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        if best.as_ref().is_none_or(|b| mtime > b.2) {
-            best = Some((p, meta.len(), mtime));
-        }
-    }
-    best
+    let p = sessionstat::transcript_path(sid)?;
+    let meta = std::fs::metadata(&p).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Some((p, meta.len(), mtime))
 }
 
 impl Shared {
@@ -257,6 +277,7 @@ impl Shared {
             tallies: Mutex::new(HashMap::new()),
             prs: Default::default(),
             updates: Default::default(),
+            timer: crate::timer::Timer::new(),
             voice: {
                 let cfg = load_config(home);
                 match cfg.get("voice").filter(|v| v.is_object()) {
@@ -279,9 +300,12 @@ impl Shared {
             settings_lock: Default::default(),
             boot,
             snap: Mutex::new(None),
+            snap_build: Mutex::new(()),
+            changes: Mutex::new(0),
+            changed: std::sync::Condvar::new(),
             stats: sessionstat::Reader::new(),
             doing: Mutex::new(HashMap::new()),
-            convs: Mutex::new(HashMap::new()),
+            convs: Mutex::new(indexmap::IndexMap::new()),
             paths: Mutex::new(HashMap::new()),
             fleet: {
                 let hosts = crate::remote::load_hosts(&load_config(home));
@@ -509,12 +533,12 @@ impl Shared {
                     if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
                         let (k, at) = (key.clone(), stop_at);
                         let (h, s) = (host.map(str::to_string), sid.clone());
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_secs_f64(IDLE_AFTER));
-                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                me.idle_check(&k, &at, h.as_deref(), &s)
-                            }));
-                        });
+                        self.timer.after(
+                            std::time::Duration::from_secs_f64(IDLE_AFTER),
+                            move || {
+                                me.idle_check(&k, &at, h.as_deref(), &s);
+                            },
+                        );
                     }
                     // The turn is over: one queued prompt per turn.
                     if let Some(id) = self.drain(store, &key) {
@@ -583,8 +607,7 @@ impl Shared {
         for (name, since, resets) in self.global_windows(limits, now) {
             let mut got = self
                 .cost_history
-                .lock()
-                .unwrap()
+                .lk()
                 .totals(since, None, now, budget);
             complete = complete && got["complete"].as_bool().unwrap_or(true);
             got.as_object_mut().unwrap().shift_remove("complete");
@@ -595,8 +618,9 @@ impl Shared {
         }
         let rows: Vec<Row> = self
             .sessions(2.0)
-            .into_iter()
-            .filter(matrix_active)
+            .iter()
+            .filter(|r| matrix_active(r))
+            .cloned()
             .collect();
         let local: Vec<String> = rows
             .iter()
@@ -607,7 +631,7 @@ impl Shared {
                     .map(str::to_string)
             })
             .collect();
-        let (per, ok) = self.cost_history.lock().unwrap().sessions(&local, budget);
+        let (per, ok) = self.cost_history.lk().sessions(&local, budget);
         complete = complete && ok;
         let mut tokens: indexmap::IndexMap<String, i64> = indexmap::IndexMap::new();
         let mut models: indexmap::IndexMap<String, (i64, i64, f64)> = indexmap::IndexMap::new();
@@ -670,8 +694,9 @@ impl Shared {
     fn api_matrix(&self) -> Value {
         let mut rows: Vec<Row> = self
             .sessions(2.0)
-            .into_iter()
-            .filter(matrix_active)
+            .iter()
+            .filter(|r| matrix_active(r))
+            .cloned()
             .collect();
         rows.sort_by(|a, b| {
             let k = |r: &Row| {
@@ -1112,7 +1137,7 @@ impl Shared {
 
     /// The config as applied now.
     fn config(&self) -> Value {
-        self.config_live.read().unwrap().clone()
+        self.config_live.rd().clone()
     }
 
     /// Control.save_settings: check every change, write config.json once,
@@ -1124,7 +1149,7 @@ impl Shared {
         };
         let path = paths::config_home(self.home.as_deref()).join("config.json");
         let need = {
-            let _held = self.settings_lock.lock().unwrap();
+            let _held = self.settings_lock.lk();
             let cfg = match settings::load(&path) {
                 Ok(c) => c,
                 Err(e) => {
@@ -1143,8 +1168,7 @@ impl Shared {
             self.apply_settings(&new, changes);
             let need = settings::restarts(changes.keys());
             self.restart_needed
-                .lock()
-                .unwrap()
+                .lk()
                 .extend(need.iter().cloned());
             need
         };
@@ -1170,21 +1194,32 @@ impl Shared {
             "budget.thresholds",
             "list.hide_finished_hours",
         ];
-        let mut cfg = self.config_live.write().unwrap();
+        let mut cfg = self.config_live.wr();
         let mut copy = |key: &str| {
             let parts: Vec<&str> = key.split('.').collect();
-            let (last, path) = parts.split_last().unwrap();
-            let mut node = &mut *cfg;
+            let Some((last, path)) = parts.split_last() else {
+                return;
+            };
+            // config_live is always an object, and each step is made one.
+            let Some(mut node) = cfg.as_object_mut() else {
+                return;
+            };
             for part in path {
-                if !node.get(*part).is_some_and(Value::is_object) {
-                    node[*part] = json!({});
+                let child = node.entry(part.to_string()).or_insert_with(|| json!({}));
+                if !child.is_object() {
+                    *child = json!({});
                 }
-                node = node.get_mut(*part).unwrap();
+                let Some(o) = child.as_object_mut() else {
+                    return;
+                };
+                node = o;
             }
             match settings::get(new, key) {
-                Some(v) => node[*last] = v.clone(),
+                Some(v) => {
+                    node.insert(last.to_string(), v.clone());
+                }
                 None => {
-                    node.as_object_mut().unwrap().shift_remove(*last);
+                    node.shift_remove(*last);
                 }
             }
         };
@@ -1271,7 +1306,7 @@ impl Shared {
             cwd = self
                 .history
                 .list()
-                .into_iter()
+                .iter()
                 .find(|h| h.get("session_id").and_then(Value::as_str) == Some(session_id))
                 .and_then(|h| {
                     h.get("cwd")
@@ -1473,8 +1508,9 @@ impl Shared {
         self.invalidate();
         let row = self
             .sessions(2.0)
-            .into_iter()
-            .find(|r| r.get("key").and_then(Value::as_str) == Some(key))?;
+            .iter()
+            .find(|r| r.get("key").and_then(Value::as_str) == Some(key))
+            .cloned()?;
         if !truthy(row.get("dispatchable")) {
             return None; // the sweep retries once it registers
         }
@@ -1512,8 +1548,8 @@ impl Shared {
         self.invalidate();
         let rows: HashMap<String, Row> = self
             .sessions(2.0)
-            .into_iter()
-            .filter_map(|r| Some((r.get("key")?.as_str()?.to_string(), r)))
+            .iter()
+            .filter_map(|r| Some((r.get("key")?.as_str()?.to_string(), r.clone())))
             .collect();
         let mut out = vec![];
         for key in keys {
@@ -1613,8 +1649,9 @@ impl Shared {
             if mode == "auto" || mode == "inject" {
                 let Some(row) = self
                     .sessions(2.0)
-                    .into_iter()
+                    .iter()
                     .find(|r| r.get("sessionId").and_then(Value::as_str) == Some(sid))
+                    .cloned()
                 else {
                     return json!({"ok": false, "error": "no such session"});
                 };
@@ -1665,8 +1702,10 @@ impl Shared {
                              "score": res["score"], "candidates": res["candidates"]});
         let shown = crate::pyish::py_repr(&project.clone().map(Value::from).unwrap_or(Value::Null));
         let set = |out: &mut Value, more: Value| {
-            for (k, v) in more.as_object().unwrap() {
-                out[k] = v.clone();
+            if let Value::Object(more) = more {
+                for (k, v) in more {
+                    out[&k] = v;
+                }
             }
         };
         if res["confidence"] == "none" {
@@ -1728,7 +1767,11 @@ impl Shared {
         };
         if remote {
             let name = crate::pyish::py_str(&m["host"]);
-            let Some(fleet) = self.fleet.as_ref().filter(|f| f.host(&name).is_some()) else {
+            let Some(host) = self
+                .fleet
+                .as_ref()
+                .and_then(|f| f.host(&name).cloned())
+            else {
                 set(
                     &mut out,
                     json!({"ok": false, "error": format!("host {name} is not configured")}),
@@ -1762,7 +1805,6 @@ impl Shared {
                     _ => {}
                 }
             }
-            let host = fleet.host(&name).unwrap().clone();
             match crate::remote::start_background(&host, &path, &prompt, &background_options()) {
                 Err(e) => set(&mut out, json!({"ok": false, "error": e})),
                 Ok(started) => {
@@ -1822,10 +1864,11 @@ impl Shared {
                             Some(b) => b.to_string(),
                             None => m["start"].as_str().unwrap_or("").chars().take(12).collect(),
                         };
-                        let extra = json!({"worktree": m["path"], "branch": m["branch"], "base": base});
-                        for (k, v) in extra.as_object().unwrap() {
+                        let extra = [("worktree", m["path"].clone()), ("branch", m["branch"].clone()),
+                                     ("base", json!(base))];
+                        for (k, v) in extra {
                             e[k] = v.clone();
-                            done[k] = v.clone();
+                            done[k] = v;
                         }
                     }
                     store.add_event(e.as_object().unwrap().clone());
@@ -1921,7 +1964,7 @@ impl Shared {
             None => paths::abs_normcase(cwd).as_deref() == Some(want.as_str()),
         };
         let mut best: Option<Row> = None;
-        for row in self.sessions(2.0) {
+        for row in self.sessions(2.0).iter() {
             let Some(cwd) = row
                 .get("cwd")
                 .and_then(Value::as_str)
@@ -1941,7 +1984,7 @@ impl Shared {
             }
             let idle = |r: &Row| r.get("status").and_then(Value::as_str) == Some("idle");
             if best.is_none() || (idle(&row) && !idle(best.as_ref().unwrap())) {
-                best = Some(row);
+                best = Some(row.clone());
             }
         }
         best
@@ -2242,9 +2285,25 @@ impl Shared {
         json!({"ok": true, "how": "dismissed"})
     }
 
-    /// Control.invalidate: the next look rebuilds the snapshot.
+    /// Control.invalidate: the next look rebuilds the snapshot, and the
+    /// window's event streams are woken to look.
     fn invalidate(&self) {
-        *self.snap.lock().unwrap() = None;
+        *self.snap.lk() = None;
+        *self.changes.lk() += 1;
+        self.changed.notify_all();
+    }
+
+    fn generation(&self) -> u64 {
+        *self.changes.lk()
+    }
+
+    /// Control.wait_change: until something invalidates after `seen`, or
+    /// `timeout` seconds.
+    fn wait_change(&self, seen: u64, timeout: f64) {
+        let g = self.changes.lk();
+        let _ = self
+            .changed
+            .wait_timeout_while(g, std::time::Duration::from_secs_f64(timeout), |g| *g == seen);
     }
 
     /// A POST, with the dispatcher's checks: no foreign Origin, a JSON body
@@ -2590,7 +2649,7 @@ impl Shared {
     /// convcache._stamp: stat the remembered path; look again (and
     /// remember) only when there is none or it has gone.
     fn stamp(&self, sid: &str) -> Option<(PathBuf, u64, u128)> {
-        let known = self.paths.lock().unwrap().get(sid).cloned();
+        let known = self.paths.lk().get(sid).cloned();
         if let Some(path) = known {
             if let Ok(meta) = std::fs::metadata(&path) {
                 let mtime = meta
@@ -2604,8 +2663,7 @@ impl Shared {
         }
         let found = transcript_stamp(sid)?;
         self.paths
-            .lock()
-            .unwrap()
+            .lk()
             .insert(sid.to_string(), found.0.clone());
         Some(found)
     }
@@ -2615,16 +2673,18 @@ impl Shared {
     fn conversation(&self, sid: &str) -> Result<Arc<Cached>, String> {
         let stamp = self.stamp(sid);
         if let Some(st) = &stamp {
-            if let Some(hit) = self.convs.lock().unwrap().get(sid) {
-                if &hit.stamp == st {
-                    return Ok(Arc::clone(hit));
+            let mut convs = self.convs.lk();
+            if let Some(i) = convs.get_index_of(sid) {
+                if &convs[i].stamp == st {
+                    // Used now: to the back of the eviction order.
+                    let last = convs.len() - 1;
+                    convs.move_index(i, last);
+                    return Ok(Arc::clone(&convs[last]));
                 }
             }
         }
-        let chain = sessions::chain_json(sid)?;
-        let chain = chain.as_array().cloned().unwrap_or_default();
-        let raw = conversation::to_items(&conversation::messages(&chain), 0, false);
-        let merged = conversation::merge_turns(raw.clone());
+        let raw = Self::read_items(sid)?;
+        let merged = conversation::merge_turns_ref(&raw);
         let sig = signature(&merged);
         let merged_json = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
         let entry = Arc::new(Cached {
@@ -2635,13 +2695,39 @@ impl Shared {
             sig,
         });
         if stamp.is_some() {
-            let mut convs = self.convs.lock().unwrap();
-            if convs.len() >= 32 {
-                convs.clear(); // a coarse version of convcache's LRU budget
+            let mut convs = self.convs.lk();
+            convs.shift_remove(sid);
+            while convs.len() >= CONVS_KEPT {
+                convs.shift_remove_index(0); // the least recently used
             }
             convs.insert(sid.to_string(), Arc::clone(&entry));
         }
         Ok(entry)
+    }
+
+    /// A session's per-message items, straight from its transcript.
+    fn read_items(sid: &str) -> Result<Vec<Value>, String> {
+        let chain = match sessions::chain_json(sid)? {
+            Value::Array(a) => a,
+            _ => vec![],
+        };
+        Ok(conversation::to_items(&conversation::messages(&chain), 0, false))
+    }
+
+    /// The merged conversation's plain text, for a History search: from the
+    /// cache when it holds this transcript as it is, else read - and not
+    /// remembered, so a search over hundreds of sessions does not push out
+    /// the ones the window is showing. None when it cannot be read.
+    fn search_text(&self, sid: &str) -> Option<String> {
+        let stamp = self.stamp(sid);
+        if let Some(st) = &stamp {
+            let hit = self.convs.lk().get(sid).filter(|c| &c.stamp == st).cloned();
+            if let Some(c) = hit {
+                return Some(history::plain_text(&c.merged));
+            }
+        }
+        let raw = Self::read_items(sid).ok()?;
+        Some(history::plain_text(&conversation::merge_turns(raw)))
     }
 
     fn api_conversation(&self, q: &HashMap<String, String>) -> (u16, Body) {
@@ -2723,7 +2809,7 @@ impl Shared {
         let got = cached.map(|c| {
             if limit > 0 {
                 let start = c.raw.len().saturating_sub(limit);
-                let items = conversation::merge_turns(c.raw[start..].to_vec());
+                let items = conversation::merge_turns_ref(&c.raw[start..]);
                 let sig = signature(&items);
                 (items, sig)
             } else {
@@ -2773,7 +2859,7 @@ impl Shared {
         let Some(fleet) = &self.fleet else {
             return json!({"hosts": [], "status": {}});
         };
-        let tunnels = self.tunnels.lock().unwrap();
+        let tunnels = self.tunnels.lk();
         let hosts: Vec<Value> = fleet
             .hosts
             .iter()
@@ -2826,22 +2912,59 @@ impl Shared {
     }
 
     /// Control.sessions(max_age): the rows, cached briefly.
-    pub fn sessions(&self, max_age: f64) -> Vec<Row> {
+    pub fn sessions(&self, max_age: f64) -> Arc<Vec<Row>> {
         self.snapshot(max_age).1
     }
 
     /// (when the snapshot was taken, its rows). As registry.snapshot,
     /// `at` is read before `claude agents` runs.
-    pub fn snapshot(&self, max_age: f64) -> (f64, Vec<Row>) {
-        let now = Self::now();
-        if let Some((at, rows)) = self.snap.lock().unwrap().as_ref() {
-            if now - at < max_age {
-                return (*at, rows.clone());
-            }
+    pub fn snapshot(&self, max_age: f64) -> (f64, Arc<Vec<Row>>) {
+        let s = self.snap_of(max_age);
+        (s.at, Arc::clone(&s.rows))
+    }
+
+    /// The cached snapshot if it is younger than `max_age` and no
+    /// invalidate() came since it was begun; else one built now. Builds are
+    /// single-flight: whoever waited on another's build takes its rows.
+    fn snap_of(&self, max_age: f64) -> Arc<Snap> {
+        let fresh = |max_age: f64| {
+            let s = self.snap.lk().clone()?;
+            (Self::now() - s.at < max_age && s.generation == self.generation()).then_some(s)
+        };
+        if let Some(s) = fresh(max_age) {
+            return s;
         }
-        let rows = self.build_snapshot();
-        *self.snap.lock().unwrap() = Some((now, rows.clone()));
-        (now, rows)
+        let _building = self.snap_build.lk();
+        if let Some(s) = fresh(max_age) {
+            return s;
+        }
+        let generation = self.generation();
+        let now = Self::now();
+        let rows = Arc::new(self.build_snapshot());
+        let s = Arc::new(Snap {
+            at: now,
+            generation,
+            rows,
+            public: std::sync::OnceLock::new(),
+        });
+        *self.snap.lk() = Some(Arc::clone(&s));
+        s
+    }
+
+    /// The snapshot's public JSON, serialised once per snapshot.
+    fn public_snap(&self, max_age: f64) -> Arc<PublicSnap> {
+        let s = self.snap_of(max_age);
+        Arc::clone(s.public.get_or_init(|| {
+            let mut body = json!({"at": s.at, "sessions": public(&s.rows)});
+            let data = body.to_string();
+            if let Some(o) = body.as_object_mut() {
+                o.shift_remove("at");
+            }
+            Arc::new(PublicSnap {
+                data,
+                same: json_dumps_sorted(&body),
+            })
+        }))
     }
 
     fn build_snapshot(&self) -> Vec<Row> {
@@ -3096,7 +3219,7 @@ impl Shared {
     /// remembered for DOING_EVERY (10 s).
     fn doing_line(&self, sid: &str) -> String {
         let now = Self::now();
-        let hit = self.doing.lock().unwrap().get(sid).cloned();
+        let hit = self.doing.lk().get(sid).cloned();
         if let Some((at, line)) = &hit {
             if now - at < 10.0 {
                 return line.clone();
@@ -3110,8 +3233,7 @@ impl Shared {
             Err(_) => hit.map(|h| h.1).unwrap_or_default(),
         };
         self.doing
-            .lock()
-            .unwrap()
+            .lk()
             .insert(sid.to_string(), (now, line.clone()));
         line
     }
@@ -3188,11 +3310,10 @@ impl Shared {
     }
 
     /// GET /api/sessions: the snapshot as it may leave the process.
-    fn api_sessions(&self) -> Value {
+    fn api_sessions(&self) -> String {
         // The Stream Deck polls once a second; a snapshot STREAM_EVERY old
         // is as good for a key colour and saves a fork.
-        let (at, rows) = self.snapshot(STREAM_EVERY);
-        json!({"at": at, "sessions": public(rows)})
+        self.public_snap(STREAM_EVERY).data.clone()
     }
 
     /// GET /api/stream: server-sent events, the session list whenever it
@@ -3209,8 +3330,10 @@ impl Shared {
     /// anything again - the window froze ten minutes after each load
     /// (2026-11-13).
     ///
-    /// Python is also woken early by a hook event (Control.invalidate);
-    /// this shadow receives no hooks, so it only looks on its clock.
+    /// As in Python, it is also woken early by whatever invalidates the
+    /// snapshot (a hook event, a remote poll landing), then looks once
+    /// STREAM_MIN_GAP has passed. Every stream sends the same snapshot's
+    /// JSON, serialised once.
     pub fn stream(&self, out: &mut dyn std::io::Write) {
         let head = "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
                     Cache-Control: no-store\r\n\r\n";
@@ -3221,20 +3344,23 @@ impl Shared {
         {
             return;
         }
-        let (mut last, mut quiet, mut looked) = (String::new(), Self::now(), 0.0);
+        let (mut quiet, mut looked) = (Self::now(), 0.0);
+        let mut last: Option<Arc<PublicSnap>> = None;
         loop {
             let gap = STREAM_MIN_GAP - (Self::now() - looked);
             if gap > 0.0 {
                 std::thread::sleep(std::time::Duration::from_secs_f64(gap));
             }
             looked = Self::now();
-            let (at, rows) = self.snapshot(STREAM_EVERY);
-            let rows = public(rows);
-            let same = json_dumps_sorted(&json!({"sessions": rows}));
-            let sent = if same != last {
-                let body = json!({"at": at, "sessions": rows});
-                let r = write!(out, "event: sessions\ndata: {body}\n\n").and_then(|_| out.flush());
-                last = same;
+            let seen = self.generation();
+            let snap = self.public_snap(STREAM_EVERY);
+            let moved = last
+                .as_ref()
+                .is_none_or(|l| !Arc::ptr_eq(l, &snap) && l.same != snap.same);
+            let sent = if moved {
+                let r = write!(out, "event: sessions\ndata: {}\n\n", snap.data)
+                    .and_then(|_| out.flush());
+                last = Some(snap);
                 quiet = Self::now();
                 r
             } else if Self::now() - quiet >= STREAM_KEEPALIVE {
@@ -3246,18 +3372,14 @@ impl Shared {
             if sent.is_err() {
                 return; // the page went away
             }
-            std::thread::sleep(std::time::Duration::from_secs_f64(STREAM_EVERY));
+            self.wait_change(seen, STREAM_EVERY);
         }
     }
 
     /// Control.search: History, with which of its sessions are live.
     fn api_history(&self, q: &HashMap<String, String>) -> Value {
         let query = q.get("q").cloned().unwrap_or_default();
-        let read = |sid: &str| {
-            self.conversation(sid)
-                .map(|c| c.merged.clone())
-                .unwrap_or_default()
-        };
+        let read = |sid: &str| self.search_text(sid);
         let mut got = self.history.search(&query, 40, &read);
         let live: std::collections::HashSet<String> = self
             .sessions(2.0)
@@ -3365,7 +3487,7 @@ impl Shared {
         // host-qualified: the same name exists on more than one machine,
         // and firing at the wrong one is the wrong-repository mistake.
         let mut seen = std::collections::HashSet::new();
-        for r in &rows {
+        for r in rows.iter() {
             let (Some(host), Some(cwd)) = (
                 r.get("host").filter(|_| truthy(r.get("remote"))).map(crate::pyish::py_str),
                 r.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()),
@@ -3389,7 +3511,7 @@ impl Shared {
             r.get("sessionId").and_then(Value::as_str) == Some(id)
                 || r.get("key").and_then(Value::as_str) == Some(id)
         };
-        self.sessions(2.0).into_iter().find(hit)
+        self.sessions(2.0).iter().find(|r| hit(r)).cloned()
     }
 
     /// Control.activity: one session's tool calls, from its conversation.
@@ -3467,8 +3589,7 @@ impl Shared {
         }
         let (per, _) = self
             .cost_history
-            .lock()
-            .unwrap()
+            .lk()
             .sessions(std::slice::from_ref(&sid), 1.0);
         let spend = per.get(&sid).cloned().unwrap_or(Value::Null);
         let pid = row
@@ -3570,20 +3691,22 @@ impl Shared {
 
     /// The session timeline (timeline.of_session), read on the session's own
     /// machine.
-    fn api_timeline(&self, session: &str, known: &str) -> Value {
+    fn api_timeline(&self, session: &str, known: &str) -> Body {
         let Some(row) = self.row(session) else {
-            return json!({"ok": false, "error": "no such session"});
+            return Body::Json(json!({"ok": false, "error": "no such session"}));
         };
         let sid = row.get("sessionId").map(crate::pyish::py_str).unwrap_or_default();
         if truthy(row.get("remote")) {
             let host = row.get("host").map(crate::pyish::py_str).unwrap_or_default();
-            return match self.fleet.as_ref().map(|f| f.timeline(&host, &sid, known)) {
+            return Body::Json(match self.fleet.as_ref().map(|f| f.timeline(&host, &sid, known)) {
                 Some(Ok(v)) => v,
                 Some(Err(e)) => json!({"ok": false, "error": format!("reading on {host}: {e}")}),
                 None => json!({"ok": false, "error": format!("host {host} is not configured")}),
-            };
+            });
         }
-        crate::timeline::of_session(&sid, known)
+        // Serialised from the timeline's cache as it stands, not a copy of it.
+        let v = crate::timeline::of_session_shared(&sid, known);
+        Body::Raw(serde_json::to_string(&*v).unwrap_or_else(|_| "{}".into()))
     }
 
     /// The processes beneath a local session's own, with their CPU and memory.
@@ -3600,7 +3723,7 @@ impl Shared {
     /// Control.errors: tool failures across recent sessions.
     fn api_errors(&self, days: f64) -> Value {
         let now = Self::now();
-        if let Some((at, d, result)) = self.errors_cache.lock().unwrap().as_ref() {
+        if let Some((at, d, result)) = self.errors_cache.lk().as_ref() {
             if *d == days && now - at < 300.0 {
                 return result.clone();
             }
@@ -3608,11 +3731,12 @@ impl Shared {
         let rows: Vec<Map<String, Value>> = self
             .history
             .list()
-            .into_iter()
+            .iter()
             .filter(|r| {
                 now - r.get("modified").and_then(Value::as_f64).unwrap_or(0.0) <= days * 86400.0
             })
             .take(120)
+            .cloned()
             .collect();
         let mut per_project: indexmap::IndexMap<String, (i64, i64, i64)> =
             indexmap::IndexMap::new();
@@ -3626,8 +3750,7 @@ impl Shared {
             let size = r.get("size").cloned().unwrap_or(Value::Null);
             let cached = self
                 .tallies
-                .lock()
-                .unwrap()
+                .lk()
                 .get(&sid)
                 .filter(|c| c.0 == size)
                 .map(|c| c.1.clone());
@@ -3639,8 +3762,7 @@ impl Shared {
                     };
                     let t = activity::tally(&activity::timeline(&c.merged));
                     self.tallies
-                        .lock()
-                        .unwrap()
+                        .lk()
                         .insert(sid.clone(), (size, t.clone()));
                     t
                 }
@@ -3683,7 +3805,7 @@ impl Shared {
         );
         out.insert("at".into(), json!(now));
         let result = Value::Object(out);
-        *self.errors_cache.lock().unwrap() = Some((now, days, result.clone()));
+        *self.errors_cache.lk() = Some((now, days, result.clone()));
         result
     }
 
@@ -3757,8 +3879,7 @@ impl Shared {
         out["path"] = json!(path.to_string_lossy());
         out["waiting"] = json!(self
             .restart_needed
-            .lock()
-            .unwrap()
+            .lk()
             .iter()
             .collect::<Vec<_>>());
         out["notify_error"] = json!(self.notifier.last_error());
@@ -3864,8 +3985,7 @@ impl Shared {
                     .unwrap_or(30);
                 let got = self
                     .cost_history
-                    .lock()
-                    .unwrap()
+                    .lk()
                     .summary(days, Self::now(), 8.0);
                 (200, Body::Json(got))
             }
@@ -3873,7 +3993,7 @@ impl Shared {
                 (200, Body::Json(self.api_session_status(&arg("session"))))
             }
             ("GET", "/api/awaited") => (200, Body::Json(self.api_awaited(&arg("session")))),
-            ("GET", "/api/timeline") => (200, Body::Json(self.api_timeline(&arg("session"), &arg("sig")))),
+            ("GET", "/api/timeline") => (200, self.api_timeline(&arg("session"), &arg("sig"))),
             ("GET", "/api/subagent") => (200, Body::Json(self.api_subagent(&arg("session"), &arg("agent")))),
             ("GET", "/api/processes") => (200, Body::Json(self.api_processes(&arg("session")))),
             ("GET", "/api/errors") => {
@@ -3916,7 +4036,7 @@ impl Shared {
                 ),
             ),
             ("GET", "/api/conversation") => self.api_conversation(&q),
-            ("GET", "/api/sessions") => (200, Body::Json(self.api_sessions())),
+            ("GET", "/api/sessions") => (200, Body::Raw(self.api_sessions())),
             _ => (404, Body::Json(json!({"error": "no such path"}))),
         }
     }
@@ -3925,7 +4045,7 @@ impl Shared {
 /// Control.decisions: the permission hook's recent verdicts, newest first,
 /// from the decisions.jsonl beside the state file.
 fn decisions(dir: &std::path::Path, limit: usize) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(dir.join("decisions.jsonl")) else {
+    let Some(text) = tail_lines(&dir.join("decisions.jsonl"), limit) else {
         return vec![];
     };
     // readlines() keeps each line's end; the last `limit` of them.
@@ -3939,6 +4059,40 @@ fn decisions(dir: &std::path::Path, limit: usize) -> Vec<Value> {
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .collect()
 }
+
+/// The end of a file holding at least its last `limit` lines (whole), read
+/// backwards in chunks rather than the whole file; None when it cannot be
+/// read or what is kept is not UTF-8, as read_to_string fails.
+fn tail_lines(path: &std::path::Path, limit: usize) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut start = len;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = 64 * 1024u64;
+    // More than `limit` newlines means the line before the last `limit` has
+    // ended in the buffer, so they are all whole.
+    while start > 0 && buf.iter().filter(|b| **b == b'\n').count() <= limit {
+        let step = chunk.min(start);
+        start -= step;
+        f.seek(SeekFrom::Start(start)).ok()?;
+        let mut piece = vec![0u8; step as usize];
+        f.read_exact(&mut piece).ok()?;
+        piece.extend_from_slice(&buf);
+        buf = piece;
+        chunk = chunk.saturating_mul(2);
+    }
+    if start > 0 {
+        // Drop the partial line in front; a newline is never inside a
+        // UTF-8 sequence, so what is left starts on a character.
+        let cut = buf.iter().position(|b| *b == b'\n').map_or(0, |i| i + 1);
+        buf.drain(..cut);
+    }
+    String::from_utf8(buf).ok()
+}
+
+/// Parsed conversations kept (convcache's budget, by count).
+const CONVS_KEPT: usize = 32;
 
 const STREAM_EVERY: f64 = 5.0;
 const STREAM_MIN_GAP: f64 = 2.0;
@@ -4002,9 +4156,10 @@ fn matrix_active(row: &Row) -> bool {
 /// Row fields that never leave the process (dispatcher.PRIVATE_ROW_FIELDS).
 const PRIVATE_ROW_FIELDS: &[&str] = &["token"];
 
-fn public(rows: Vec<Row>) -> Vec<Value> {
-    rows.into_iter()
-        .map(|mut r| {
+fn public(rows: &[Row]) -> Vec<Value> {
+    rows.iter()
+        .map(|r| {
+            let mut r = r.clone();
             for k in PRIVATE_ROW_FIELDS {
                 r.shift_remove(*k);
             }
@@ -4195,7 +4350,7 @@ fn start_tunnels(shared: &Arc<Shared>, fleet: &Arc<crate::remote::Fleet>) {
             .ok();
         let tunnel = crate::remote::Tunnel::new(&h.name, local, remote);
         tunnel.start();
-        shared.tunnels.lock().unwrap().insert(h.name.clone(), tunnel);
+        shared.tunnels.lk().insert(h.name.clone(), tunnel);
         println!("tunnel {}: host 127.0.0.1:{remote} -> hooks on 127.0.0.1:{local}", h.name);
     }
 }
@@ -4205,9 +4360,17 @@ fn start_tunnels(shared: &Arc<Shared>, fleet: &Arc<crate::remote::Fleet>) {
 /// that host drive the sessions on this machine. The host is known from
 /// which listener the connection came in on, never from the payload.
 fn hook_only(server: tiny_http::Server, shared: Arc<Shared>, host: String) {
+    let inflight = Arc::new(AtomicUsize::new(0));
     for request in server.incoming_requests() {
+        let Some(slot) = Slot::take(&inflight, MAX_TUNNEL_HOOKS) else {
+            busy(request);
+            continue;
+        };
         let (shared, host) = (Arc::clone(&shared), host.clone());
-        std::thread::spawn(move || hook_only_one(request, &shared, &host));
+        std::thread::spawn(move || {
+            let _slot = slot;
+            hook_only_one(request, &shared, &host)
+        });
     }
 }
 
@@ -4241,7 +4404,10 @@ fn hook_only_one(mut request: tiny_http::Request, shared: &Arc<Shared>, host: &s
                         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             shared.on_hook(p, Some(host))
                         }))
-                        .unwrap_or_else(|_| json!({"ok": false, "error": "internal error"}));
+                        .unwrap_or_else(|e| {
+                            eprintln!("imperatorium: hook from {host} panicked: {}", panic_text(&*e));
+                            json!({"ok": false, "error": "internal error"})
+                        });
                         (200, out)
                     }
                 }
@@ -4249,9 +4415,7 @@ fn hook_only_one(mut request: tiny_http::Request, shared: &Arc<Shared>, host: &s
         };
         let resp = tiny_http::Response::from_string(body.to_string())
             .with_status_code(code)
-            .with_header(
-                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
-            );
+            .with_header(json_header());
         let _ = request.respond(resp);
     }
 }
@@ -4288,10 +4452,22 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
         let me = Arc::downgrade(&shared);
         shared.updates.start(move || me.upgrade().map(|s| s.config()));
         let sweeper = Arc::clone(&shared);
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(15));
-            let _ =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sweeper.sweep_queue()));
+        std::thread::spawn(move || {
+            // A sweep that panics is tried again next time; each distinct
+            // panic is reported once, not every 15 s.
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(15));
+                let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sweeper.sweep_queue()
+                }));
+                if let Err(e) = got {
+                    let text = panic_text(&*e);
+                    if seen.len() < 64 && seen.insert(text.clone()) {
+                        eprintln!("imperatorium: sweep_queue panicked: {text}");
+                    }
+                }
+            }
         });
         if let Some(fleet) = &shared.fleet {
             // Each poll that lands wakes the window's streams.
@@ -4305,78 +4481,250 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
         }
     }
     println!("imperatorium (native) listening on http://{addr}");
+    // A fixed pool answers the ordinary requests, fed by a bounded queue:
+    // a burst (or a client opening connections in a loop) gets a 503 rather
+    // than a thread each. The two kinds that hold a connection open for long
+    // - the window's event stream and a parked permission request - get a
+    // thread of their own, counted against caps of their own, so they can
+    // never starve the pool.
+    //
+    // tiny_http 0.12 sets no socket timeouts and offers no way to reach the
+    // socket it accepted, so a client that stalls mid-body holds its worker
+    // until it goes away; the pool bounds how many it can hold, and the
+    // body read is capped in size (MAX_BODY) as before.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<tiny_http::Request>(QUEUED);
+    let rx = Arc::new(Mutex::new(rx));
+    for i in 0..WORKERS {
+        let (rx, shared) = (Arc::clone(&rx), Arc::clone(&shared));
+        std::thread::Builder::new()
+            .name(format!("http-{i}"))
+            .spawn(move || loop {
+                let next = rx.lk().recv();
+                match next {
+                    Ok(request) => answer(request, &shared, port),
+                    Err(_) => return,
+                }
+            })
+            .expect("cannot start an HTTP worker");
+    }
+    let (streams, parked) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     for request in server.incoming_requests() {
-        let shared = Arc::clone(&shared);
-        std::thread::spawn(move || {
-            let mut request = request;
-            let method = request.method().as_str().to_string();
-            let path = request
-                .url()
-                .split('?')
-                .next()
-                .unwrap_or("")
-                .trim_end_matches('/')
-                .to_string();
-            if method == "GET" && path == "/api/stream" {
-                let mut writer = request.into_writer();
-                shared.stream(&mut *writer);
-                return;
-            }
-            let (code, body) = if method == "POST" {
-                let header = |name: &str| {
-                    request
-                        .headers()
-                        .iter()
-                        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
-                        .map(|h| h.value.as_str().to_string())
-                };
-                let (origin, ctype) = (header("Origin"), header("Content-Type"));
-                let window = header("X-Imperatorium-Window");
-                let mod_token = header("X-Imperatorium-Mod");
-                let mut body = Vec::new();
-                let _ = std::io::Read::read_to_end(
-                    &mut std::io::Read::take(request.as_reader(), 32 * 1024 * 1024 + 1),
-                    &mut body,
-                );
-                let p = if path.is_empty() {
-                    "/".to_string()
-                } else {
-                    path.clone()
-                };
-                shared.post(
-                    &p,
-                    origin.as_deref(),
-                    ctype.as_deref(),
-                    &body,
-                    port,
-                    window.as_deref(),
-                    mod_token.as_deref(),
-                )
-            } else {
-                shared.handle(&method, request.url())
+        let (method, path) = route_of(&request);
+        let long = if method == "GET" && path == "/api/stream" {
+            Some((&streams, MAX_STREAMS))
+        } else if method == "POST" && path == "/permission/park" {
+            Some((&parked, MAX_PARKED))
+        } else {
+            None
+        };
+        if let Some((count, cap)) = long {
+            let Some(slot) = Slot::take(count, cap) else {
+                busy(request);
+                continue;
             };
-            let (bytes, ctype, cache) = body.into_parts();
-            // Content-Length, as the Python dispatcher sends: tiny_http goes
-            // chunked above 32 KiB by default, and a conversation is often
-            // several hundred.
-            let resp = tiny_http::Response::from_data(bytes)
-                .with_chunked_threshold(usize::MAX)
-                .with_status_code(code)
-                .with_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).unwrap(),
-                )
-                .with_header(
-                    tiny_http::Header::from_bytes(&b"Cache-Control"[..], cache.as_bytes()).unwrap(),
-                );
-            let _ = request.respond(resp);
-        });
+            let shared = Arc::clone(&shared);
+            let spawned = std::thread::Builder::new().spawn(move || {
+                let _slot = slot;
+                answer(request, &shared, port);
+            });
+            if let Err(e) = spawned {
+                eprintln!("imperatorium: cannot start a thread: {e}");
+            }
+            continue;
+        }
+        match tx.try_send(request) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::TrySendError::Full(r))
+            | Err(std::sync::mpsc::TrySendError::Disconnected(r)) => busy(r),
+        }
     }
     0
+}
+
+/// Workers answering ordinary requests, and how many may wait for one.
+const WORKERS: usize = 32;
+const QUEUED: usize = 256;
+/// Open `/api/stream` feeds (a window holds one each) and parked
+/// permission requests (one per session asking) allowed at once.
+const MAX_STREAMS: usize = 32;
+const MAX_PARKED: usize = 64;
+/// In-flight `/hook` requests on one host's tunnel listener.
+const MAX_TUNNEL_HOOKS: usize = 16;
+
+/// A place in one of the capped counts, given back when dropped.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(count: &Arc<AtomicUsize>, cap: usize) -> Option<Slot> {
+        let mut n = count.load(Ordering::Acquire);
+        loop {
+            if n >= cap {
+                return None;
+            }
+            match count.compare_exchange_weak(n, n + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(Slot(Arc::clone(count))),
+                Err(now) => n = now,
+            }
+        }
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// (method, path without query or trailing slash)
+fn route_of(request: &tiny_http::Request) -> (String, String) {
+    let path = request
+        .url()
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/')
+        .to_string();
+    (request.method().as_str().to_string(), path)
+}
+
+fn json_header() -> tiny_http::Header {
+    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+        .expect("a static header")
+}
+
+/// Over a cap: 503, and the connection is not held.
+fn busy(request: tiny_http::Request) {
+    let body = json!({"error": "the dispatcher is busy, try again"}).to_string();
+    let resp = tiny_http::Response::from_string(body)
+        .with_status_code(503)
+        .with_header(json_header());
+    let _ = request.respond(resp);
+}
+
+/// What a caught panic said.
+fn panic_text(e: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = e.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = e.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "a panic without a message".to_string()
+    }
+}
+
+/// One request on the main listener, start to end. A panic in a handler
+/// answers 500 rather than dropping the connection, and is logged.
+fn answer(mut request: tiny_http::Request, shared: &Arc<Shared>, port: u16) {
+    let (method, path) = route_of(&request);
+    if method == "GET" && path == "/api/stream" {
+        let mut writer = request.into_writer();
+        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            shared.stream(&mut *writer)
+        }));
+        if let Err(e) = got {
+            eprintln!("imperatorium: GET /api/stream panicked: {}", panic_text(&*e));
+        }
+        return;
+    }
+    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if method == "POST" {
+            let header = |name: &str| {
+                request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+                    .map(|h| h.value.as_str().to_string())
+            };
+            let (origin, ctype) = (header("Origin"), header("Content-Type"));
+            let window = header("X-Imperatorium-Window");
+            let mod_token = header("X-Imperatorium-Mod");
+            let mut body = Vec::new();
+            let _ = std::io::Read::read_to_end(
+                &mut std::io::Read::take(request.as_reader(), 32 * 1024 * 1024 + 1),
+                &mut body,
+            );
+            let p = if path.is_empty() {
+                "/".to_string()
+            } else {
+                path.clone()
+            };
+            shared.post(
+                &p,
+                origin.as_deref(),
+                ctype.as_deref(),
+                &body,
+                port,
+                window.as_deref(),
+                mod_token.as_deref(),
+            )
+        } else {
+            shared.handle(&method, request.url())
+        }
+    }));
+    let (code, body) = got.unwrap_or_else(|e| {
+        eprintln!("imperatorium: {method} {path} panicked: {}", panic_text(&*e));
+        (500, Body::Json(json!({"error": "internal error"})))
+    });
+    let (bytes, ctype, cache) = body.into_parts();
+    // Content-Length, as the Python dispatcher sends: tiny_http goes
+    // chunked above 32 KiB by default, and a conversation is often
+    // several hundred.
+    let resp = tiny_http::Response::from_data(bytes)
+        .with_chunked_threshold(usize::MAX)
+        .with_status_code(code)
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
+                .expect("a static header"),
+        )
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Cache-Control"[..], cache.as_bytes())
+                .expect("a static header"),
+        );
+    let _ = request.respond(resp);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tail_of_a_file_has_its_last_lines() {
+        let dir = std::env::temp_dir().join(format!("imp-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("decisions.jsonl");
+        // Long enough that the tail is read in more than one chunk.
+        let mut text = String::new();
+        for i in 0..5000 {
+            text.push_str(&format!("{{\"n\": {i}, \"pad\": \"{}\"}}\n", "\u{e9}".repeat(i % 40)));
+        }
+        for (body, limit) in [
+            (text.clone(), 60usize),
+            (text.clone() + "{\"n\": \"no newline\"}", 60),
+            (text.clone(), 1),
+            (text.clone(), 10000),
+            ("{\"a\": 1}\n\n{\"b\": 2}\n".to_string(), 60),
+            (String::new(), 60),
+        ] {
+            std::fs::write(&p, &body).unwrap();
+            let whole: Vec<&str> = body.split_inclusive('\n').collect();
+            let want = whole[whole.len().saturating_sub(limit)..].concat();
+            let got = tail_lines(&p, limit).unwrap();
+            let got_lines: Vec<&str> = got.split_inclusive('\n').collect();
+            assert_eq!(got_lines[got_lines.len().saturating_sub(limit)..].concat(), want);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn slots_are_capped_and_given_back() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let a = Slot::take(&count, 2).unwrap();
+        let _b = Slot::take(&count, 2).unwrap();
+        assert!(Slot::take(&count, 2).is_none());
+        drop(a);
+        assert!(Slot::take(&count, 2).is_some());
+        assert_eq!(count.load(Ordering::Acquire), 1);
+    }
 
     #[test]
     fn signature_matches_python() {

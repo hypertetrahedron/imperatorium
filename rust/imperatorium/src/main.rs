@@ -63,6 +63,7 @@ mod store;
 mod streamdeck;
 mod taskout;
 mod timeline;
+mod timer;
 mod ui;
 mod update;
 mod usage;
