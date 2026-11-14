@@ -1,0 +1,84 @@
+# Tests on every push and pull request; release.yml calls this too, so a tag
+# cannot publish a build that fails them.
+#
+# Windows is the platform the dispatcher runs on and the one the whole suite
+# is written for: it is the gate. Ubuntu runs the same steps for information
+# (continue-on-error on the Python-side steps): the Rust unit tests are
+# portable, but the conformance and unittest suites have never been run off
+# Windows, and a few parts say so (see WINDOWS_ONLY in run_all.py).
+name: check
+
+on:
+  push:
+    branches: ["**"]   # not tags: release.yml calls this for those
+  pull_request:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain release.yml uses: the runner's stable Rust.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # claude-agent-sdk: the reference sessions_compare.py checks the binary
+      # against (and the fallback reader). Nothing else is needed.
+      - name: pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt
+
+      # Linux builds are without the Stream Deck surface, as release.yml's are
+      # (hidapi's Windows backend is the only one used).
+      - name: cargo test
+        working-directory: rust
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then flags=--no-default-features; fi
+          cargo test --workspace $flags
+
+      - name: cargo build (the binary the conformance suite runs)
+        working-directory: rust
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then flags=--no-default-features; fi
+          cargo build --workspace $flags
+
+      # session_twin.py and bg_worktree_twin.py copy this as claude.exe / wt.exe.
+      - name: cargo build --release -p fakecli
+        working-directory: rust
+        run: cargo build --release -p fakecli
+
+      - name: The window's pages are exported from ui.py (export_ui.py --check)
+        run: python rust/assets/export_ui.py --check
+
+      # Windows: every part must run (--require-all turns a skip into a failure).
+      # Elsewhere the parts that are Windows-only are skipped, said so in the
+      # log, and the rest is advisory.
+      - name: Conformance (Windows, all parts required)
+        if: runner.os == 'Windows'
+        run: python rust/conformance/run_all.py --no-build --require-all
+      - name: Conformance (advisory)
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: python rust/conformance/run_all.py --no-build
+
+      - name: Python unittest
+        continue-on-error: ${{ matrix.os != 'windows-latest' }}
+        run: python -m unittest

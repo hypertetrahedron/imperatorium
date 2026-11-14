@@ -22,3 +22,10 @@ Thumbs.db
 herdr/mods/*/gpui-kit.d.ts
 herdr/mods/*/jsconfig.json
 /dist/
+
+# Build and test leftovers
+rust/conformance/__pycache__/
+rust/voice/target/
+build.log
+.pytest_cache/
+node_modules/
