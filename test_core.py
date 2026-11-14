@@ -259,6 +259,57 @@ class BackgroundCommand(unittest.TestCase):
         self.assertNotIn("_comment", " ".join(captured["cmd"]))
 
 
+class IdleStates(unittest.TestCase):
+    """Idle is waiting on tasks, complete, or ready."""
+
+    def row(self, **kw):
+        base = {"sessionId": "a", "status": "idle", "status_changed_at": 50.0,
+                "work": {"alive": True, "agents": 0, "shells": 0, "monitors": 0, "wakeups": 0}}
+        base.update(kw)
+        return base
+
+    def test_pending_work_is_waiting_on_tasks(self):
+        r = registry.classify(self.row(work={"monitors": 1, "wakeups": 1}, background_tasks=2))
+        self.assertEqual(r["tasks"], {"shells": 2, "monitors": 1, "wakeups": 1})
+        self.assertEqual(r["waiting_tasks"], 4)
+        self.assertFalse(r.get("attention"))
+
+    def test_an_idle_prompt_while_tasks_run_is_not_shown(self):
+        r = registry.classify(self.row(work={"monitors": 1}, attention=True,
+                                       attention_kind="notification",
+                                       last_notification="idle_prompt"))
+        self.assertFalse(r["attention"])
+
+    def test_a_finished_turn_with_nothing_pending_is_complete(self):
+        r = registry.classify(self.row(last_event="Stop"))
+        self.assertTrue(r["attention"])
+        self.assertEqual(r["attention_kind"], "complete")
+        self.assertEqual(r["attention_since"], 50.0)
+
+    def test_idle_prompt_is_complete(self):
+        r = registry.classify(self.row(attention=True, attention_kind="notification",
+                                       attention_reason="waiting for you",
+                                       last_notification="idle_prompt", attention_since=9.0))
+        self.assertEqual((r["attention_kind"], r["attention_since"]), ("complete", 9.0))
+
+    def test_blocked_and_failed_keep_their_attention(self):
+        r = registry.classify(self.row(attention=True, attention_kind="notification",
+                                       last_notification="permission_prompt"))
+        self.assertEqual(r["attention_kind"], "notification")
+        r = registry.classify(self.row(attention=True, attention_kind="failure",
+                                       last_notification="idle_prompt"))
+        self.assertEqual(r["attention_kind"], "failure")
+
+    def test_never_given_work_is_ready(self):
+        r = registry.classify(self.row(last_event="SessionStart"))
+        self.assertFalse(r.get("attention"))
+        self.assertNotIn("tasks", r)
+
+    def test_working_and_finished_jobs_are_left_alone(self):
+        self.assertNotIn("attention", registry.classify(self.row(status="busy", last_event="Stop")))
+        self.assertNotIn("attention", registry.classify(self.row(state="done", last_event="Stop")))
+
+
 class Reviewed(unittest.TestCase):
     """A waiting session you have looked at stops asking until it next does."""
 

@@ -237,8 +237,10 @@ flight: a tool call while it runs, or a thought while it lasts. A working
 session with neither says what it is waiting on instead, such as
 `waiting on 1 background shell · 1 process`.
 Double-click a tile to show that session in the main window. Prompts, tool results and finished
-steps are left out. A session waiting for you gets an amber border and says
-why. When the grid has spare cells, they always come at the end and become
+steps are left out. Each tile is outlined in its state's colour: blue while
+working, green while waiting on tasks, and a doubled outline for the states
+that want you - violet when complete, amber when it needs you, red when it
+failed - which also say why. When the grid has spare cells, they always come at the end and become
 one status tile: the usage meters and model mix, what the open sessions
 have cost and how many tokens they have used over their whole lives, this
 machine's spend in each of the account's windows, and each session's
@@ -247,6 +249,26 @@ sessions fill the grid; Settings > Chat > **Always show cost in the matrix**
 (`chat.matrix_status`) off shows it only in spare cells. The
 condensing is done by the dispatcher (`imperatorium/matrix.py`, `GET
 /api/matrix`), so the page polls one small answer.
+
+**States.** Every tile's mark is a colour and a shape, so it reads without
+colour too:
+
+| Mark | State | Means |
+|---|---|---|
+| blue dot | working | in a turn |
+| green ring | waiting on tasks | idle, but a background shell, monitor, subagent or scheduled wakeup it started is still pending; it comes back by itself |
+| violet check | complete | its turn ended and nothing is pending: your turn |
+| amber diamond | needs you | blocked on you: a permission prompt, a question |
+| red cross | failed | the turn failed |
+| grey outline of the diamond or check | reviewed | it wanted you and you have read it (see below) |
+| grey ring | ready | opened, never given work |
+| grey dash | finished | a background job that ran to completion |
+
+Complete, needs you and failed count as wanting you: the title's count,
+notifications, n for the next one and the Stream Deck (violet, amber) all
+follow them. Complete is decided by the dispatcher (`registry.classify`)
+the moment the turn ends, rather than when Claude Code's minute-later
+`idle_prompt` arrives, which it may never do.
 
 **Keys:** j/k move through the session list, n (or alt+N from anywhere)
 goes to the next session waiting for you, alt+1-9 picks the nth tile, /

@@ -321,6 +321,8 @@ class Control:
         for row in snap["sessions"]:
             self._decorate(row, queued)
         snap["sessions"] = self._unhidden(self._undismissed(snap["sessions"]))
+        for row in snap["sessions"]:
+            registry.classify(row)
         registry.apply_reviewed(snap["sessions"], self.store.reviewed())
         with self._lock:
             self._cache = {"at": time.time(), "snapshot": snap}
@@ -594,7 +596,7 @@ class Control:
                     ("key", "sessionId", "name", "cwd", "status", "state", "attention",
                      "attention_kind", "attention_reason", "waitingFor",
                      "last_notification", "background_tasks", "remote", "host", "work", "hc",
-                     "reviewed")}
+                     "reviewed", "tasks", "waiting_tasks")}
             mine = per.get(sid) or {}
             # The whole session's estimate; the statusline's figure only
             # covers Claude Code's current run, and is gone after a restart.

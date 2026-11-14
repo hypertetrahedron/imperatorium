@@ -147,6 +147,69 @@ fn s<'a>(r: &'a Row, k: &str) -> Option<&'a str> {
     r.get(k).and_then(Value::as_str)
 }
 
+/// registry.TASK_KINDS: what an idle session can still be waiting on.
+pub const TASK_KINDS: [&str; 4] = ["shells", "monitors", "agents", "wakeups"];
+pub const COMPLETE: &str = "complete";
+
+/// registry.pending_tasks: {kind: count} of what an idle session has going.
+pub fn pending_tasks(row: &Row) -> Map<String, Value> {
+    let count = |v: Option<&Value>| match v {
+        Some(Value::Array(a)) => a.len() as u64,
+        Some(v) => v.as_u64().unwrap_or(0),
+        None => 0,
+    };
+    let work = row.get("work").and_then(Value::as_object);
+    let mut out = Map::new();
+    for k in TASK_KINDS {
+        let mut v = count(work.and_then(|w| w.get(k)));
+        if k == "shells" {
+            v = v.max(count(row.get("background_tasks")));
+        }
+        if v > 0 {
+            out.insert(k.into(), json!(v));
+        }
+    }
+    out
+}
+
+/// registry.classify: an idle session is waiting on tasks, complete, or
+/// ready (left as it is). See the Python for the reasons.
+pub fn classify(row: &mut Row) {
+    let s = |row: &Row, k: &str| row.get(k).and_then(Value::as_str).map(str::to_owned);
+    if s(row, "status").as_deref() != Some("idle")
+        || matches!(s(row, "state").as_deref(), Some("done" | "failed" | "stopped"))
+    {
+        return;
+    }
+    let tasks = pending_tasks(row);
+    let from_idle = truthy(row.get("attention"))
+        && s(row, "attention_kind").as_deref() != Some("failure")
+        && s(row, "last_notification").as_deref() == Some("idle_prompt")
+        && !truthy(row.get("waitingFor"));
+    if !tasks.is_empty() {
+        let total: u64 = tasks.values().filter_map(Value::as_u64).sum();
+        row.insert("tasks".into(), Value::Object(tasks));
+        row.insert("waiting_tasks".into(), json!(total));
+        if from_idle {
+            row.insert("attention".into(), json!(false));
+        }
+        return;
+    }
+    if from_idle {
+        row.insert("attention_kind".into(), json!(COMPLETE));
+        row.insert("attention_reason".into(), json!(COMPLETE));
+    } else if !truthy(row.get("attention")) && s(row, "last_event").as_deref() == Some("Stop") {
+        let since = ["status_changed_at", "last_event_at"]
+            .iter()
+            .find_map(|k| row.get(*k).filter(|v| truthy(Some(v))).cloned())
+            .unwrap_or(Value::Null);
+        row.insert("attention".into(), json!(true));
+        row.insert("attention_kind".into(), json!(COMPLETE));
+        row.insert("attention_reason".into(), json!(COMPLETE));
+        row.insert("attention_since".into(), since);
+    }
+}
+
 /// registry.attention_start: when the current wait on a human began.
 pub fn attention_start(row: &Row) -> f64 {
     for k in ["attention_since", "status_changed_at"] {
@@ -180,6 +243,27 @@ pub fn apply_reviewed(rows: &mut [Row], reviewed: &Map<String, Value>) {
 #[cfg(test)]
 mod reviewed_tests {
     use super::*;
+
+    #[test]
+    fn idle_is_tasks_complete_or_ready() {
+        let row = |v: Value| v.as_object().unwrap().clone();
+        let mut r = row(json!({"status": "idle", "status_changed_at": 50.0, "background_tasks": 2,
+                               "work": {"monitors": 1, "wakeups": 1, "shells": 0}}));
+        classify(&mut r);
+        assert_eq!(r["tasks"], json!({"shells": 2, "monitors": 1, "wakeups": 1}));
+        assert_eq!(r["waiting_tasks"], json!(4));
+        let mut r = row(json!({"status": "idle", "status_changed_at": 50.0, "last_event": "Stop", "work": {}}));
+        classify(&mut r);
+        assert_eq!((r["attention"].clone(), r["attention_kind"].clone(), r["attention_since"].clone()),
+                   (json!(true), json!("complete"), json!(50.0)));
+        let mut r = row(json!({"status": "idle", "attention": true, "attention_kind": "notification",
+                               "last_notification": "permission_prompt", "work": {}}));
+        classify(&mut r);
+        assert_eq!(r["attention_kind"], json!("notification"));
+        let mut r = row(json!({"status": "idle", "last_event": "SessionStart", "work": {}}));
+        classify(&mut r);
+        assert!(!r.contains_key("attention"));
+    }
 
     #[test]
     fn reviewed_after_the_wait_began_clears_it() {

@@ -54,7 +54,10 @@ INK = (245, 245, 238)
 STATES = {
     "blocked": ((176, 84, 30), INK),
     "working": ((45, 92, 138), INK),
+    "complete": ((112, 62, 160), INK),
+    "tasks": ((47, 107, 79), INK),
     "idle": ((47, 107, 79), INK),
+    "ready": ((52, 52, 46), (190, 190, 182)),
     "none": ((38, 38, 33), (140, 140, 132)),
     "offline": ((60, 24, 24), (200, 170, 170)),
     "ask": ((176, 84, 30), INK),
@@ -153,13 +156,13 @@ def state_for(row):
     if row is None:
         return "none"
     if row.get("attention"):
-        return "blocked"
+        return "complete" if row.get("attention_kind") == "complete" else "blocked"
     if row.get("status") == "busy" or row.get("state") == "working":
         return "working"
-    if row.get("status") == "idle" and row.get("background_tasks"):
-        return "working"  # between turns, but a command it started still runs
+    if row.get("status") == "idle" and (row.get("waiting_tasks") or row.get("background_tasks")):
+        return "tasks"  # between turns, but something it started still runs
     if row.get("status") == "idle":
-        return "idle"
+        return "ready"
     return "none"
 
 

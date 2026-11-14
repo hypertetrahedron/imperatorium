@@ -64,12 +64,16 @@ class States(unittest.TestCase):
         self.assertEqual(sd.state_for({"status": "busy"}), "working")
         self.assertEqual(sd.state_for({"state": "working"}), "working")
 
-    def test_idle_is_idle(self):
-        self.assertEqual(sd.state_for({"status": "idle"}), "idle")
+    def test_idle_with_nothing_is_ready(self):
+        self.assertEqual(sd.state_for({"status": "idle"}), "ready")
 
-    def test_idle_waiting_on_a_background_task_is_working(self):
-        self.assertEqual(sd.state_for({"status": "idle", "background_tasks": 1}),
-                         "working")
+    def test_idle_waiting_on_a_background_task_is_tasks(self):
+        self.assertEqual(sd.state_for({"status": "idle", "background_tasks": 1}), "tasks")
+        self.assertEqual(sd.state_for({"status": "idle", "waiting_tasks": 2}), "tasks")
+
+    def test_complete_is_its_own_colour(self):
+        self.assertEqual(sd.state_for({"attention": True, "attention_kind": "complete"}),
+                         "complete")
 
     def test_finished_background_job_is_not_shown_as_live(self):
         self.assertEqual(sd.state_for({"state": "done"}), "none")

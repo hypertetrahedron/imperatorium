@@ -334,6 +334,61 @@ def short_label(row):
     return name[len(_base(row.get("cwd"))) + 1:] or name
 
 
+# What an idle session can still be waiting on: anything that brings it back
+# by itself - a background shell, a monitor, a running subagent, a scheduled
+# wakeup (ScheduleWakeup, CronCreate).
+TASK_KINDS = ("shells", "monitors", "agents", "wakeups")
+COMPLETE = "complete"
+
+
+def pending_tasks(row):
+    """{kind: count} of what an idle session still has going ({} for none)."""
+    def count(v):
+        return len(v) if isinstance(v, (list, tuple)) else int(v or 0)
+    work = row.get("work") or {}
+    got = {k: count(work.get(k)) for k in TASK_KINDS}
+    got["shells"] = max(got["shells"], count(row.get("background_tasks")))
+    return {k: n for k, n in got.items() if n > 0}
+
+
+def classify(row):
+    """An idle session is waiting on tasks, complete, or ready.
+
+    * Waiting on tasks: something it started is still going (`tasks`,
+      `waiting_tasks`). An `idle_prompt` then is Claude Code's minute running
+      out, not the session wanting you, so it is not shown.
+    * Complete: its turn ended (`Stop`) and nothing is pending. That wants
+      you - attention of kind `complete`, from when it went idle - without
+      waiting for an `idle_prompt` that may never come; an `idle_prompt` it
+      did get is the same thing.
+    * Ready: neither (opened, never given work): left as it is.
+
+    Blocked sessions (a permission prompt, a question) and failures keep
+    their own attention.
+    """
+    if row.get("status") != "idle" or row.get("state") in ("done", "failed", "stopped"):
+        return row
+    tasks = pending_tasks(row)
+    from_idle = (row.get("attention") and row.get("attention_kind") != "failure"
+                 and row.get("last_notification") == "idle_prompt"
+                 and not row.get("waitingFor"))
+    if tasks:
+        row["tasks"] = tasks
+        row["waiting_tasks"] = sum(tasks.values())
+        if from_idle:
+            row["attention"] = False
+        return row
+    if from_idle:
+        row["attention_kind"] = COMPLETE
+        row["attention_reason"] = COMPLETE
+    elif not row.get("attention") and row.get("last_event") == "Stop":
+        row["attention"] = True
+        row["attention_kind"] = COMPLETE
+        row["attention_reason"] = COMPLETE
+        row["attention_since"] = row.get("status_changed_at") or row.get("last_event_at")
+    return row
+
+
 def attention_start(row):
     """When the current wait on a human began: the hook's clock, else the
     status change Claude Code reported."""

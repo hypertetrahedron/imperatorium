@@ -53,6 +53,7 @@ CSS = """
   --bg:#f5f7f9; --panel:#fcfdff; --side:#edf0f5; --ink:#192029; --muted:#565e69;
   --line:#ccd1d9; --warn:#9f4500; --warnbg:#fbeee3; --ok:#00736f; --busy:#2863ab;
   --sel:#dde9f9; --code:#e8ebef; --fail:#af2843; --done:#8a929d; --onaccent:#fff;
+  --comp:#7a3fb0; --compbg:#f2eafa;
   /* The model mix, after claude-lens: an ironbow ramp in cost order, darkest
      cheapest. --iron-other is a model with no known price, off the ramp. */
   --iron-1:#33206b; --iron-2:#93206e; --iron-3:#cc3a17; --iron-4:#b87b00; --iron-other:#8a8880;
@@ -69,6 +70,7 @@ CSS = """
          --muted:#a5abb4; --line:#30363e; --warn:#f7ab5d; --warnbg:#2e2112;
          --ok:#6fcabf; --busy:#79b6f4; --sel:#202f42; --code:#0a0e12;
          --fail:#f2808b; --done:#6c737d; --onaccent:#0f1318;
+         --comp:#c79bff; --compbg:#251b33;
          --iron-1:#7551e0; --iron-2:#a52a86; --iron-3:#ef6a1a; --iron-4:#ffcf4d; --iron-other:#6f6d66;
          --hl-keyword:#c79bff; --hl-string:#6fcabf; --hl-comment:#8b929c; --hl-number:#f7ab5d;
          --hl-function:#79b6f4; --hl-variable:#f08cc8; --hl-added:#6fcabf; --hl-removed:#f2808b;
@@ -117,10 +119,12 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .why{flex:0 100 auto;min-width:0;color:var(--muted);font-size:12px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s.attn .why{color:var(--warn)}
+.s.comp{border-left:3px solid var(--comp);padding-left:10px}
+.s.comp .why{color:var(--comp)}
 .s.fail .why{color:var(--fail)}
 .s .sig{flex:none;margin-left:auto;display:flex;align-items:center;font-variant-numeric:tabular-nums}
 .s .w,.s .d{height:17px;line-height:17px;margin-top:2px}
-.kids .s.attn,.kids .s.fail{padding-left:8px}
+.kids .s.attn,.kids .s.fail,.kids .s.comp{padding-left:8px}
 .s .m{display:flex;align-items:center;gap:6px}
 .s .m .det{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .s .m .acts{display:flex;flex:none;gap:3px}
@@ -130,6 +134,7 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s:is(.on,:hover) .why{display:none}
 .s .stl{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s .stl.st-d-attn{color:var(--warn)}
+.s .stl.st-d-comp{color:var(--comp)}
 .s .stl.st-d-fail{color:var(--fail)}
 .s .stl.st-d-busy{color:var(--busy)}
 .s .m .busy{color:var(--busy)}
@@ -141,8 +146,9 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .m{color:var(--muted);font-size:12px;margin-top:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* A state is its colour and its shape, so it still reads without colour:
-   working a filled dot, idle a ring, needs you a diamond, failed a cross,
-   finished a dash. */
+   working a filled dot, waiting on tasks a green ring, complete a violet
+   check, needs you a diamond, failed a cross, finished a dash, ready a grey
+   ring; reviewed is the grey outline of its shape. */
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
   position:relative;flex:none;background:var(--c)}
 .d-idle{--c:var(--ok);background:transparent;box-shadow:inset 0 0 0 2px var(--c)}
@@ -151,6 +157,11 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .d-done{--c:var(--done);height:2px;border-radius:1px;vertical-align:3px}
 .d-rev{--c:var(--muted);background:transparent;box-shadow:inset 0 0 0 1.5px var(--c);
   border-radius:1.5px;transform:rotate(45deg) scale(.9)}
+.d-comp,.d-revc{--c:var(--comp);background:transparent;border-radius:0;width:9px;height:5px;
+  border-left:2.5px solid var(--c);border-bottom:2.5px solid var(--c);
+  transform:translateY(-2px) rotate(-45deg)}
+.d-revc{--c:var(--muted);border-width:0 0 1.5px 1.5px}
+.d-ready{--c:var(--done);background:transparent;box-shadow:inset 0 0 0 2px var(--c)}
 .d-fail{--c:var(--fail);background:transparent;border-radius:0}
 .d-fail::before,.d-fail::after{content:"";position:absolute;left:-1px;right:-1px;top:3px;
   height:2px;border-radius:1px;background:var(--c);transform:rotate(45deg)}
@@ -900,23 +911,38 @@ function meterHtml(u, opts){
   return `<div class="rows">` + bars + planHtml(u.plan) + rest + `</div>`;
 }
 
+// What an idle session is still waiting on, in words: "waiting on 1 shell ·
+// 1 monitor". `tasks` is the dispatcher's count by kind.
+const TASK_WORDS = {shells: ["shell", "shells"], monitors: ["monitor", "monitors"],
+                    agents: ["subagent", "subagents"], wakeups: ["wakeup", "wakeups"]};
+function tasksLabel(s){
+  const t = s.tasks || (s.background_tasks ? {shells: s.background_tasks} : {});
+  const parts = Object.keys(TASK_WORDS).filter(k => t[k] > 0)
+    .map(k => t[k] + " " + TASK_WORDS[k][t[k] === 1 ? 0 : 1]);
+  return parts.length ? "waiting on " + parts.join(" \u00b7 ") : "waiting on tasks";
+}
+// The dispatcher decides (registry.classify): an idle session is waiting on
+// tasks, complete (its turn ended with nothing pending: attention of kind
+// "complete"), or ready (never given work). Needs you is a session blocked
+// on you - a permission prompt, a question.
 function stateOf(s){
-  if (s.attention) return [s.attention_kind === "failure" ? "d-fail" : "d-attn",
-    s.attention_reason || s.waitingFor ||
-    WAITING[s.last_notification] || s.last_notification || "waiting for you"];
-  // Waiting on you, but you have already looked (its chat read to the end).
-  if (s.reviewed) return ["d-rev", "reviewed"];
+  if (s.attention){
+    if (s.attention_kind === "failure") return ["d-fail", s.attention_reason || "failed"];
+    if (s.attention_kind === "complete") return ["d-comp", "complete"];
+    return ["d-attn", s.attention_reason || s.waitingFor ||
+      WAITING[s.last_notification] || s.last_notification || "waiting for you"];
+  }
+  // Wanted you, but you have already looked (its chat read to the end).
+  if (s.reviewed) return [s.attention_kind === "complete" ? "d-revc" : "d-rev", "reviewed"];
   // `done` is a background job that ran to completion: nothing to wait for.
   if (s.state === "done") return ["d-done", "finished"];
   if (s.state && s.state !== "working") return ["d-done", s.state];
   if (RUNNING[s.status] || s.state === "working")
     return ["d-busy", RUNNING[s.status] || "working"];
-  // Idle between turns but a command it started is still running: it will wake
-  // when that exits, so it is not free for more work yet.
-  if (s.status === "idle" && s.background_tasks)
-    return ["d-busy", s.background_tasks === 1 ? "waiting on a background task"
-                      : `waiting on ${s.background_tasks} background tasks`];
-  if (s.status === "idle") return ["d-idle","idle"];
+  // Idle between turns but something it started is still going: it will
+  // come back by itself, so it does not need you.
+  if (s.status === "idle" && (s.waiting_tasks || s.background_tasks)) return ["d-idle", tasksLabel(s)];
+  if (s.status === "idle") return ["d-ready", "ready"];
   return ["d-done", s.status || "unknown"];
 }
 
@@ -1426,15 +1452,15 @@ const projectOf = s => (s.project || folder(s.cwd)) + (s.host ? " @ " + s.host :
 function groupOf(s){
   if (prefs.group === "folder") return projectOf(s);
   if (prefs.group === "state"){
-    if (s.attention) return "needs you";
+    if (s.attention) return s.attention_kind === "complete" ? "complete" : "needs you";
     const dot = stateOf(s)[0];
     if (dot === "d-busy") return "working";
-    if (dot === "d-idle") return "idle";
-    return "done";
+    if (dot === "d-idle") return "waiting on tasks";
+    return "quiet";
   }
   return "";
 }
-const STATE_ORDER = ["needs you", "working", "idle", "done"];
+const STATE_ORDER = ["needs you", "complete", "working", "waiting on tasks", "quiet"];
 
 function prBadge(pr){
   if (!pr) return "";
@@ -1535,10 +1561,11 @@ function tileSignals(s, now, open){
 function tile(s, short){
   const [dot, label] = stateOf(s);
   const now = Date.now() / 1000, open = key(s) === selected;
-  const mark = s.attention ? (s.attention_kind === "failure" ? " fail" : " attn") : "";
+  const mark = s.attention ? (s.attention_kind === "failure" ? " fail"
+    : s.attention_kind === "complete" ? " comp" : " attn") : "";
   const pinned = (prefs.pinned || []).includes(pkey(s));
   const archived = (prefs.archived || []).includes(pkey(s));
-  const plain = dot === "d-idle" || label === "working";
+  const plain = dot === "d-ready" || label === "working";
   // The doing line is extra ("x", open only) when a window title is there
   // to be the closed tile's second line.
   const title = s.window_title ? `<div class="w" title="window title">${esc(s.window_title)}</div>` : "";
@@ -1688,10 +1715,12 @@ function showSaid(){
 function drawSessions(){
   if (held("#sessions", drawSessions)) return;
   // Whatever wants a human first, then this machine, then idle.
+  const want = s => !s.attention ? 3 : s.attention_kind === "complete" ? 2 : s.attention_kind === "failure" ? 1 : 0;
+  const quiet = s => ["d-idle", "d-ready", "d-rev", "d-revc"].includes(stateOf(s)[0]) ? 1 : 0;
   sessions.sort((a,b) =>
-    (a.attention?0:1) - (b.attention?0:1) ||
+    want(a) - want(b) ||
     (a.remote?1:0) - (b.remote?1:0) ||
-    (stateOf(a)[0] === "d-idle" ? 1 : 0) - (stateOf(b)[0] === "d-idle" ? 1 : 0) ||
+    quiet(a) - quiet(b) ||
     nameOf(a).localeCompare(nameOf(b)));
   if (selected && !sessions.some(s => key(s) === selected)) selected = null;
   if (!selected && sessions.length) selected = key(sessions[0]);
@@ -2400,16 +2429,18 @@ function notifyWaiting(list){
 let favSig = "";
 function drawFavicon(list){
   const has = f => list.some(f);
-  const state = has(s => s.attention && s.attention_kind !== "failure") ? "attn"
-    : has(s => s.attention) ? "fail" : has(s => stateOf(s)[0] === "d-busy") ? "busy"
+  const state = has(s => s.attention && !["failure", "complete"].includes(s.attention_kind)) ? "attn"
+    : has(s => s.attention && s.attention_kind === "failure") ? "fail"
+    : has(s => s.attention) ? "comp" : has(s => stateOf(s)[0] === "d-busy") ? "busy"
     : list.length ? "idle" : "none";
   const sig = state + matchMedia("(prefers-color-scheme: dark)").matches;
   if (sig === favSig) return;
   favSig = sig;
   const c = getComputedStyle(document.documentElement).getPropertyValue(
-    {attn: "--warn", fail: "--fail", busy: "--busy", idle: "--ok", none: "--done"}[state]).trim() || "#888";
+    {attn: "--warn", fail: "--fail", comp: "--comp", busy: "--busy", idle: "--ok", none: "--done"}[state]).trim() || "#888";
   const shape = state === "attn" ? `<rect x="7" y="7" width="18" height="18" rx="3" transform="rotate(45 16 16)" fill="${c}"/>`
     : state === "fail" ? `<path d="M8 8L24 24M24 8L8 24" stroke="${c}" stroke-width="6" stroke-linecap="round"/>`
+    : state === "comp" ? `<path d="M6 17L13 24L26 9" fill="none" stroke="${c}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>`
     : state === "idle" ? `<circle cx="16" cy="16" r="10" fill="none" stroke="${c}" stroke-width="5"/>`
     : `<circle cx="16" cy="16" r="12" fill="${c}"/>`;
   $("#fav").href = "data:image/svg+xml," + encodeURIComponent(
@@ -2417,7 +2448,8 @@ function drawFavicon(list){
 }
 
 // -- a new session list, pushed or polled -------------------------------------
-const rowSig = s => [s.status, s.status_changed_at, s.last_event_at, s.doing, s.attention].join("|");
+const rowSig = s => [s.status, s.status_changed_at, s.last_event_at, s.doing, s.attention,
+                     s.attention_kind, s.waiting_tasks, s.reviewed].join("|");
 let keysBefore = null;
 function gotSessions(list){
   const was = current(), wasSig = was ? rowSig(was) : "";
@@ -4030,6 +4062,13 @@ body{overflow:hidden}
 /* The ring goes outside the border: an inset one is painted under the tile's
    own contents, so the header hid it at the top and only some sides showed. */
 .tile.attn{border-color:var(--warn);box-shadow:0 0 0 1px var(--warn)}
+/* Working and waiting on tasks get a plain 1px outline; the states that want
+   you (complete, needs you, failed) a doubled one, so they still stand out
+   in a grid of busy sessions. */
+.tile.busy{border-color:var(--busy)}
+.tile.tasks{border-color:var(--ok)}
+.tile.comp{border-color:var(--comp);box-shadow:0 0 0 1px var(--comp)}
+.tile.comp .why{color:var(--comp);background:var(--compbg)}
 .tile.fail{border-color:var(--fail);box-shadow:0 0 0 1px var(--fail)}
 .th{display:flex;align-items:center;gap:6px;padding:6px 9px;border-bottom:1px solid var(--line);
   background:var(--side);font-size:13px;flex:none;min-width:0}
@@ -4132,7 +4171,8 @@ function project(cwd){
 const WORK = [["agents", "subagent"], ["shells", "background shell"],
               ["monitors", "monitor"], ["processes", "process"]];
 function waitingOn(t){
-  if (t.current || stateOf(t)[0] !== "d-busy") return "";
+  const dot = stateOf(t)[0];
+  if (t.current || (dot !== "d-busy" && dot !== "d-idle")) return "";
   const w = t.work || {};
   return WORK.filter(([k]) => w[k] > 0)
     .map(([k, word]) => `${w[k]} ${word}${w[k] === 1 ? "" : word.endsWith("s") ? "es" : "s"}`).join(" · ");
@@ -4247,6 +4287,9 @@ function draw(){
     const [dot, label] = stateOf(t);
     el.classList.toggle("attn", dot === "d-attn");
     el.classList.toggle("fail", dot === "d-fail");
+    el.classList.toggle("comp", dot === "d-comp");
+    el.classList.toggle("busy", dot === "d-busy");
+    el.classList.toggle("tasks", dot === "d-idle");
     const head = tileHead(t);
     if (el.dataset.head !== head){ el.querySelector(".th").innerHTML = head; el.dataset.head = head; }
     const why = el.querySelector(".why");

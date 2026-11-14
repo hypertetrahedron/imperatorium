@@ -215,7 +215,9 @@ class HookIngest(Base):
             "hook_event_name": "Stop", "session_id": SID, "cwd": CWD,
             "last_assistant_message": "done",
         })
-        self.assertFalse(self.control.sessions()["sessions"][0].get("attention"))
+        # The prompt is no longer what it waits on: its turn is complete.
+        row = self.control.sessions()["sessions"][0]
+        self.assertEqual(row.get("attention_kind"), "complete")
 
     def test_session_end_forgets_the_token(self):
         self.start_hook()
@@ -1041,7 +1043,8 @@ class RemoteHooks(RemoteBase):
         self.remote_live()
         self.remote_hook("Notification", notification_type="permission_prompt")
         self.remote_hook("Stop")
-        self.assertFalse(self.row().get("attention_since"))
+        # The permission prompt is cleared; what is left is a complete turn.
+        self.assertEqual(self.row().get("attention_reason"), "complete")
 
     def test_a_rebound_remote_socket_invalidates_the_token(self):
         self.remote_live(socket="/tmp/new.sock")

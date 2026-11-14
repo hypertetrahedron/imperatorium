@@ -724,6 +724,8 @@ impl Shared {
                 "work",
                 "hc",
                 "reviewed",
+                "tasks",
+                "waiting_tasks",
             ] {
                 tile.insert(k.into(), row.get(k).cloned().unwrap_or(Value::Null));
             }
@@ -2855,6 +2857,9 @@ impl Shared {
         if hours > 0.0 {
             let cutoff = Self::now() - hours * 3600.0;
             rows.retain(|r| !(registry::finished(r) && finished_at(r) < cutoff));
+        }
+        for r in rows.iter_mut() {
+            registry::classify(r);
         }
         if let Some(store) = &self.store {
             registry::apply_reviewed(&mut rows, &store.reviewed());

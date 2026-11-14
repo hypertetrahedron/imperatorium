@@ -1337,7 +1337,8 @@ class IdleAfterStop(Base):
         second = self.stop()
         first()
         self.assertEqual(self.announced, [])
-        self.assertFalse(self.row()["attention"])
+        # Shown as complete (registry.classify), but no idle_prompt raised.
+        self.assertNotEqual(self.row().get("last_notification"), "idle_prompt")
         second()
         self.assertEqual(len(self.announced), 1)
 

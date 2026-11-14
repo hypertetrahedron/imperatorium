@@ -36,7 +36,9 @@ fn colours(state: &str) -> (Rgb, Rgb) {
     match state {
         "blocked" | "ask" => ([176, 84, 30], INK),
         "working" => ([45, 92, 138], INK),
-        "idle" => ([47, 107, 79], INK),
+        "complete" => ([112, 62, 160], INK),
+        "tasks" | "idle" => ([47, 107, 79], INK),
+        "ready" => ([52, 52, 46], [190, 190, 182]),
         "offline" => ([60, 24, 24], [200, 170, 170]),
         "allow" => ([32, 120, 64], INK),
         "deny" => ([150, 30, 40], INK),
@@ -59,16 +61,18 @@ fn s<'a>(row: &'a Row, k: &str) -> Option<&'a str> {
 pub fn state_for(row: Option<&Row>) -> &'static str {
     let Some(row) = row else { return "none" };
     if truthy(row.get("attention")) {
-        return "blocked";
+        return if s(row, "attention_kind") == Some("complete") { "complete" } else { "blocked" };
     }
     if s(row, "status") == Some("busy") || s(row, "state") == Some("working") {
         return "working";
     }
-    if s(row, "status") == Some("idle") && truthy(row.get("background_tasks")) {
-        return "working"; // between turns, but a command it started still runs
+    if s(row, "status") == Some("idle")
+        && (truthy(row.get("waiting_tasks")) || truthy(row.get("background_tasks")))
+    {
+        return "tasks"; // between turns, but something it started still runs
     }
     if s(row, "status") == Some("idle") {
-        return "idle";
+        return "ready";
     }
     "none"
 }
@@ -664,8 +668,10 @@ mod tests {
     fn states() {
         assert_eq!(state_for(None), "none");
         assert_eq!(state_for(Some(&row(json!({"attention": true, "status": "busy"})))), "blocked");
-        assert_eq!(state_for(Some(&row(json!({"status": "idle", "background_tasks": 1})))), "working");
-        assert_eq!(state_for(Some(&row(json!({"status": "idle"})))), "idle");
+        assert_eq!(state_for(Some(&row(json!({"status": "idle", "background_tasks": 1})))), "tasks");
+        assert_eq!(state_for(Some(&row(json!({"status": "idle", "waiting_tasks": 2})))), "tasks");
+        assert_eq!(state_for(Some(&row(json!({"attention": true, "attention_kind": "complete"})))), "complete");
+        assert_eq!(state_for(Some(&row(json!({"status": "idle"})))), "ready");
     }
 
     #[test]
@@ -708,7 +714,7 @@ mod tests {
                                row: Some(row(json!({"status": "busy"}))), count: None }];
         let idle = vec![Slot { row: Some(row(json!({"status": "idle"}))), ..busy[0].clone() }];
         assert_eq!(s.paint(busy, 0.0)[0].1 .1, "working");
-        assert_eq!(s.paint(idle.clone(), 10.0)[0].1 .1, "idle");
+        assert_eq!(s.paint(idle.clone(), 10.0)[0].1 .1, "ready");
         assert_eq!(s.paint(idle.clone(), 10.6)[0].1 .1, "working");
         assert!(s.flashing());
         s.paint(idle.clone(), 16.0);
