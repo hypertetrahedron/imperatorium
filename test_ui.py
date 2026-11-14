@@ -847,8 +847,9 @@ class ChatMatrix(unittest.TestCase):
         self.assertIn("waiting on 1 background shell", shell)
 
     def test_a_working_tiles_dot_pulses(self):
-        self.assertIn(".th .dot.d-busy{animation:pulse", ui.MATRIX_CSS)
-        self.assertIn(".th .dot.d-busy{animation:none}", ui.MATRIX_CSS)
+        # The shared rule, which the matrix page carries (CSS + MATRIX_CSS).
+        self.assertIn(".dot.d-busy,.dot.d-idle,", ui.CSS)
+        self.assertIn(ui.CSS, ui.render_matrix())
 
     @unittest.skipUnless(NODE, "node not installed")
     def test_the_status_tile_shows_spend(self):
@@ -1674,3 +1675,35 @@ class PermissionCardPlacementTests(unittest.TestCase):
         page = ui.render_shell()
         self.assertLess(page.index("id=log"), page.index("id=decide"))
         self.assertLess(page.index("id=decide"), page.index("id=ask"))
+
+
+class WorkPulseTests(unittest.TestCase):
+    """Everything that stands for work in progress pulses, in both windows."""
+
+    RULE = ".dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:pulse"
+
+    def test_both_pages_pulse_work_in_progress(self):
+        for page in (ui.render_shell(), ui.render_matrix()):
+            self.assertIn(self.RULE, page)
+            self.assertIn("@keyframes pulse", page)
+            self.assertIn("prefers-reduced-motion", page)
+
+    @unittest.skipUnless(NODE, "node not installed")
+    def test_running_task_rows_are_marked_but_not_wakeups_or_finished_ones(self):
+        start = ui.SCRIPT.index("function taskRow(")
+        fn = ui.SCRIPT[start:ui.SCRIPT.index("function drawTileTasks", start)]
+        esc = ui.SCRIPT[ui.SCRIPT.index("const esc ="):]
+        esc = esc[:esc.index("\n\n")]
+        js = esc + """
+let taskView = null;
+const TASK_MARK = {}, STATUS_WORD = {}, taskWhen = () => "";
+""" + fn + """
+const row = (t, running) => /class="tki([^"]*)"/.exec(taskRow(t, 0, false, running))[1];
+process.stdout.write(JSON.stringify([
+  row({id: "a", kind: "shell"}, true), row({id: "b", kind: "wakeup"}, true),
+  row({id: "c", kind: "shell", done: true}), row({id: "d", kind: "mcp"})]));"""
+        out = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True,
+                             encoding="utf-8", timeout=30)
+        if out.returncode:
+            raise AssertionError(out.stderr)
+        self.assertEqual(json.loads(out.stdout), [" run", "", " done", ""])

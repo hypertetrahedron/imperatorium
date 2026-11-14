@@ -211,6 +211,13 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .d-fail::before,.d-fail::after{content:"";position:absolute;left:-1px;right:-1px;top:3px;
   height:2px;border-radius:1px;background:var(--c);transform:rotate(45deg)}
 .d-fail::after{transform:rotate(-45deg)}
+/* Work in progress pulses, wherever it is drawn: a working session's dot,
+   one waiting on tasks it started, a running task in the open tile's list
+   and its fresh-output mark (the matrix's step line has its own .spin).
+   A scheduled wakeup is not running yet, so its row stays still. */
+.dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion: reduce){.dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:none}}
 .s.fail{border-left:3px solid var(--fail);padding-left:10px}
 
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -3752,8 +3759,9 @@ function foldDone(open){
   try { localStorage.setItem("imperatorium.doneOpen", open ? "1" : "0"); } catch (e) {}
   drawTileTasks();
 }
-function taskRow(t, now, sub){
-  const on = taskView && taskView.id === t.id ? " on" : "";
+function taskRow(t, now, sub, running){
+  const on = (taskView && taskView.id === t.id ? " on" : "") +
+    (running && t.kind !== "wakeup" ? " run" : "");
   const live = !t.done && t.mtime && now - t.mtime < 5;
   const why = t.kind === "tool" ? "show it in the chat: " : "show it: ";
   const status = t.done && t.status && t.status !== "completed"
@@ -3773,7 +3781,7 @@ function drawTileTasks(){
   if (!box) return;
   const s = current(), now = Date.now() / 1000;
   const l = taskList(s, procFor === selected ? procTasks : []);
-  let items = l.running.map(t => taskRow(t, now)).join("") ||
+  let items = l.running.map(t => taskRow(t, now, false, true)).join("") ||
     `<div class="tki static">nothing running</div>`;
   if (l.done.length)
     items += `<div class="tki grp" data-done-toggle title="tasks that ended in the last half hour">` +
@@ -5802,11 +5810,9 @@ body{overflow:hidden}
 .cur .more{flex:none;color:var(--muted)}
 .spin{flex:none;width:8px;height:8px;border-radius:50%;background:var(--busy);
   animation:pulse 1.2s ease-in-out infinite}
-/* The state dot in a working tile's header pulses with its step, so work
-   shows at a glance even with the step line run off or not yet there. */
-.th .dot.d-busy{animation:pulse 1.2s ease-in-out infinite}
-@keyframes pulse{50%{opacity:.25}}
-@media (prefers-reduced-motion: reduce){.spin,.th .dot.d-busy{animation:none}}
+/* The state dot in a tile's header pulses with the main window's (CSS),
+   so work shows at a glance even with the step line run off. */
+@media (prefers-reduced-motion: reduce){.spin{animation:none}}
 .stat{padding:10px 12px;overflow:hidden;font-size:13px}
 .stat h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 6px}
 .stat .big{font-size:26px;font-weight:700;line-height:1.1}

@@ -189,6 +189,13 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .d-fail::before,.d-fail::after{content:"";position:absolute;left:-1px;right:-1px;top:3px;
   height:2px;border-radius:1px;background:var(--c);transform:rotate(45deg)}
 .d-fail::after{transform:rotate(-45deg)}
+/* Work in progress pulses, wherever it is drawn: a working session's dot,
+   one waiting on tasks it started, a running task in the open tile's list
+   and its fresh-output mark (the matrix's step line has its own .spin).
+   A scheduled wakeup is not running yet, so its row stays still. */
+.dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion: reduce){.dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:none}}
 .s.fail{border-left:3px solid var(--fail);padding-left:10px}
 
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
