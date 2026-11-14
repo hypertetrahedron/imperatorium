@@ -19,7 +19,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from twin import binary  # noqa: E402
+from twin import binary, require_free  # noqa: E402
 
 PORT, HOOKS = 8816, 8817
 SID = "11111111-2222-4333-8444-555555555555"
@@ -72,6 +72,7 @@ def main():
                IMPERATORIUM_REMOTE_BUILDS=os.path.join(tmp, "builds"))
     for k in [k for k in env if k.startswith("CLAUDE")]:
         del env[k]
+    require_free(PORT, HOOKS)
     proc = subprocess.Popen([binary(), "serve", "--port", str(PORT), "--home", home,
                              "--state", os.path.join(tmp, "state.json")],
                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

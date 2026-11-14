@@ -25,7 +25,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import REPO, binary  # noqa: E402
+from common import REPO, binary, require_free  # noqa: E402
 from inbox_twin import record  # noqa: E402
 from twin import env, get, post  # noqa: E402
 
@@ -60,6 +60,7 @@ def config(topic):
 
 
 def start(root, extra_config=None, extra_env=None):
+    require_free(PY_PORT, RS_PORT)
     py_home, rs_home = os.path.join(root, "py-home"), os.path.join(root, "rs-home")
     shutil.copytree(os.path.join(REPO, "imperatorium"), os.path.join(py_home, "imperatorium"),
                     ignore=shutil.ignore_patterns("__pycache__"))

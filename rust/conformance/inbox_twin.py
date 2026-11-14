@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import REPO, binary  # noqa: E402
+from common import REPO, binary, require_free  # noqa: E402
 from sessions_compare import first_difference  # noqa: E402
 from twin import env, get, masked, post  # noqa: E402
 
@@ -95,6 +95,7 @@ class Pipe:
 
 def start(root):
     ports = {"py": PY_PORT, "rs": RS_PORT}
+    require_free(*ports.values())
     procs = []
     for side, port in ports.items():
         e = dict(env(), CLAUDE_CONFIG_DIR=os.path.join(root, "claude"),

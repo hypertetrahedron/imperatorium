@@ -9,6 +9,7 @@ with the Rust implementation patched in.
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 
@@ -18,6 +19,30 @@ REPO = os.path.dirname(RUST)
 
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
+
+
+def require_free(*ports):
+    """Refuse to start a twin on a port something already answers on.
+
+    The twins use fixed ports. A second run started beside the first would
+    otherwise send its requests to the first run's dispatchers, which go on
+    launching after that run has removed its stand-ins - and a launch whose
+    stand-in is gone reaches the real Windows Terminal and claude.
+    """
+    for port in ports:
+        with socket.socket() as s:
+            s.settimeout(0.5)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                raise SystemExit("port %d is in use (another conformance run?); not starting" % port)
+
+
+def stand_in_path(bin_dir):
+    """`bin_dir`, then this PATH without any folder holding a real wt or
+    claude, so a missing stand-in fails instead of opening a real terminal."""
+    names = ("wt.exe", "claude.exe", "wt", "claude")
+    keep = [d for d in os.environ.get("PATH", "").split(os.pathsep)
+            if d and not any(os.path.isfile(os.path.join(d, n)) for n in names)]
+    return os.pathsep.join([bin_dir] + keep)
 
 
 def binary():

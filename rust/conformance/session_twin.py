@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import RUST  # noqa: E402
+from common import RUST, stand_in_path  # noqa: E402
 from inbox_twin import record, window_token  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
@@ -110,7 +110,7 @@ def main():
         fh.truncate()
 
     def env(side):
-        return {"PATH": bin_dir + os.pathsep + os.environ["PATH"], "FAKE_LOG": logs[side],
+        return {"PATH": stand_in_path(bin_dir), "FAKE_LOG": logs[side],
                 # A session's own variables, which must not reach what it launches.
                 "AI_AGENT": "claude-code", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_PID": "1"}
 

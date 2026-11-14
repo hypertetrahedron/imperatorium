@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import REPO, binary  # noqa: E402
+from common import REPO, binary, require_free  # noqa: E402
 from sessions_compare import first_difference  # noqa: E402
 
 PY_PORT, RS_PORT = 8813, 8814
@@ -41,6 +41,7 @@ def env():
 
 
 def start(state_dir):
+    require_free(PY_PORT, RS_PORT)
     py = subprocess.Popen(
         [sys.executable, "-m", "imperatorium.dispatcher", "--port", str(PY_PORT),
          "--state", os.path.join(state_dir, "py", "state.json")],
