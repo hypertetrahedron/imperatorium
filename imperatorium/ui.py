@@ -3296,9 +3296,22 @@ async function dictate(){
   catch (e) { $("#say").textContent = "no microphone: " + e.name; return; }
   chunks = [];
   let cpuAt = null;  // the warm-up's answer: where the model runs
+  // A recording stops itself at voice.max_seconds (120 s until the warm-up
+  // says otherwise): the upload stays a few MB of WAV, well under the
+  // dispatcher's 32 MiB cap, and what was said is transcribed, not lost.
+  const started = Date.now();
+  let capTimer = null, capped = 0;
+  const cap = secs => {
+    clearTimeout(capTimer);
+    capTimer = setTimeout(() => {
+      if (rec && rec.state === "recording"){ capped = secs; rec.stop(); }
+    }, Math.max(0, secs * 1000 - (Date.now() - started)));
+  };
+  cap(120);
   rec = new MediaRecorder(stream);
   rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   rec.onstop = async () => {
+    clearTimeout(capTimer);
     stream.getTracks().forEach(t => t.stop());
     $("#mic").classList.remove("rec");
     $("#mic").textContent = "\u{1F3A4} Dictate";
@@ -3314,13 +3327,15 @@ async function dictate(){
     box.value = (box.value.trim() ? box.value.replace(/\s*$/, " ") : "") + data.text;
     box.focus();
     noteDraft();
-    $("#say").textContent = "dictated " + data.text.length + " chars" + onCpu(data);
+    $("#say").textContent = "dictated " + data.text.length + " chars" + onCpu(data) +
+      (capped ? " - stopped at " + capped + " s (voice.max_seconds)" : "");
   };
   rec.start();
   // The model lives in its own process, ended when idle; start it now so it
   // is built while you speak rather than after.
   post("/api/voice/warm", {}).then(r => {
     cpuAt = r;
+    if (r && r.max_seconds > 0) cap(r.max_seconds);
     if (rec && rec.state === "recording" && onCpu(r)) $("#say").textContent = "listening" + onCpu(r) + "\u2026";
   }).catch(() => {});
   $("#mic").classList.add("rec");

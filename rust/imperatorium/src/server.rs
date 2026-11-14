@@ -1904,6 +1904,8 @@ impl Shared {
         let mut out = v.where_().and_then(|w| w.as_object().cloned()).unwrap_or_default();
         out.insert("ok".into(), json!(true));
         out.insert("running".into(), json!(v.running()));
+        // And how long the window may record: it stops itself there.
+        out.insert("max_seconds".into(), v.settings.get("max_seconds").cloned().unwrap_or(Value::Null));
         Value::Object(out)
     }
 

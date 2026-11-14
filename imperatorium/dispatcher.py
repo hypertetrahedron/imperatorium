@@ -707,7 +707,9 @@ class Control:
         self._voice.warm()
         # Where the last load landed, so the window can say "on CPU" while
         # the user is still speaking; None before the first load finishes.
-        return dict(self._voice.where or {}, ok=True, running=self._voice.running)
+        # And how long the window may record: it stops itself there.
+        return dict(self._voice.where or {}, ok=True, running=self._voice.running,
+                    max_seconds=self._voice.settings.get("max_seconds"))
 
     # -- the Imperatorium mod ---------------------------------------------
     def mod_beat(self, beat):
