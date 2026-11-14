@@ -3766,14 +3766,14 @@ impl Shared {
         out
     }
 
-    fn page(&self, page: &str, token: &str, with_look: bool) -> Body {
+    fn page(&self, page: &ui::Page, token: &str, with_look: bool) -> Body {
         let drawn = if with_look {
             Some(look(&self.config()))
         } else {
             None
         };
         Body::Text(
-            ui::with_meta(token, page, &self.boot, drawn.as_ref()),
+            ui::with_meta(token, &page.inline(), &self.boot, drawn.as_ref()),
             "text/html; charset=utf-8",
         )
     }
@@ -3795,9 +3795,9 @@ impl Shared {
             }
         }
         match (method, path) {
-            ("GET", "/") => (200, self.page(ui::SHELL, &self.window_token, true)),
-            ("GET", "/matrix") => (200, self.page(ui::MATRIX, "", true)),
-            ("GET", "/settings") => (200, self.page(ui::SETTINGS, &self.window_token, false)),
+            ("GET", "/") => (200, self.page(&ui::SHELL, &self.window_token, true)),
+            ("GET", "/matrix") => (200, self.page(&ui::MATRIX, "", true)),
+            ("GET", "/settings") => (200, self.page(&ui::SETTINGS, &self.window_token, false)),
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
             // Remote hosts are phase 4: until then this dispatcher polls none.
             ("GET", "/api/hosts") => (200, Body::Json(self.hosts_status())),

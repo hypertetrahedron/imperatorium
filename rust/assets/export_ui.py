@@ -1,16 +1,15 @@
-"""Write the window's pages from imperatorium/ui.py for the binary to embed.
+"""Write what the binary embeds that is still computed by Python.
 
-ui.py stays the one source of the pages until the Python is retired: this
-renders each page with `ui._with_meta` switched off, so what is written is
-the page itself, and the binary inserts the per-start parts exactly as
-_with_meta does (the window token, the boot id, and look_head's text sizes,
-highlights and colours; see server.rs `with_meta`).
+The window's pages are no longer written here: the binary compiles in the
+files in imperatorium/web/ itself (see ui.rs), the same ones ui.py reads. What
+remains is settings_fields.json, the Settings schema from settings.py, which
+settings.rs reads.
 
     python rust/assets/export_ui.py          # write
-    python rust/assets/export_ui.py --check  # exit 1 if a written page is stale
+    python rust/assets/export_ui.py --check  # exit 1 if a written file is stale
 
-test_native.py runs the check, so a change to ui.py that is not exported
-fails the suite rather than shipping a binary with yesterday's window.
+test_native.py runs the check, so a change to settings.py or ui.SHORTCUTS that
+is not exported fails the suite rather than shipping a stale schema.
 """
 import hashlib
 import json
@@ -23,14 +22,6 @@ OUT = os.path.join(os.path.dirname(HERE), "imperatorium", "assets")
 sys.path.insert(0, REPO)
 
 from imperatorium import ui  # noqa: E402
-
-# page -> (renderer, does _with_meta add look_head for it)
-PAGES = {
-    "shell.html": (lambda: ui.render_shell(), True),
-    "matrix.html": (lambda: ui.render_matrix(), True),
-    "settings.html": (lambda: ui.render_settings(), False),
-}
-
 
 def settings_schema():
     """settings.FIELDS and SECTIONS as JSON. A default computed from the
@@ -54,19 +45,11 @@ def settings_schema():
 
 
 def pages():
-    real = ui._with_meta
-    ui._with_meta = lambda token, page, boot="", look=False: page
-    try:
-        out = {name: render() for name, (render, _) in PAGES.items()}
-    finally:
-        ui._with_meta = real
-    out["settings_fields.json"] = settings_schema()
-    return out
+    return {"settings_fields.json": settings_schema()}
 
 
 def manifest(rendered):
-    return {name: {"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                   "look": PAGES[name][1] if name in PAGES else None}
+    return {name: {"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
             for name, text in sorted(rendered.items())}
 
 

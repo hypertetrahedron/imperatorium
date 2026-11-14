@@ -1,5 +1,6 @@
-//! The window's pages and fonts, compiled in. The pages are written from
-//! `imperatorium/ui.py` by `rust/assets/export_ui.py`; this adds what
+//! The window's pages and fonts, compiled in. The sources are the files in
+//! `imperatorium/web/` (the Python dispatcher reads the same ones); this
+//! assembles each page from them as `ui.py` does and adds what
 //! `ui._with_meta` adds per start - the window token, the boot id and
 //! `look_head` - exactly as it does.
 
@@ -7,9 +8,62 @@ use serde_json::Value;
 
 use crate::pyish::{float_repr, truthy};
 
-pub const SHELL: &str = include_str!("../assets/shell.html");
-pub const MATRIX: &str = include_str!("../assets/matrix.html");
-pub const SETTINGS: &str = include_str!("../assets/settings.html");
+macro_rules! web {
+    ($name:literal) => {
+        include_str!(concat!("../../../imperatorium/web/", $name))
+    };
+}
+
+const APP_CSS: &str = web!("app.css");
+const MATRIX_CSS: &str = web!("matrix.css");
+const SETTINGS_CSS: &str = web!("settings.css");
+const SHARED_JS: &str = web!("shared.js");
+const APP_JS: &str = web!("app.js");
+const MATRIX_JS: &str = web!("matrix.js");
+const SETTINGS_JS: &str = web!("settings.js");
+
+/// A page's skeleton (`{{STYLES}}` and `{{SCRIPTS}}` marks) and what fills them.
+pub struct Page {
+    template: &'static str,
+    styles: &'static [&'static str],
+    scripts: &'static [&'static str],
+}
+
+pub const SHELL: Page = Page {
+    template: web!("shell.html"),
+    styles: &[APP_CSS],
+    scripts: &[SHARED_JS, APP_JS],
+};
+pub const MATRIX: Page = Page {
+    template: web!("matrix.html"),
+    styles: &[APP_CSS, MATRIX_CSS],
+    scripts: &[SHARED_JS, MATRIX_JS],
+};
+pub const SETTINGS: Page = Page {
+    template: web!("settings.html"),
+    styles: &[APP_CSS, SETTINGS_CSS],
+    scripts: &[SHARED_JS, SETTINGS_JS],
+};
+
+impl Page {
+    /// The page as one self-contained document: the styles and scripts
+    /// inline, as `ui._page` sends them.
+    pub fn inline(&self) -> String {
+        let (before, rest) = self.template.split_once("{{STYLES}}").unwrap_or((self.template, ""));
+        let (middle, after) = rest.split_once("{{SCRIPTS}}").unwrap_or((rest, ""));
+        let mut out = String::with_capacity(self.template.len() + 300_000);
+        out.push_str(before);
+        out.push_str("<style>");
+        self.styles.iter().for_each(|s| out.push_str(s));
+        out.push_str("</style>");
+        out.push_str(middle);
+        out.push_str("<script>");
+        self.scripts.iter().for_each(|s| out.push_str(s));
+        out.push_str("</script>");
+        out.push_str(after);
+        out
+    }
+}
 
 const FONTS: &[(&str, &[u8])] = &[
     (

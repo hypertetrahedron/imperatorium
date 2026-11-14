@@ -5,3 +5,5 @@
 *.dll binary
 # cmd.exe misreads labels and long lines in LF batch files.
 *.cmd text eol=crlf
+# The window's sources are compiled into the binary and hashed: bytes must not vary by checkout.
+imperatorium/web/* text eol=lf
