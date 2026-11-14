@@ -26,13 +26,21 @@ regex = "1"
 # http to 127.0.0.1 for the hooks; TLS (rustls) only for an ntfy push to
 # an https server.
 ureq = { version = "2", default-features = false }
+# The Stream Deck surface (feature `streamdeck`).
+elgato-streamdeck = { version = "0.14", optional = true }
+hidapi = { version = "2.6", default-features = false, features = ["windows-native"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+ab_glyph = { version = "0.2", optional = true }
 
 [features]
 # TLS for an ntfy push to an https server - the dispatcher's only https.
 # A remote host's build leaves it out (`--no-default-features`): rustls'
 # ring needs a C compiler for the target, and the host never sends one.
-default = ["tls"]
+default = ["tls", "streamdeck"]
 tls = ["ureq/tls"]
+# `imperatorium streamdeck` (phase 5): the Stream Deck surface, over hidapi's
+# own Windows backend (no hidapi.dll). Left out of a remote host's build.
+streamdeck = ["dep:elgato-streamdeck", "dep:hidapi", "dep:image", "dep:ab_glyph"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -1,7 +1,10 @@
 //! Dictation for the prompt box: the dispatcher side of `imperatorium/
-//! voice.py` (`Worker`). The model itself stays in Python for now (phase 5
-//! ports it): it runs in a child, `python -m imperatorium.voice --worker`,
-//! from the checkout's venv, over the same JSON-lines protocol -
+//! voice.py` (`Worker`). The model runs in a child: `imperatorium-voice
+//! --worker` (whisper.cpp, phase 5) when it sits beside this exe and the
+//! settings' model is in the models folder, else `python -m
+//! imperatorium.voice --worker` from the checkout's venv
+//! (IMPERATORIUM_VOICE=python forces that). Both speak one JSON-lines
+//! protocol -
 //!   {"op": "load"}                                -> {"ok", "device", "model"}
 //!   {"op": "transcribe", "hint", "bytes": n} + n bytes -> {"ok", "text", ...}
 //! The child exits when its stdin closes, and is ended after `idle_unload`
@@ -57,10 +60,51 @@ fn interpreter(home: &Path) -> PathBuf {
     }
 }
 
-/// voice.available, as far as the binary can tell without importing:
-/// the checkout has a venv with the worker module in it.
-pub fn available(home: &Path) -> bool {
+/// The checkout has a venv with the Python worker module in it.
+fn python_available(home: &Path) -> bool {
     interpreter(home).is_file() && home.join("imperatorium").join("voice.py").is_file()
+}
+
+/// Where imperatorium-voice keeps its ggml models (as it computes it).
+pub fn models_dir() -> PathBuf {
+    if let Some(d) = crate::paths::env_nonempty("IMPERATORIUM_MODELS") {
+        return PathBuf::from(d);
+    }
+    #[cfg(windows)]
+    let base = crate::paths::env_nonempty("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default();
+    #[cfg(not(windows))]
+    let base = crate::paths::env_nonempty("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share")
+    });
+    base.join("imperatorium").join("models")
+}
+
+/// The native worker, when it can run this configuration: the exe beside
+/// this one (or IMPERATORIUM_VOICE_BIN) and the model the settings name.
+pub fn native_worker(settings: &Map<String, Value>) -> Option<PathBuf> {
+    if crate::paths::env_nonempty("IMPERATORIUM_VOICE").as_deref() == Some("python") {
+        return None;
+    }
+    let exe = match crate::paths::env_nonempty("IMPERATORIUM_VOICE_BIN") {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let name = if cfg!(windows) { "imperatorium-voice.exe" } else { "imperatorium-voice" };
+            std::env::current_exe().ok()?.parent()?.join(name)
+        }
+    };
+    let model = settings.get("model").and_then(Value::as_str).unwrap_or("large-v3-turbo");
+    let file = if model.contains(['/', '\\']) {
+        PathBuf::from(model)
+    } else {
+        models_dir().join(format!("ggml-{model}.bin"))
+    };
+    (exe.is_file() && file.is_file()).then_some(exe)
+}
+
+/// voice.available, as far as the binary can tell without importing: a
+/// native worker with its model, or the checkout's Python worker.
+pub fn available(home: &Path, settings: &Map<String, Value>) -> bool {
+    native_worker(settings).is_some() || python_available(home)
 }
 
 /// End a child and everything under it: a venv's python.exe on Windows is
@@ -155,9 +199,20 @@ impl Worker {
             return Ok(());
         }
         Self::stop_locked(s);
-        let mut cmd = Command::new(interpreter(&self.home));
-        cmd.args(["-m", "imperatorium.voice", "--worker", &crate::pyish::json_dumps(&Value::Object(self.settings.clone()), true)])
-            .current_dir(&self.home)
+        let settings = crate::pyish::json_dumps(&Value::Object(self.settings.clone()), true);
+        let mut cmd = match native_worker(&self.settings) {
+            Some(exe) => {
+                let mut c = Command::new(exe);
+                c.args(["--worker", &settings]);
+                c
+            }
+            None => {
+                let mut c = Command::new(interpreter(&self.home));
+                c.args(["-m", "imperatorium.voice", "--worker", &settings]);
+                c
+            }
+        };
+        cmd.current_dir(&self.home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

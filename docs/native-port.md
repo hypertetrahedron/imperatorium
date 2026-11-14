@@ -392,6 +392,51 @@ today's `cc_hook.py` posts, 5 events); `inbox-send` into a throwaway Unix
 socket on both; the live tunnels and hook-only listener from both hosts;
 `remote_twin.py` (32 checks, fake ssh) in `run_all.py`.
 
+## Phase 5, as built (2026-11-13)
+
+**Voice.** `rust/voice` is `imperatorium-voice`, its own crate and
+workspace (whisper.cpp needs a C++ compiler, CMake and, for the GPU, CUDA,
+which the main binary must never need). It speaks the Python worker's
+protocol (`--worker SETTINGS_JSON`, `load` / `transcribe` JSON lines), so
+`voice.rs` only chooses what to spawn: the exe beside `imperatorium.exe`
+when the settings' model is in the models folder
+(`%LOCALAPPDATA%\imperatorium\models\ggml-<model>.bin`), else the venv's
+Python worker; `IMPERATORIUM_VOICE=python` forces Python.
+
+The same choices as faster-whisper: large-v3-turbo on CUDA, the CPU model
+when there is no GPU, greedy at beam_size 1, Silero VAD (v6, as
+faster-whisper bundles) with faster-whisper's VadOptions defaults, nothing
+for near-silence. The worker reads WAV only: the window now decodes its own
+MediaRecorder output (WebM/Opus) with `decodeAudioData`, resamples it to
+16 kHz mono in an `OfflineAudioContext` and uploads a WAV (`wav16k` in
+`ui.py`); whisper.cpp has no Opus decoder, and faster-whisper reads WAV too.
+
+Models are ggml files from `ggerganov/whisper.cpp` and `ggml-org/whisper-vad`
+on Hugging Face, checked against the SHA-256 the repository lists
+(phase 6 fetches them when dictation is turned on).
+
+Build: `rust\voice\build-voice.cmd` (VS Build Tools' MSVC, its bundled
+CMake and Ninja, CUDA 12.8). bindgen needs `libclang.dll`: set
+`LIBCLANG_PATH` (LLVM, VS's Clang tools, or `pip install --target DIR
+libclang`). The bindings whisper-rs-sys ships were made on Linux and do not
+fit Windows.
+
+Verified: `voice_compare.py` (11 clips through both workers: 10 identical,
+the eleventh the native one right where Python misheard; silence, noise and
+trailing silence empty or clean; median 0.16 s against Python's 0.26 s);
+the window's path in a real browser (MediaRecorder WebM -> `wav16k` ->
+`/api/transcribe` -> text); live on the dispatcher (CUDA, 0.1-0.2 s).
+
+**Stream Deck.** `imperatorium streamdeck` (feature `streamdeck`, on by
+default, left out of the hosts' builds) ports `streamdeck_surface.py`:
+layout, pinned keys, flashing, the three decision keys and their arming,
+press to focus. `elgato-streamdeck` over hidapi's `windows-native` backend
+(no hidapi.dll), keys drawn with `image` and `ab_glyph` in Segoe UI.
+`--preview DIR` writes one frame as PNGs: side by side with Python's
+`render_key` the keys match. Task `ImperatoriumStreamDeck` runs it under
+`conhost --headless`; its Python definition is in `cutover\`, and
+`rollback-to-python.ps1` restores it.
+
 ## Building
 
 ```

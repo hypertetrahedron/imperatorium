@@ -55,6 +55,8 @@ mod sessionstat;
 mod settings;
 mod slash;
 mod store;
+#[cfg(feature = "streamdeck")]
+mod streamdeck;
 mod taskout;
 mod ui;
 mod usage;
@@ -189,6 +191,8 @@ fn main() {
         Some("remote-channel") => remote::channel_main(),
         Some("inbox-send") => remote::inbox_send_main(&args[1..]),
         Some("remote-probe") => remote::probe_main(&args[1..], home.as_deref()),
+        #[cfg(feature = "streamdeck")]
+        Some("streamdeck") => streamdeck::main(&args[1..], home.as_deref()),
         Some("serve") => {
             let port = flag(&args, "--port")
                 .and_then(|p| p.parse().ok())

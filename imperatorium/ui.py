@@ -3256,6 +3256,35 @@ async function sendTyped(){
 // holds - loading costs seconds, using it costs hundredths.
 let rec = null, chunks = [];
 
+// The recording as a 16 kHz mono WAV: the browser decodes its own
+// MediaRecorder output (WebM/Opus) and resamples it, so the dictation
+// process only ever reads WAV - whisper.cpp in imperatorium-voice has no
+// Opus decoder, and faster-whisper reads WAV as well. Anything the browser
+// cannot decode goes as it was recorded.
+async function wav16k(blob){
+  try {
+    const ctx = new AudioContext();
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    ctx.close();
+    const n = Math.max(1, Math.ceil(decoded.duration * 16000));
+    const off = new OfflineAudioContext(1, n, 16000);
+    const src = off.createBufferSource();
+    src.buffer = decoded; src.connect(off.destination); src.start();
+    const pcm = (await off.startRendering()).getChannelData(0);
+    const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+    const tag = (o, s) => { for (let i = 0; i < 4; i++) out.setUint8(o + i, s.charCodeAt(i)); };
+    tag(0, "RIFF"); out.setUint32(4, 36 + pcm.length * 2, true); tag(8, "WAVE");
+    tag(12, "fmt "); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+    out.setUint32(24, 16000, true); out.setUint32(28, 32000, true); out.setUint16(32, 2, true);
+    out.setUint16(34, 16, true); tag(36, "data"); out.setUint32(40, pcm.length * 2, true);
+    for (let i = 0; i < pcm.length; i++){
+      const s = Math.max(-1, Math.min(1, pcm[i]));
+      out.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([out.buffer], {type: "audio/wav"});
+  } catch (e) { return blob; }
+}
+
 // " on CPU (small)" when the dictation process has fallen back to the CPU,
 // which is why a dictation is slow there; "" on a GPU or before it is known.
 const onCpu = r => r && r.device === "cpu" ? " on CPU" + (r.model ? " (" + r.model + ")" : "") : "";
@@ -3277,7 +3306,7 @@ async function dictate(){
     $("#say").textContent = "transcribing" + onCpu(cpuAt) + "\u2026";
     const r = await fetch("/api/transcribe", {method:"POST", cache:"no-store",
       headers:{"Content-Type":"application/octet-stream"},
-      body: new Blob(chunks)});
+      body: await wav16k(new Blob(chunks))});
     const data = await r.json();
     if (!data.ok){ $("#say").textContent = data.error || "transcription failed"; return; }
     if (!data.text){ $("#say").textContent = "nothing heard"; return; }

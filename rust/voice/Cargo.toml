@@ -1,0 +1,25 @@
+[package]
+name = "imperatorium-voice"
+version = "0.3.0-dev"
+edition = "2021"
+license = "MIT"
+description = "Imperatorium's dictation worker: whisper.cpp in a child process the dispatcher keeps (phase 5)."
+publish = false
+
+# Its own workspace: whisper.cpp needs a C++ compiler, CMake and (for the
+# GPU) the CUDA toolkit, which the main binary must never need.
+[workspace]
+
+[features]
+default = ["cuda"]
+cuda = ["whisper-rs/cuda"]
+
+[dependencies]
+whisper-rs = "0.16"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

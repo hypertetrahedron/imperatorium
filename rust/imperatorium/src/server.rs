@@ -260,7 +260,7 @@ impl Shared {
                     Some(block) if has_store => {
                         let settings = crate::voice::settings_from(Some(block));
                         let dir = paths::config_home(home);
-                        if truthy(settings.get("enabled")) && crate::voice::available(&dir) {
+                        if truthy(settings.get("enabled")) && crate::voice::available(&dir, &settings) {
                             Some(crate::voice::Worker::new(settings, &dir))
                         } else {
                             None

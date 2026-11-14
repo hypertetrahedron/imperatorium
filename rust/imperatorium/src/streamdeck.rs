@@ -1,0 +1,717 @@
+//! `imperatorium streamdeck`: one key per session, coloured by what that
+//! session is doing - `streamdeck_surface.py` without Python, pillow or a
+//! vendored hidapi.dll (phase 5). It holds no state of its own and talks to
+//! the dispatcher over HTTP, so it can be restarted or killed at any time.
+//!
+//! Colours: orange blocked (waiting on you), blue working, green idle, grey
+//! no session running for a pinned project. Every open session gets a key; a
+//! project with several shows `1/2` in the corner. Pinned projects
+//! (config.json `streamdeck.keys`) come first and keep a grey key while
+//! nothing runs there, unless keys run short. A key whose session changes
+//! state flashes old/new for FLASH_SECONDS. A press focuses that session,
+//! or opens one. A parked permission request turns the last three keys into
+//! a decision - what is asking, ALLOW, DENY - armed only after ARM_SECONDS,
+//! so a press meant for a project key cannot land on ALLOW.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc;
+use std::time::Duration;
+
+use serde_json::{json, Map, Value};
+
+use crate::pyish::{py_str, truthy};
+
+type Row = Map<String, Value>;
+
+const POLL_SECONDS: f64 = 1.0;
+const ARM_SECONDS: f64 = 1.0;
+const DECISION_KEYS: usize = 3;
+const FLASH_SECONDS: f64 = 5.0;
+const FLASH_HALF: f64 = 0.5;
+
+type Rgb = [u8; 3];
+const INK: Rgb = [245, 245, 238];
+
+fn colours(state: &str) -> (Rgb, Rgb) {
+    match state {
+        "blocked" | "ask" => ([176, 84, 30], INK),
+        "working" => ([45, 92, 138], INK),
+        "idle" => ([47, 107, 79], INK),
+        "offline" => ([60, 24, 24], [200, 170, 170]),
+        "allow" => ([32, 120, 64], INK),
+        "deny" => ([150, 30, 40], INK),
+        _ => ([38, 38, 33], [140, 140, 132]),
+    }
+}
+
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+fn s<'a>(row: &'a Row, k: &str) -> Option<&'a str> {
+    row.get(k).and_then(Value::as_str)
+}
+
+/// state_for: what colour a session's key is.
+pub fn state_for(row: Option<&Row>) -> &'static str {
+    let Some(row) = row else { return "none" };
+    if truthy(row.get("attention")) {
+        return "blocked";
+    }
+    if s(row, "status") == Some("busy") || s(row, "state") == Some("working") {
+        return "working";
+    }
+    if s(row, "status") == Some("idle") && truthy(row.get("background_tasks")) {
+        return "working"; // between turns, but a command it started still runs
+    }
+    if s(row, "status") == Some("idle") {
+        return "idle";
+    }
+    "none"
+}
+
+/// wrap: a project name on short lines a 72 px key can show.
+pub fn wrap(label: &str, width: usize) -> Vec<String> {
+    let cleaned = label.replace(['_', '-'], " ");
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in cleaned.split_whitespace() {
+        let n = word.chars().count();
+        if n > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            lines.push(word.chars().take(width - 1).collect::<String>() + "\u{2026}");
+            continue;
+        }
+        let candidate = if current.is_empty() { word.to_string() } else { format!("{current} {word}") };
+        if candidate.chars().count() <= width {
+            current = candidate;
+        } else {
+            if !current.is_empty() {
+                lines.push(current);
+            }
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines.truncate(3);
+    if lines.is_empty() {
+        lines.push(label.chars().take(width).collect());
+    }
+    lines
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slot {
+    pub id: String,
+    pub project: String,
+    pub label: String,
+    pub row: Option<Row>,
+    pub count: Option<String>,
+}
+
+/// What a key shows: (label, state, badge, desktop app, count).
+type Look = (String, String, Option<String>, bool, Option<String>);
+
+pub struct Surface {
+    keys: usize,
+    pinned: Vec<String>,
+    pub slots: Vec<Slot>,
+    last: HashMap<usize, Look>,
+    seen: HashMap<String, String>,
+    flashes: HashMap<String, (String, String, f64)>,
+    decision: Option<Row>,
+    decision_at: f64,
+}
+
+impl Surface {
+    pub fn new(keys: usize, pinned: Vec<String>) -> Self {
+        Surface {
+            keys,
+            pinned,
+            slots: vec![],
+            last: HashMap::new(),
+            seen: HashMap::new(),
+            flashes: HashMap::new(),
+            decision: None,
+            decision_at: 0.0,
+        }
+    }
+
+    fn project_keys(&self) -> usize {
+        if self.decision.is_some() {
+            self.keys.saturating_sub(DECISION_KEYS)
+        } else {
+            self.keys
+        }
+    }
+
+    /// The oldest parked request without questions (three keys cannot
+    /// choose answers, and the dispatcher refuses a bare Allow for one).
+    pub fn set_decision(&mut self, pending: &[Value], at: f64) {
+        let oldest = pending
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|p| !truthy(p.get("questions")))
+            .cloned();
+        let id = |d: &Option<Row>| d.as_ref().and_then(|d| d.get("id").cloned());
+        if id(&oldest) != id(&self.decision) {
+            self.decision_at = at;
+        }
+        self.decision = oldest;
+    }
+
+    fn decision_slot(&self, key: usize) -> Option<&'static str> {
+        self.decision.as_ref()?;
+        let first = self.keys.checked_sub(DECISION_KEYS)?;
+        (key >= first).then(|| ["info", "allow", "deny"][key - first])
+    }
+
+    /// The verdict a press on `key` means, or None.
+    pub fn decide_press(&self, key: usize, at: f64) -> Option<Value> {
+        let slot = self.decision_slot(key)?;
+        if !matches!(slot, "allow" | "deny") || at - self.decision_at < ARM_SECONDS {
+            return None;
+        }
+        Some(json!({"id": self.decision.as_ref()?.get("id").cloned().unwrap_or(Value::Null),
+                    "verdict": slot, "who": "streamdeck"}))
+    }
+
+    /// Surface.layout: the slots, one per key, in key order.
+    pub fn layout(&self, sessions: &[Row], by_path: &HashMap<String, String>) -> Vec<Slot> {
+        let mut by_project: indexmap::IndexMap<String, Vec<Row>> = indexmap::IndexMap::new();
+        for row in sessions {
+            let Some(cwd) = s(row, "cwd").filter(|c| !c.is_empty()) else { continue };
+            if truthy(row.get("remote")) || state_for(Some(row)) == "none" {
+                continue;
+            }
+            // A worktree session belongs on its project's key.
+            let name = if truthy(row.get("worktree")) && truthy(row.get("project")) {
+                py_str(&row["project"])
+            } else if let Some(n) = crate::paths::abs_normcase(cwd).and_then(|p| by_path.get(&p).cloned()) {
+                n
+            } else {
+                let base = cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or("");
+                if base.is_empty() { cwd.to_string() } else { base.to_string() }
+            };
+            by_project.entry(name).or_default().push(row.clone());
+        }
+        for rows in by_project.values_mut() {
+            rows.sort_by(|a, b| {
+                let k = |r: &Row| (r.get("startedAt").and_then(Value::as_f64).unwrap_or(0.0),
+                                   r.get("sessionId").map(py_str).unwrap_or_default());
+                k(a).partial_cmp(&k(b)).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        let expand = |name: &str| -> Vec<Slot> {
+            match by_project.get(name).filter(|r| !r.is_empty()) {
+                None => vec![Slot { id: format!("project:{name}"), project: name.into(),
+                                    label: name.into(), row: None, count: None }],
+                Some(rows) => rows
+                    .iter()
+                    .enumerate()
+                    .map(|(n, r)| Slot {
+                        id: r.get("sessionId").map(py_str).unwrap_or_default(),
+                        project: name.into(),
+                        label: name.into(),
+                        row: Some(r.clone()),
+                        count: (rows.len() > 1).then(|| format!("{}/{}", n + 1, rows.len())),
+                    })
+                    .collect(),
+            }
+        };
+        let mut slots = Vec::new();
+        for name in &self.pinned {
+            slots.extend(expand(name));
+        }
+        let mut extras: Vec<&String> = by_project.keys().filter(|n| !self.pinned.contains(n)).collect();
+        extras.sort_by_key(|n| {
+            let blocked = by_project[*n].iter().any(|r| truthy(r.get("attention")));
+            (!blocked, n.to_lowercase())
+        });
+        for name in extras {
+            slots.extend(expand(name));
+        }
+        let room = self.project_keys();
+        while slots.len() > room {
+            let Some(i) = slots.iter().rposition(|sl| sl.row.is_none()) else { break };
+            slots.remove(i);
+        }
+        slots.truncate(room);
+        slots
+    }
+
+    /// Surface.flash_state: the state to paint now, a change starting a flash.
+    fn flash_state(&mut self, id: &str, state: &str, at: f64) -> String {
+        let before = self.seen.insert(id.to_string(), state.to_string());
+        if let Some(b) = before.filter(|b| b != state) {
+            self.flashes.insert(id.to_string(), (b, state.to_string(), at));
+        }
+        let Some((old, new, t)) = self.flashes.get(id).cloned() else {
+            return state.to_string();
+        };
+        if at - t >= FLASH_SECONDS {
+            self.flashes.remove(id);
+            return state.to_string();
+        }
+        if ((at - t) / FLASH_HALF) as i64 % 2 == 1 { old } else { new }
+    }
+
+    pub fn flashing(&self) -> bool {
+        !self.flashes.is_empty()
+    }
+
+    /// Surface.paint: what changed, as (key, look) to draw.
+    pub fn paint(&mut self, slots: Vec<Slot>, at: f64) -> Vec<(usize, Look)> {
+        self.slots = slots;
+        let mut out = Vec::new();
+        let mut shown = HashSet::new();
+        for key in 0..self.keys {
+            let look: Look = if let Some(slot) = self.decision_slot(key) {
+                let d = self.decision.as_ref().unwrap();
+                let cwd = d.get("cwd").map(py_str).unwrap_or_default();
+                let base = cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or("").to_string();
+                let tool = d.get("tool").filter(|t| truthy(Some(t))).map(py_str).unwrap_or_else(|| "?".into());
+                match slot {
+                    "info" => (format!("{tool} {base}"), "ask".into(), None, false, None),
+                    "allow" => ("ALLOW".into(), "allow".into(), None, false, None),
+                    _ => ("DENY".into(), "deny".into(), None, false, None),
+                }
+            } else if let Some(sl) = self.slots.get(key).cloned() {
+                shown.insert(sl.id.clone());
+                let state = self.flash_state(&sl.id, state_for(sl.row.as_ref()), at);
+                let row = sl.row.as_ref();
+                let badge = row
+                    .filter(|r| truthy(r.get("attention")))
+                    .and_then(|r| r.get("attention_since").and_then(Value::as_f64))
+                    .filter(|t| *t != 0.0)
+                    .map(|t| format!("{}m", (((at - t) / 60.0).floor() as i64).max(0)));
+                let app = row.is_some_and(|r| truthy(r.get("desktop_app")));
+                (sl.label.clone(), state, badge, app, sl.count.clone())
+            } else {
+                (String::new(), "none".into(), None, false, None)
+            };
+            if self.last.get(&key) != Some(&look) {
+                self.last.insert(key, look.clone());
+                out.push((key, look));
+            }
+        }
+        // A session that leaves the board starts fresh if it comes back.
+        let gone: Vec<String> = self.seen.keys().filter(|k| !shown.contains(*k)).cloned().collect();
+        for g in gone {
+            self.seen.remove(&g);
+            self.flashes.remove(&g);
+        }
+        out
+    }
+
+    /// Forget what was painted, so the next paint redraws every key.
+    pub fn repaint_all(&mut self) {
+        self.last.clear();
+    }
+
+    /// on_press: the API call a press means - (path, payload), or None.
+    pub fn press(&self, key: usize, at: f64) -> Option<(&'static str, Value)> {
+        if let Some(v) = self.decide_press(key, at) {
+            return Some(("/api/decide", v));
+        }
+        if self.decision_slot(key).is_some() {
+            return None; // the info key, or a decision key not yet armed
+        }
+        let sl = self.slots.get(key)?;
+        let mut payload = json!({"project": sl.project});
+        if let Some(r) = &sl.row {
+            payload["session_id"] = r.get("sessionId").cloned().unwrap_or(Value::Null);
+        }
+        Some(("/api/focus", payload))
+    }
+}
+
+// -- drawing --------------------------------------------------------------
+
+struct Fonts {
+    font: Option<ab_glyph::FontVec>,
+}
+
+impl Fonts {
+    /// Segoe UI is on every Windows install; Arial, then DejaVu otherwise.
+    fn load() -> Self {
+        let mut dirs = Vec::new();
+        if let Some(w) = crate::paths::env_nonempty("WINDIR") {
+            dirs.push(std::path::PathBuf::from(w).join("Fonts"));
+        }
+        dirs.push("/usr/share/fonts/truetype/dejavu".into());
+        for dir in &dirs {
+            for name in ["segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"] {
+                if let Ok(bytes) = std::fs::read(dir.join(name)) {
+                    if let Ok(f) = ab_glyph::FontVec::try_from_vec(bytes) {
+                        return Fonts { font: Some(f) };
+                    }
+                }
+            }
+        }
+        Fonts { font: None }
+    }
+
+    /// PIL's truetype size is the em in pixels; ab_glyph scales by height.
+    fn scale(&self, em: f32) -> ab_glyph::PxScale {
+        use ab_glyph::Font;
+        match &self.font {
+            Some(f) => {
+                let upem = f.units_per_em().unwrap_or(1000.0);
+                ab_glyph::PxScale::from(em * f.height_unscaled() / upem)
+            }
+            None => ab_glyph::PxScale::from(em),
+        }
+    }
+
+    fn width(&self, text: &str, em: f32) -> f32 {
+        use ab_glyph::{Font, ScaleFont};
+        let Some(f) = &self.font else { return text.len() as f32 * em * 0.5 };
+        let sf = f.as_scaled(self.scale(em));
+        text.chars().map(|c| sf.h_advance(sf.glyph_id(c))).sum()
+    }
+
+    fn draw(&self, img: &mut image::RgbImage, text: &str, x: f32, y: f32, em: f32, fg: Rgb, bg: Rgb) {
+        use ab_glyph::{Font, ScaleFont};
+        let Some(f) = &self.font else { return };
+        let scale = self.scale(em);
+        let sf = f.as_scaled(scale);
+        let mut caret = x;
+        for c in text.chars() {
+            let id = sf.glyph_id(c);
+            let glyph = id.with_scale_and_position(scale, ab_glyph::point(caret, y + sf.ascent()));
+            caret += sf.h_advance(id);
+            if let Some(og) = f.outline_glyph(glyph) {
+                let b = og.px_bounds();
+                og.draw(|gx, gy, cov| {
+                    let px = b.min.x as i32 + gx as i32;
+                    let py = b.min.y as i32 + gy as i32;
+                    if px >= 0 && py >= 0 && (px as u32) < img.width() && (py as u32) < img.height() {
+                        let p = img.get_pixel_mut(px as u32, py as u32);
+                        for i in 0..3 {
+                            p[i] = (fg[i] as f32 * cov + bg[i] as f32 * (1.0 - cov)).round() as u8;
+                        }
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// render_key: a key's image.
+fn render(fonts: &Fonts, size: (u32, u32), look: &Look) -> image::DynamicImage {
+    let (label, state, badge, app, count) = look;
+    let (bg, fg) = colours(state);
+    let (w, h) = size;
+    let mut img = image::RgbImage::from_pixel(w, h, image::Rgb(bg));
+    if *app {
+        // A small window glyph: the session lives in the Claude desktop app.
+        let (x, y, gw, gh) = (5u32, 5u32, 14u32, 11u32);
+        for i in x..=x + gw {
+            for j in [y, y + 3, y + gh] {
+                img.put_pixel(i, j, image::Rgb(fg));
+            }
+        }
+        for j in y..=y + gh {
+            img.put_pixel(x, j, image::Rgb(fg));
+            img.put_pixel(x + gw, j, image::Rgb(fg));
+        }
+    }
+    if !label.is_empty() {
+        let lines = wrap(label, 9);
+        let em = if lines.len() < 3 { 13.0 } else { 11.0 };
+        let line_h = em + 2.0;
+        let mut y = ((h as f32 - line_h * lines.len() as f32) / 2.0).floor();
+        for line in &lines {
+            let lw = fonts.width(line, em);
+            fonts.draw(&mut img, line, ((w as f32 - lw) / 2.0).floor(), y, em, fg, bg);
+            y += line_h;
+        }
+    }
+    if let Some(c) = count {
+        let cw = fonts.width(c, 10.0);
+        fonts.draw(&mut img, c, w as f32 - cw - 4.0, 3.0, 10.0, fg, bg);
+    }
+    if let Some(b) = badge {
+        let bw = fonts.width(b, 10.0);
+        fonts.draw(&mut img, b, w as f32 - bw - 4.0, h as f32 - 10.0 - 4.0, 10.0, fg, bg);
+    }
+    image::DynamicImage::ImageRgb8(img)
+}
+
+// -- talking to the dispatcher --------------------------------------------
+
+fn base() -> String {
+    crate::paths::env_nonempty("IMPERATORIUM_ENDPOINT_BASE").unwrap_or_else(|| "http://127.0.0.1:8792".into())
+}
+
+fn api(path: &str, payload: Option<&Value>) -> Result<Value, String> {
+    let t = Duration::from_secs(6);
+    let agent = ureq::AgentBuilder::new().timeout_connect(t).timeout_read(t).build();
+    let url = format!("{}{path}", base());
+    let resp = match payload {
+        Some(p) => agent
+            .post(&url)
+            .set("Content-Type", "application/json")
+            .send_string(&p.to_string()),
+        None => agent.get(&url).call(),
+    };
+    let text = resp.map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+struct Board {
+    sessions: Vec<Row>,
+    pending: Vec<Value>,
+    by_path: HashMap<String, String>,
+}
+
+/// One poll: sessions, parked requests, the catalogue. Err while the
+/// dispatcher is restarting - the keys say so rather than the surface exit.
+fn poll() -> Result<Board, String> {
+    let sessions = api("/api/sessions", None)?
+        .get("sessions")
+        .and_then(Value::as_array)
+        .ok_or("no sessions")?
+        .iter()
+        .filter_map(|r| r.as_object().cloned())
+        .collect();
+    let pending = api("/api/pending", None)?
+        .get("pending")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut by_path = HashMap::new();
+    for p in api("/api/projects", None)?
+        .get("projects")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        if let (Some(path), Some(name)) = (p.get("path").and_then(Value::as_str), p.get("name").and_then(Value::as_str)) {
+            if p.get("host").is_some_and(|h| truthy(Some(h))) {
+                continue;
+            }
+            if let Some(k) = crate::paths::abs_normcase(path) {
+                by_path.insert(k, name.to_string());
+            }
+        }
+    }
+    Ok(Board { sessions, pending, by_path })
+}
+
+fn pinned(home: Option<&str>) -> Vec<String> {
+    let path = crate::paths::config_home(home).join("config.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|c| c.get("streamdeck")?.get("keys")?.as_array().cloned())
+        .map(|k| k.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// `imperatorium streamdeck [--brightness N] [--once] [--home DIR]`.
+pub fn main(args: &[String], home: Option<&str>) -> i32 {
+    let mut brightness = 60u8;
+    let mut once = false;
+    let mut preview = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--brightness" => brightness = it.next().and_then(|v| v.parse().ok()).unwrap_or(60),
+            "--once" => once = true,
+            // One frame as PNGs (key00.png ...), no deck needed: 15 keys of 72 px.
+            "--preview" => preview = it.next().cloned(),
+            _ => {}
+        }
+    }
+    if let Some(dir) = preview {
+        let fonts = Fonts::load();
+        let mut surface = Surface::new(15, pinned(home));
+        let board = match poll() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("streamdeck: dispatcher unreachable: {e}");
+                return 1;
+            }
+        };
+        surface.set_decision(&board.pending, now() - 10.0);
+        let slots = surface.layout(&board.sessions, &board.by_path);
+        let _ = std::fs::create_dir_all(&dir);
+        for (key, look) in surface.paint(slots, now()) {
+            let path = std::path::Path::new(&dir).join(format!("key{key:02}.png"));
+            if let Err(e) = render(&fonts, (72, 72), &look).save(&path) {
+                eprintln!("{}: {e}", path.display());
+            }
+            println!("key {key:2}: {:?}", look);
+        }
+        return 0;
+    }
+    let hid = match elgato_streamdeck::new_hidapi() {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("streamdeck: {e}");
+            return 1;
+        }
+    };
+    let Some((kind, serial)) = elgato_streamdeck::list_devices(&hid).into_iter().next() else {
+        eprintln!("no Stream Deck found");
+        return 1;
+    };
+    let deck = match elgato_streamdeck::StreamDeck::connect(&hid, kind, &serial) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("streamdeck: {e:?}");
+            return 1;
+        }
+    };
+    let _ = deck.reset();
+    let _ = deck.set_brightness(brightness);
+    let keys = kind.key_count() as usize;
+    let size = kind.key_image_format().size;
+    let size = (size.0 as u32, size.1 as u32);
+    println!("{kind:?}, {keys} keys");
+    let fonts = Fonts::load();
+    let mut surface = Surface::new(keys, pinned(home));
+
+    // Polls on their own thread: a slow dispatcher never stalls the keys.
+    let (tx, rx) = mpsc::channel::<Result<Board, String>>();
+    std::thread::spawn(move || loop {
+        if tx.send(poll()).is_err() {
+            return;
+        }
+        std::thread::sleep(Duration::from_secs_f64(POLL_SECONDS));
+    });
+    let mut slots: Vec<Slot> = vec![];
+    let mut down = vec![false; keys];
+    loop {
+        let mut fresh = false;
+        while let Ok(got) = rx.try_recv() {
+            fresh = true;
+            match got {
+                Ok(b) => {
+                    surface.set_decision(&b.pending, now());
+                    slots = surface.layout(&b.sessions, &b.by_path);
+                }
+                Err(_) => {
+                    // A decision that can no longer be delivered stops being offered.
+                    surface.set_decision(&[], now());
+                    slots = vec![];
+                }
+            }
+        }
+        if fresh || surface.flashing() {
+            for (key, look) in surface.paint(slots.clone(), now()) {
+                if let Err(e) = deck.set_button_image(key as u8, render(&fonts, size, &look)) {
+                    eprintln!("key {key}: {e:?}");
+                    surface.repaint_all();
+                }
+            }
+            let _ = deck.flush();
+            if once && fresh {
+                return 0; // --once: one frame from one poll
+            }
+        }
+        match deck.read_input(Some(Duration::from_millis(100))) {
+            Ok(elgato_streamdeck::StreamDeckInput::ButtonStateChange(states)) => {
+                for (key, pressed) in states.iter().enumerate().take(keys) {
+                    if *pressed && !down[key] {
+                        if let Some((path, payload)) = surface.press(key, now()) {
+                            let label = surface.slots.get(key).map(|s| s.project.clone()).unwrap_or_default();
+                            std::thread::spawn(move || match api(path, Some(&payload)) {
+                                Ok(r) => println!("press {key:<2} {label:<24} -> {}",
+                                    r.get("action").or(r.get("error")).or(r.get("ok")).map(py_str).unwrap_or_default()),
+                                Err(e) => println!("press {key:<2} {label:<24} -> dispatcher unreachable: {e}"),
+                            });
+                        }
+                    }
+                    down[key] = *pressed;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("streamdeck: {e:?}; the deck went away");
+                return 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(v: Value) -> Row {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn wraps_like_python() {
+        assert_eq!(wrap("gem-trip", 9), ["gem trip"]);
+        assert_eq!(wrap("imperatorium", 9), ["imperato\u{2026}"]);
+        assert_eq!(wrap("ai_local_operations", 9), ["ai local", "operatio\u{2026}"]);
+        assert_eq!(wrap("a b c d e f g h i j k l m n o", 3).len(), 3);
+    }
+
+    #[test]
+    fn states() {
+        assert_eq!(state_for(None), "none");
+        assert_eq!(state_for(Some(&row(json!({"attention": true, "status": "busy"})))), "blocked");
+        assert_eq!(state_for(Some(&row(json!({"status": "idle", "background_tasks": 1})))), "working");
+        assert_eq!(state_for(Some(&row(json!({"status": "idle"})))), "idle");
+    }
+
+    #[test]
+    fn layout_pinned_first_then_blocked_then_by_name() {
+        let s = Surface::new(5, vec!["pinned".into(), "empty".into()]);
+        let rows = vec![
+            row(json!({"sessionId": "a", "cwd": "C:\\x\\zeta", "status": "idle"})),
+            row(json!({"sessionId": "b", "cwd": "C:\\x\\alpha", "status": "idle"})),
+            row(json!({"sessionId": "c", "cwd": "C:\\x\\blocked", "status": "idle", "attention": true})),
+            row(json!({"sessionId": "d", "cwd": "C:\\x\\pinned", "status": "busy", "startedAt": 2})),
+            row(json!({"sessionId": "e", "cwd": "C:\\x\\pinned", "status": "busy", "startedAt": 1})),
+            row(json!({"sessionId": "r", "cwd": "/home/x", "status": "idle", "remote": true})),
+        ];
+        let got: Vec<_> = s.layout(&rows, &HashMap::new()).into_iter().map(|sl| (sl.id, sl.count)).collect();
+        // 6 slots for 5 keys: the empty pinned project gives way first.
+        assert_eq!(got, vec![
+            ("e".to_string(), Some("1/2".to_string())),
+            ("d".to_string(), Some("2/2".to_string())),
+            ("c".to_string(), None),
+            ("b".to_string(), None),
+            ("a".to_string(), None),
+        ]);
+    }
+
+    #[test]
+    fn decisions_arm_after_a_moment() {
+        let mut s = Surface::new(15, vec![]);
+        s.set_decision(&[json!({"id": "q", "questions": [1]}), json!({"id": "p1", "tool": "Bash"})], 100.0);
+        assert_eq!(s.decide_press(13, 100.5), None);
+        assert_eq!(s.decide_press(13, 101.5).unwrap()["verdict"], "allow");
+        assert_eq!(s.decide_press(14, 101.5).unwrap()["id"], "p1");
+        assert_eq!(s.decide_press(12, 101.5), None); // the info key
+        assert_eq!(s.press(12, 101.5), None);
+    }
+
+    #[test]
+    fn a_change_flashes() {
+        let mut s = Surface::new(1, vec![]);
+        let busy = vec![Slot { id: "x".into(), project: "p".into(), label: "p".into(),
+                               row: Some(row(json!({"status": "busy"}))), count: None }];
+        let idle = vec![Slot { row: Some(row(json!({"status": "idle"}))), ..busy[0].clone() }];
+        assert_eq!(s.paint(busy, 0.0)[0].1 .1, "working");
+        assert_eq!(s.paint(idle.clone(), 10.0)[0].1 .1, "idle");
+        assert_eq!(s.paint(idle.clone(), 10.6)[0].1 .1, "working");
+        assert!(s.flashing());
+        s.paint(idle.clone(), 16.0);
+        assert!(!s.flashing());
+    }
+}
