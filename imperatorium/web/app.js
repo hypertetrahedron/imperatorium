@@ -516,12 +516,69 @@ function showEarlier(all){
   log.scrollTop = log.scrollHeight - below;  // keep what was in view in view
 }
 
+// Pure: how the turns drawn (`have`, each {i, sig}) differ from the ones
+// wanted: indexes no longer wanted, new ones, and ones whose signature moved.
+function logDiff(have, want){
+  const was = new Map(have.map(n => [n.i, n.sig]));
+  const keep = new Set(want.map(n => n.i));
+  return {gone: have.filter(n => !keep.has(n.i)).map(n => n.i),
+          fresh: want.filter(n => !was.has(n.i)).map(n => n.i),
+          changed: want.filter(n => was.has(n.i) && was.get(n.i) !== n.sig).map(n => n.i)};
+}
+
+// What #log holds, as drawLog left it: the "show earlier" bar, one element
+// per turn and the end marker. Anything else that writes into the log (a
+// note, another session) makes it stale, and the next draw starts over.
+const NEWEST = `<div class="newest"><div class="float"><div class="cold" hidden></div>` +
+  `<button data-newest="1" title="go to the end and follow it again">Show Most Recent</button></div></div>`;
+let logDom = null;   // {for, earlier: {html, el}|null, nodes: [{i, sig, el}], newest}
+const htmlEl = html => { const t = document.createElement("template"); t.innerHTML = html; return t.content.firstElementChild; };
+
+function patchLog(log, earlier, want){
+  let d = logDom;
+  const intact = d && d.for === selected && d.newest.parentNode === log &&
+    d.nodes.every(n => n.el.parentNode === log) && (!d.earlier || d.earlier.el.parentNode === log) &&
+    log.children.length === d.nodes.length + 1 + (d.earlier ? 1 : 0);
+  if (!intact){
+    // From nothing: one parse for the lot, then each piece found again.
+    log.innerHTML = earlier + want.map(w => w.html).join("") + NEWEST;
+    const kids = [...log.children], n = want.length + 1 + (earlier ? 1 : 0);
+    if (kids.length !== n){ logDom = null; return; }   // markup that does not nest: drawn, not tracked
+    let at = 0;
+    logDom = {for: selected, earlier: earlier ? {html: earlier, el: kids[at++]} : null,
+      nodes: want.map(w => ({i: w.i, sig: w.sig, el: kids[at++]})), newest: kids[at]};
+    return;
+  }
+  const diff = logDiff(d.nodes, want), gone = new Set(diff.gone), changed = new Set(diff.changed);
+  d.nodes = d.nodes.filter(n => { if (gone.has(n.i)) n.el.remove(); return !gone.has(n.i); });
+  let prev = null;
+  if (earlier){
+    if (!d.earlier || d.earlier.html !== earlier){
+      const el = htmlEl(earlier);
+      if (d.earlier) d.earlier.el.replaceWith(el); else log.insertBefore(el, log.firstChild);
+      d.earlier = {html: earlier, el};
+    }
+    prev = d.earlier.el;
+  } else if (d.earlier){ d.earlier.el.remove(); d.earlier = null; }
+  const have = new Map(d.nodes.map(n => [n.i, n]));
+  d.nodes = want.map(w => {
+    let n = have.get(w.i);
+    if (!n) n = {i: w.i, sig: w.sig, el: htmlEl(w.html)};
+    else if (changed.has(w.i)){ const el = htmlEl(w.html); n.el.replaceWith(el); n = {i: w.i, sig: w.sig, el}; }
+    const at = prev ? prev.nextSibling : log.firstChild;
+    if (n.el !== at) log.insertBefore(n.el, at);
+    prev = n.el;
+    return n;
+  });
+  if (log.lastElementChild !== d.newest) log.append(d.newest);
+}
+
 function drawLog(force){
   if (!selected) return;
   // A busy session repaints the log on every change; not under a press.
   if (held("#log", () => drawLog(force))) return;
   const log = $("#log");
-  if (openedFor !== selected){ opened = new Set(); openedFor = selected; logShown = LOG_WINDOW; }
+  if (openedFor !== selected){ opened = new Set(); openedFor = selected; logShown = LOG_WINDOW; logDom = null; }
   if (force) logFollow = true;
   const start = logStart(logItems.length, logShown);
   const earlier = start ? `<div class="earlier"><button data-earlier="1">show ${Math.min(start, LOG_STEP)} earlier</button>${
@@ -532,20 +589,33 @@ function drawLog(force){
     if (b.kind === "tool" && b.id){ toolNames.set(b.id, b.name); if (b.questions) b.session = selected; }
     if (b.kind === "result" && b.id) toolResults.set(b.id, b.text);
   }
-  log.innerHTML = earlier + logItems.slice(start).map((it, j) => {
+  // Each turn is its own element, kept while what it would be drawn from is
+  // unchanged: a busy session adds a turn or finishes the last one, and the
+  // rest of a long conversation stays as it is (scroll, selection, hover,
+  // marks and open blocks included). Its signature is the html itself, so
+  // anything a turn is drawn from - the shape controls, the blocks opened by
+  // hand, the tool a result answers - changes it - plus the search, whose
+  // marks are put into the element.
+  const want = [];
+  logItems.slice(start).forEach((it, j) => {
     const i = start + j;
     // Where the session compacted: the summary that replaced everything above
     // it, folded away, since the real conversation is now shown in full.
+    let html;
     if (it.note === SUMMARY_NOTE)
-      return modeOf("system") === "hidden" ? "" : `<details class="compact"><summary>compacted here - show the summary it kept</summary>${
+      html = modeOf("system") === "hidden" ? "" : `<details class="compact"><summary>compacted here - show the summary it kept</summary>${
         renderBlocks(it.blocks)}</details>`;
-    const body = shapeBlocks(it, i, opened);
-    if (!body) return "";
-    return `<div class="turn${it.speaker === "you" ? " you-turn" : ""}${it.note ? " sys" : ""}${findSet.has(i) ? " found" : ""}" data-i="${i}"><div class="who ${esc(it.speaker || it.role)}">${
-      esc(it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${body}</div>`;
-  }).join("") || `<div class="note">${logItems.length ? "everything here is hidden - see the display settings below" : "nothing yet"}</div>`;
-  log.insertAdjacentHTML("beforeend", `<div class="newest"><div class="float"><div class="cold" hidden></div>` +
-    `<button data-newest="1" title="go to the end and follow it again">Show Most Recent</button></div></div>`);
+    else {
+      const body = shapeBlocks(it, i, opened);
+      html = !body ? "" : `<div class="turn${it.speaker === "you" ? " you-turn" : ""}${it.note ? " sys" : ""}${findSet.has(i) ? " found" : ""}" data-i="${i}"><div class="who ${esc(it.speaker || it.role)}">${
+        esc(it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${body}</div>`;
+    }
+    if (html) want.push({i, html, sig: findSet.has(i) ? html + "\0" + finds.q : html});
+  });
+  if (!want.length){
+    log.innerHTML = earlier + `<div class="note">${logItems.length ? "everything here is hidden - see the display settings below" : "nothing yet"}</div>` + NEWEST;
+    logDom = null;
+  } else patchLog(log, earlier, want);
   drawCold(current());
   markFinds();
   if (logFollow) log.scrollTop = log.scrollHeight;
