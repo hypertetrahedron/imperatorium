@@ -13,8 +13,9 @@ pub const DEFAULT_TIMEOUT: f64 = 90.0;
 
 /// background.short_name: the first four words, letters and digits only.
 pub fn short_name(prompt: &str) -> Option<String> {
-    let words: Vec<&str> = Regex::new("[A-Za-z0-9]+")
-        .unwrap()
+    static WORD: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let words: Vec<&str> = WORD
+        .get_or_init(|| Regex::new("[A-Za-z0-9]+").expect("the word pattern"))
         .find_iter(prompt)
         .map(|m| m.as_str())
         .collect();
@@ -71,8 +72,8 @@ pub fn build_command(prompt: &str, options: &Map<String, Value>) -> Vec<String> 
 
 /// background.parse_id: the last short hex id printed.
 pub fn parse_id(stdout: &str) -> Option<String> {
-    Regex::new(r"\b([0-9a-f]{6,12})\b")
-        .unwrap()
+    static ID: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    ID.get_or_init(|| Regex::new(r"\b([0-9a-f]{6,12})\b").expect("the id pattern"))
         .captures_iter(stdout)
         .last()
         .map(|c| c[1].to_string())

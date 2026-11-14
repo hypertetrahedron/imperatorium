@@ -39,7 +39,11 @@ pub fn git(cwd: &str, args: &[&str], check: bool) -> Result<String, String> {
         }
         Err(e) => return Err(e.to_string()),
     };
-    let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    // Both were set to Stdio::piped() above, so both are there.
+    let (mut out, mut err) = (
+        child.stdout.take().expect("stdout is piped"),
+        child.stderr.take().expect("stderr is piped"),
+    );
     let o = std::thread::spawn(move || {
         let mut b = Vec::new();
         let _ = std::io::Read::read_to_end(&mut out, &mut b);
@@ -428,8 +432,9 @@ pub fn make_worktree(source: &str, name: &str) -> Result<Option<Value>, String> 
         Some(b) => b.clone(),
         None => crate::pyish::strip(&git(source, &["rev-parse", "HEAD"], true)?).to_string(),
     };
-    let stem: String = Regex::new("[^A-Za-z0-9-]+")
-        .unwrap()
+    static NOT_STEM: OnceLock<Regex> = OnceLock::new();
+    let stem: String = NOT_STEM
+        .get_or_init(|| Regex::new("[^A-Za-z0-9-]+").expect("the stem pattern"))
         .replace_all(name, "-")
         .trim_matches('-')
         .to_lowercase()
@@ -667,7 +672,11 @@ fn run(cmd: &[&str], cwd: Option<&str>) -> (i32, String) {
         Ok(ch) => ch,
         Err(e) => return (1, e.to_string()),
     };
-    let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    // Both were set to Stdio::piped() above, so both are there.
+    let (mut out, mut err) = (
+        child.stdout.take().expect("stdout is piped"),
+        child.stderr.take().expect("stderr is piped"),
+    );
     let o = std::thread::spawn(move || {
         let mut b = Vec::new();
         let _ = std::io::Read::read_to_end(&mut out, &mut b);

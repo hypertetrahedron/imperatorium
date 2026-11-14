@@ -181,8 +181,19 @@ fn whole(re: &regex::Regex, v: &str) -> bool {
     re.is_match(v) || v.strip_suffix('\n').is_some_and(|t| re.is_match(t))
 }
 
-fn rx(pattern: &str) -> regex::Regex {
-    regex::Regex::new(&format!(r"\A(?:{pattern})\z")).expect("a settings pattern")
+/// A whole-value pattern, compiled once per pattern (a Regex clone shares
+/// the compiled program).
+fn rx(pattern: &'static str) -> regex::Regex {
+    type Compiled = std::collections::HashMap<&'static str, regex::Regex>;
+    static SEEN: OnceLock<std::sync::Mutex<Compiled>> = OnceLock::new();
+    use crate::locks::LockExt;
+    SEEN.get_or_init(Default::default)
+        .lk()
+        .entry(pattern)
+        .or_insert_with(|| {
+            regex::Regex::new(&format!(r"\A(?:{pattern})\z")).expect("a settings pattern")
+        })
+        .clone()
 }
 
 /// settings._lines: one item per line or comma, stripped, blanks dropped.
