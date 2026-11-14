@@ -3773,7 +3773,7 @@ impl Shared {
             None
         };
         Body::Text(
-            ui::with_meta(token, &page.inline(), &self.boot, drawn.as_ref()),
+            ui::with_meta(token, &page.linked(), &self.boot, drawn.as_ref()),
             "text/html; charset=utf-8",
         )
     }
@@ -3787,6 +3787,22 @@ impl Shared {
         // Handler._arg: the first value of a query parameter, else "".
         let arg = |name: &str| q.get(name).cloned().unwrap_or_default();
         if method == "GET" {
+            if let Some(name) = path.strip_prefix("/ui/") {
+                // The window's styles and scripts. A request carrying the
+                // current ?v= can be kept for good; any other still
+                // revalidates by ETag.
+                return match (ui::asset(name), ui::version(name)) {
+                    (Some((ctype, body)), Some(v)) => {
+                        let cache = if arg("v") == v {
+                            "public, max-age=31536000, immutable"
+                        } else {
+                            "no-cache"
+                        };
+                        (200, Body::Static(body, ctype, cache, v))
+                    }
+                    _ => (404, Body::Json(json!({"error": "no such file"}))),
+                };
+            }
             if let Some(name) = path.strip_prefix("/fonts/") {
                 return match ui::font(name) {
                     Some(bytes) => (200, Body::Bytes(bytes, "font/woff2", "max-age=86400")),
@@ -4093,27 +4109,48 @@ pub enum Body {
     Json(Value),
     /// JSON text already assembled.
     Raw(String),
-    /// Text of another type (a page).
+    /// Text of another type (a page): revalidated by ETag, never stored
+    /// without asking, as its token, boot id and look can change.
     Text(String, &'static str),
+    /// A compiled-in text file (a style or script) with its Cache-Control
+    /// and version, which is its ETag.
+    Static(&'static str, &'static str, &'static str, &'static str),
     /// Bytes served as they are (a font), with their Cache-Control.
     Bytes(&'static [u8], &'static str, &'static str),
 }
 
 impl Body {
-    /// (bytes, Content-Type, Cache-Control)
-    pub fn into_parts(self) -> (Vec<u8>, &'static str, &'static str) {
+    /// (bytes, Content-Type, Cache-Control, ETag)
+    pub fn into_parts(self) -> (Vec<u8>, &'static str, &'static str, Option<String>) {
         const JSON: &str = "application/json; charset=utf-8";
         match self {
             Body::Json(v) => (
                 serde_json::to_vec(&v).unwrap_or_else(|_| b"{}".to_vec()),
                 JSON,
                 "no-store",
+                None,
             ),
-            Body::Raw(t) => (t.into_bytes(), JSON, "no-store"),
-            Body::Text(t, ctype) => (t.into_bytes(), ctype, "no-store"),
-            Body::Bytes(b, ctype, cache) => (b.to_vec(), ctype, cache),
+            Body::Raw(t) => (t.into_bytes(), JSON, "no-store", None),
+            Body::Text(t, ctype) => {
+                use sha2::{Digest, Sha256};
+                let sum = Sha256::digest(t.as_bytes());
+                let tag: String = sum.iter().take(8).map(|b| format!("{b:02x}")).collect();
+                (t.into_bytes(), ctype, "no-cache", Some(tag))
+            }
+            Body::Static(t, ctype, cache, v) => {
+                (t.as_bytes().to_vec(), ctype, cache, Some(v.to_string()))
+            }
+            Body::Bytes(b, ctype, cache) => (b.to_vec(), ctype, cache, None),
         }
     }
+}
+
+/// Whether an If-None-Match header names `etag` (or is `*`), weak or not.
+fn etag_matches(header: &str, etag: &str) -> bool {
+    header
+        .split(',')
+        .map(|t| t.trim().trim_start_matches("W/").trim_matches('"'))
+        .any(|t| t == "*" || t == etag)
 }
 
 /// secrets.token_urlsafe(n): n random bytes, base64url without padding.
@@ -4355,11 +4392,21 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
             } else {
                 shared.handle(&method, request.url())
             };
-            let (bytes, ctype, cache) = body.into_parts();
+            let (bytes, ctype, cache, etag) = body.into_parts();
+            let unchanged = code == 200
+                && method == "GET"
+                && etag.as_deref().is_some_and(|tag| {
+                    request
+                        .headers()
+                        .iter()
+                        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("If-None-Match"))
+                        .is_some_and(|h| etag_matches(h.value.as_str(), tag))
+                });
+            let (code, bytes) = if unchanged { (304, Vec::new()) } else { (code, bytes) };
             // Content-Length, as the Python dispatcher sends: tiny_http goes
             // chunked above 32 KiB by default, and a conversation is often
             // several hundred.
-            let resp = tiny_http::Response::from_data(bytes)
+            let mut resp = tiny_http::Response::from_data(bytes)
                 .with_chunked_threshold(usize::MAX)
                 .with_status_code(code)
                 .with_header(
@@ -4368,6 +4415,12 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
                 .with_header(
                     tiny_http::Header::from_bytes(&b"Cache-Control"[..], cache.as_bytes()).unwrap(),
                 );
+            if let Some(tag) = etag {
+                resp.add_header(
+                    tiny_http::Header::from_bytes(&b"ETag"[..], format!("\"{tag}\"").as_bytes())
+                        .unwrap(),
+                );
+            }
             let _ = request.respond(resp);
         });
     }
@@ -4386,6 +4439,14 @@ mod tests {
             signature(&[json!({"b": 1, "a": "\u{e9}"})]),
             "09e09a7b616b14d8"
         );
+    }
+
+    #[test]
+    fn etags_match_as_browsers_send_them() {
+        assert!(etag_matches("\"abc\"", "abc"));
+        assert!(etag_matches("W/\"abc\", \"def\"", "def"));
+        assert!(etag_matches("*", "abc"));
+        assert!(!etag_matches("\"abd\"", "abc"));
     }
 
     #[test]

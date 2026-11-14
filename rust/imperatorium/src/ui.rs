@@ -22,7 +22,48 @@ const APP_JS: &str = web!("app.js");
 const MATRIX_JS: &str = web!("matrix.js");
 const SETTINGS_JS: &str = web!("settings.js");
 
-/// A page's skeleton (`{{STYLES}}` and `{{SCRIPTS}}` marks) and what fills them.
+/// The files the pages link to, by the name in `/ui/<name>`.
+const ASSETS: &[(&str, &str, &str)] = &[
+    ("app.css", "text/css; charset=utf-8", APP_CSS),
+    ("matrix.css", "text/css; charset=utf-8", MATRIX_CSS),
+    ("settings.css", "text/css; charset=utf-8", SETTINGS_CSS),
+    ("shared.js", "text/javascript; charset=utf-8", SHARED_JS),
+    ("app.js", "text/javascript; charset=utf-8", APP_JS),
+    ("matrix.js", "text/javascript; charset=utf-8", MATRIX_JS),
+    ("settings.js", "text/javascript; charset=utf-8", SETTINGS_JS),
+];
+
+/// What identifies a version of a file: the first 12 hex digits of its
+/// SHA-256. Pages carry it as `?v=`, so a changed file is a new URL.
+pub fn version(name: &str) -> Option<&'static str> {
+    use sha2::{Digest, Sha256};
+    use std::sync::OnceLock;
+    static VERSIONS: OnceLock<Vec<String>> = OnceLock::new();
+    let all = VERSIONS.get_or_init(|| {
+        ASSETS
+            .iter()
+            .map(|(_, _, body)| {
+                let sum = Sha256::digest(body.as_bytes());
+                sum.iter().take(6).map(|b| format!("{b:02x}")).collect()
+            })
+            .collect()
+    });
+    ASSETS
+        .iter()
+        .position(|(n, _, _)| *n == name)
+        .map(|i| all[i].as_str())
+}
+
+/// `/ui/<name>`: (Content-Type, body) of a style or script, if there is one.
+pub fn asset(name: &str) -> Option<(&'static str, &'static str)> {
+    ASSETS
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, ctype, body)| (*ctype, *body))
+}
+
+/// A page's skeleton (`{{STYLES}}` and `{{SCRIPTS}}` marks) and the files
+/// that fill them.
 pub struct Page {
     template: &'static str,
     styles: &'static [&'static str],
@@ -31,35 +72,38 @@ pub struct Page {
 
 pub const SHELL: Page = Page {
     template: web!("shell.html"),
-    styles: &[APP_CSS],
-    scripts: &[SHARED_JS, APP_JS],
+    styles: &["app.css"],
+    scripts: &["shared.js", "app.js"],
 };
 pub const MATRIX: Page = Page {
     template: web!("matrix.html"),
-    styles: &[APP_CSS, MATRIX_CSS],
-    scripts: &[SHARED_JS, MATRIX_JS],
+    styles: &["app.css", "matrix.css"],
+    scripts: &["shared.js", "matrix.js"],
 };
 pub const SETTINGS: Page = Page {
     template: web!("settings.html"),
-    styles: &[APP_CSS, SETTINGS_CSS],
-    scripts: &[SHARED_JS, SETTINGS_JS],
+    styles: &["app.css", "settings.css"],
+    scripts: &["shared.js", "settings.js"],
 };
 
 impl Page {
-    /// The page as one self-contained document: the styles and scripts
-    /// inline, as `ui._page` sends them.
-    pub fn inline(&self) -> String {
+    /// The page with its styles and scripts linked as `/ui/<name>?v=<hash>`
+    /// (see `asset`), so a browser keeps them between loads and the page
+    /// itself is a few kilobytes. (The Python dispatcher sends the same
+    /// page with them inline.)
+    pub fn linked(&self) -> String {
         let (before, rest) = self.template.split_once("{{STYLES}}").unwrap_or((self.template, ""));
         let (middle, after) = rest.split_once("{{SCRIPTS}}").unwrap_or((rest, ""));
-        let mut out = String::with_capacity(self.template.len() + 300_000);
+        let url = |n: &str| format!("/ui/{n}?v={}", version(n).unwrap_or(""));
+        let mut out = String::with_capacity(self.template.len() + 600);
         out.push_str(before);
-        out.push_str("<style>");
-        self.styles.iter().for_each(|s| out.push_str(s));
-        out.push_str("</style>");
+        for n in self.styles {
+            out.push_str(&format!("<link rel=stylesheet href=\"{}\">", url(n)));
+        }
         out.push_str(middle);
-        out.push_str("<script>");
-        self.scripts.iter().for_each(|s| out.push_str(s));
-        out.push_str("</script>");
+        for n in self.scripts {
+            out.push_str(&format!("<script src=\"{}\"></script>", url(n)));
+        }
         out.push_str(after);
         out
     }
@@ -243,6 +287,25 @@ mod tests {
             "<html><head><meta charset=utf-8><meta name=imp-window content=\"t&lt;k&gt;\">\
              <meta name=imp-boot content=\"b&quot;1\"><meta charset=utf-8></head></html>"
         );
+    }
+
+    #[test]
+    fn pages_link_their_files_by_version() {
+        let page = SHELL.linked();
+        let v = version("app.js").unwrap();
+        assert_eq!(v.len(), 12);
+        assert!(page.contains(&format!("<script src=\"/ui/app.js?v={v}\"></script>")));
+        assert!(page.contains("<link rel=stylesheet href=\"/ui/app.css?v="));
+        assert!(!page.contains("{{"));
+        assert!(page.len() < 20_000, "a linked page is a skeleton");
+        // shared.js comes before the script that uses it.
+        assert!(page.find("/ui/shared.js").unwrap() < page.find("/ui/app.js").unwrap());
+        for p in [&SHELL, &MATRIX, &SETTINGS] {
+            for n in p.styles.iter().chain(p.scripts) {
+                assert!(asset(n).is_some() && version(n).is_some(), "{n}");
+            }
+        }
+        assert!(asset("../ui.rs").is_none());
     }
 
     #[test]
