@@ -1,0 +1,69 @@
+
+body{overflow:hidden}
+#mx{position:fixed;inset:0}
+#grid{position:absolute;display:grid}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.tile[data-k]{cursor:pointer;user-select:none}
+/* The ring goes outside the border: an inset one is painted under the tile's
+   own contents, so the header hid it at the top and only some sides showed. */
+.tile.attn{border-color:var(--warn);box-shadow:0 0 0 1px var(--warn)}
+/* Working and waiting on tasks get a plain 1px outline; the states that want
+   you (complete, needs you, failed) a doubled one, so they still stand out
+   in a grid of busy sessions. */
+.tile.busy{border-color:var(--busy)}
+.tile.tasks{border-color:var(--ok)}
+.tile.comp{border-color:var(--comp);box-shadow:0 0 0 1px var(--comp)}
+.tile.comp .why{color:var(--comp);background:var(--compbg)}
+.tile.fail{border-color:var(--fail);box-shadow:0 0 0 1px var(--fail)}
+.th{display:flex;align-items:center;gap:6px;padding:6px 9px;border-bottom:1px solid var(--line);
+  background:var(--side);font-size:13px;flex:none;min-width:0}
+.th .dot{margin-right:0;flex:none}
+.th .nm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.th .meta{margin-left:auto;color:var(--muted);font-size:12px;white-space:nowrap;flex:none}
+.tile .why{padding:3px 9px;font-size:12px;color:var(--warn);background:var(--warnbg);flex:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* No scrolling: the newest reply sits at the bottom and older ones run off
+   the top, faded. The main window is where a conversation gets read. */
+.tb{flex:1;overflow:hidden;padding:4px 9px 8px;font-size:13px;line-height:1.45;min-height:0;
+  display:flex;flex-direction:column;justify-content:flex-end;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 28px);
+  mask-image:linear-gradient(to bottom,transparent 0,#000 28px)}
+.tb > *{flex:none;zoom:var(--matrixz,1)}
+.tb .rp{padding:5px 0;overflow-wrap:anywhere}
+.tb .rp.newturn{border-top:1px dashed var(--line);margin-top:4px;padding-top:8px}
+.tb .rp .txt{white-space:pre-wrap}
+.tb pre.code{background:var(--code);padding:5px 7px;border-radius:5px;font-size:12px;line-height:1.4;
+  font-family:var(--mono);overflow:hidden;margin:4px 0;white-space:pre}
+.tb code{font-family:var(--mono);font-size:12px;background:var(--code);padding:0 3px;border-radius:3px}
+.tb .md ul,.tb .md ol{margin:2px 0;padding-left:18px}
+.tb .h{font-weight:700;margin:4px 0 2px}
+.tb blockquote{margin:3px 0;padding-left:8px;border-left:3px solid var(--line);color:var(--muted)}
+.tb table{border-collapse:collapse;font-size:12px}
+.tb td,.tb th{border:1px solid var(--line);padding:1px 5px}
+.tb .none{color:var(--muted);font-style:italic;padding:8px 0}
+.cur{display:flex;align-items:center;gap:6px;margin-top:6px;padding:4px 7px;border-radius:5px;
+  background:var(--sel);font-size:12px;min-width:0}
+.cur b{flex:none}
+.cur .what{font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cur.thought{background:transparent;border:1px dashed var(--line);color:var(--muted);font-style:italic}
+.cur.thought .what{font-family:inherit}
+.cur.wait .what{font-family:inherit}
+.cur .more{flex:none;color:var(--muted)}
+.spin{flex:none;width:8px;height:8px;border-radius:50%;background:var(--busy);
+  animation:pulse 1.2s ease-in-out infinite}
+/* The state dot in a tile's header pulses with the main window's (CSS),
+   so work shows at a glance even with the step line run off. */
+@media (prefers-reduced-motion: reduce){.spin{animation:none}}
+.stat{padding:10px 12px;overflow:hidden;font-size:13px}
+.stat h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 6px}
+.stat .big{font-size:26px;font-weight:700;line-height:1.1}
+.stat .big.tok{font-size:20px}
+.stat .sub{color:var(--muted);font-size:12px;margin-bottom:8px}
+.stat table{width:100%;border-collapse:collapse;font-size:12px}
+.stat td{padding:2px 0;vertical-align:top}
+.stat td.n{text-align:right;white-space:nowrap;padding-left:8px}
+.stat .meters.top{margin-bottom:12px}
+.stat .sec{margin-top:10px}
+#gone{position:fixed;left:50%;top:10px;transform:translateX(-50%);background:var(--warnbg);
+  color:var(--warn);border:1px solid var(--warn);border-radius:5px;padding:3px 10px;font-size:12px}

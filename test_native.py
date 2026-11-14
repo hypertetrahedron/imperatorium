@@ -128,11 +128,12 @@ class NativeReader(unittest.TestCase):
 
 
 class EmbeddedPages(unittest.TestCase):
-    """The binary embeds the window's pages, written from ui.py by
-    rust/assets/export_ui.py. A change to ui.py must be exported, or the
-    native dispatcher would serve yesterday's window."""
+    """The binary embeds the settings schema, written from settings.py by
+    rust/assets/export_ui.py. A change to settings.py or ui.SHORTCUTS must be
+    exported, or the native dispatcher would show yesterday's settings. (The
+    pages themselves are compiled from imperatorium/web/ directly.)"""
 
-    def test_the_exported_pages_are_current(self):
+    def test_the_exported_schema_is_current(self):
         import subprocess
         here = os.path.dirname(os.path.abspath(__file__))
         done = subprocess.run([sys.executable, os.path.join(here, "rust", "assets", "export_ui.py"),

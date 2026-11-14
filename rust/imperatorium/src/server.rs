@@ -3334,7 +3334,13 @@ impl Shared {
     /// snapshot (a hook event, a remote poll landing), then looks once
     /// STREAM_MIN_GAP has passed. Every stream sends the same snapshot's
     /// JSON, serialised once.
-    pub fn stream(&self, out: &mut dyn std::io::Write) {
+    ///
+    /// `/api/stream?matrix=1` is the Chat Matrix's: not the session list but
+    /// `event: matrix`, the whole of /api/matrix, sent once on connecting and
+    /// again whenever it changes (see `stream_matrix`). Python answers it
+    /// with the session list, which the matrix page does not count as a push
+    /// and so keeps polling.
+    pub fn stream(&self, out: &mut dyn std::io::Write, matrix: bool) {
         let head = "HTTP/1.0 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
                     Cache-Control: no-store\r\n\r\n";
         if out
@@ -3343,6 +3349,9 @@ impl Shared {
             .is_err()
         {
             return;
+        }
+        if matrix {
+            return self.stream_matrix(out);
         }
         let (mut quiet, mut looked) = (Self::now(), 0.0);
         let mut last: Option<Arc<PublicSnap>> = None;
@@ -3373,6 +3382,37 @@ impl Shared {
                 return; // the page went away
             }
             self.wait_change(seen, STREAM_EVERY);
+        }
+    }
+
+    /// The matrix's stream: what its page would have polled for every
+    /// MATRIX_EVERY seconds, sent only when it differs from the last send
+    /// (`now` aside, which the page does not read). The same work as the
+    /// poll, minus the requests, the parsing and the redraws when nothing
+    /// has moved.
+    fn stream_matrix(&self, out: &mut dyn std::io::Write) {
+        const MATRIX_EVERY: f64 = 1.5;
+        let (mut last, mut quiet) = (String::new(), Self::now());
+        loop {
+            let mut body = self.api_matrix();
+            if let Some(o) = body.as_object_mut() {
+                o.remove("now");
+            }
+            let same = json_dumps_sorted(&body);
+            let sent = if same != last {
+                last = same;
+                quiet = Self::now();
+                write!(out, "event: matrix\ndata: {body}\n\n").and_then(|_| out.flush())
+            } else if Self::now() - quiet >= STREAM_KEEPALIVE {
+                quiet = Self::now();
+                out.write_all(b": keepalive\n\n").and_then(|_| out.flush())
+            } else {
+                Ok(())
+            };
+            if sent.is_err() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs_f64(MATRIX_EVERY));
         }
     }
 
@@ -3887,14 +3927,14 @@ impl Shared {
         out
     }
 
-    fn page(&self, page: &str, token: &str, with_look: bool) -> Body {
+    fn page(&self, page: &ui::Page, token: &str, with_look: bool) -> Body {
         let drawn = if with_look {
             Some(look(&self.config()))
         } else {
             None
         };
         Body::Text(
-            ui::with_meta(token, page, &self.boot, drawn.as_ref()),
+            ui::with_meta(token, &page.linked(), &self.boot, drawn.as_ref()),
             "text/html; charset=utf-8",
         )
     }
@@ -3908,6 +3948,22 @@ impl Shared {
         // Handler._arg: the first value of a query parameter, else "".
         let arg = |name: &str| q.get(name).cloned().unwrap_or_default();
         if method == "GET" {
+            if let Some(name) = path.strip_prefix("/ui/") {
+                // The window's styles and scripts. A request carrying the
+                // current ?v= can be kept for good; any other still
+                // revalidates by ETag.
+                return match (ui::asset(name), ui::version(name)) {
+                    (Some((ctype, body)), Some(v)) => {
+                        let cache = if arg("v") == v {
+                            "public, max-age=31536000, immutable"
+                        } else {
+                            "no-cache"
+                        };
+                        (200, Body::Static(body, ctype, cache, v))
+                    }
+                    _ => (404, Body::Json(json!({"error": "no such file"}))),
+                };
+            }
             if let Some(name) = path.strip_prefix("/fonts/") {
                 return match ui::font(name) {
                     Some(bytes) => (200, Body::Bytes(bytes, "font/woff2", "max-age=86400")),
@@ -3916,9 +3972,9 @@ impl Shared {
             }
         }
         match (method, path) {
-            ("GET", "/") => (200, self.page(ui::SHELL, &self.window_token, true)),
-            ("GET", "/matrix") => (200, self.page(ui::MATRIX, "", true)),
-            ("GET", "/settings") => (200, self.page(ui::SETTINGS, &self.window_token, false)),
+            ("GET", "/") => (200, self.page(&ui::SHELL, &self.window_token, true)),
+            ("GET", "/matrix") => (200, self.page(&ui::MATRIX, "", true)),
+            ("GET", "/settings") => (200, self.page(&ui::SETTINGS, &self.window_token, false)),
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
             // Remote hosts are phase 4: until then this dispatcher polls none.
             ("GET", "/api/hosts") => (200, Body::Json(self.hosts_status())),
@@ -4248,27 +4304,48 @@ pub enum Body {
     Json(Value),
     /// JSON text already assembled.
     Raw(String),
-    /// Text of another type (a page).
+    /// Text of another type (a page): revalidated by ETag, never stored
+    /// without asking, as its token, boot id and look can change.
     Text(String, &'static str),
+    /// A compiled-in text file (a style or script) with its Cache-Control
+    /// and version, which is its ETag.
+    Static(&'static str, &'static str, &'static str, &'static str),
     /// Bytes served as they are (a font), with their Cache-Control.
     Bytes(&'static [u8], &'static str, &'static str),
 }
 
 impl Body {
-    /// (bytes, Content-Type, Cache-Control)
-    pub fn into_parts(self) -> (Vec<u8>, &'static str, &'static str) {
+    /// (bytes, Content-Type, Cache-Control, ETag)
+    pub fn into_parts(self) -> (Vec<u8>, &'static str, &'static str, Option<String>) {
         const JSON: &str = "application/json; charset=utf-8";
         match self {
             Body::Json(v) => (
                 serde_json::to_vec(&v).unwrap_or_else(|_| b"{}".to_vec()),
                 JSON,
                 "no-store",
+                None,
             ),
-            Body::Raw(t) => (t.into_bytes(), JSON, "no-store"),
-            Body::Text(t, ctype) => (t.into_bytes(), ctype, "no-store"),
-            Body::Bytes(b, ctype, cache) => (b.to_vec(), ctype, cache),
+            Body::Raw(t) => (t.into_bytes(), JSON, "no-store", None),
+            Body::Text(t, ctype) => {
+                use sha2::{Digest, Sha256};
+                let sum = Sha256::digest(t.as_bytes());
+                let tag: String = sum.iter().take(8).map(|b| format!("{b:02x}")).collect();
+                (t.into_bytes(), ctype, "no-cache", Some(tag))
+            }
+            Body::Static(t, ctype, cache, v) => {
+                (t.as_bytes().to_vec(), ctype, cache, Some(v.to_string()))
+            }
+            Body::Bytes(b, ctype, cache) => (b.to_vec(), ctype, cache, None),
         }
     }
+}
+
+/// Whether an If-None-Match header names `etag` (or is `*`), weak or not.
+fn etag_matches(header: &str, etag: &str) -> bool {
+    header
+        .split(',')
+        .map(|t| t.trim().trim_start_matches("W/").trim_matches('"'))
+        .any(|t| t == "*" || t == etag)
 }
 
 /// secrets.token_urlsafe(n): n random bytes, base64url without padding.
@@ -4617,9 +4694,13 @@ fn panic_text(e: &(dyn std::any::Any + Send)) -> String {
 fn answer(mut request: tiny_http::Request, shared: &Arc<Shared>, port: u16) {
     let (method, path) = route_of(&request);
     if method == "GET" && path == "/api/stream" {
+        let matrix = request
+            .url()
+            .split_once('?')
+            .is_some_and(|(_, q)| q.split('&').any(|kv| kv == "matrix=1"));
         let mut writer = request.into_writer();
         let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            shared.stream(&mut *writer)
+            shared.stream(&mut *writer, matrix)
         }));
         if let Err(e) = got {
             eprintln!("imperatorium: GET /api/stream panicked: {}", panic_text(&*e));
@@ -4665,11 +4746,21 @@ fn answer(mut request: tiny_http::Request, shared: &Arc<Shared>, port: u16) {
         eprintln!("imperatorium: {method} {path} panicked: {}", panic_text(&*e));
         (500, Body::Json(json!({"error": "internal error"})))
     });
-    let (bytes, ctype, cache) = body.into_parts();
+    let (bytes, ctype, cache, etag) = body.into_parts();
+    let unchanged = code == 200
+        && method == "GET"
+        && etag.as_deref().is_some_and(|tag| {
+            request
+                .headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("If-None-Match"))
+                .is_some_and(|h| etag_matches(h.value.as_str(), tag))
+        });
+    let (code, bytes) = if unchanged { (304, Vec::new()) } else { (code, bytes) };
     // Content-Length, as the Python dispatcher sends: tiny_http goes
     // chunked above 32 KiB by default, and a conversation is often
     // several hundred.
-    let resp = tiny_http::Response::from_data(bytes)
+    let mut resp = tiny_http::Response::from_data(bytes)
         .with_chunked_threshold(usize::MAX)
         .with_status_code(code)
         .with_header(
@@ -4680,6 +4771,11 @@ fn answer(mut request: tiny_http::Request, shared: &Arc<Shared>, port: u16) {
             tiny_http::Header::from_bytes(&b"Cache-Control"[..], cache.as_bytes())
                 .expect("a static header"),
         );
+    if let Some(tag) = etag {
+        if let Ok(h) = tiny_http::Header::from_bytes(&b"ETag"[..], format!("\"{tag}\"").as_bytes()) {
+            resp.add_header(h);
+        }
+    }
     let _ = request.respond(resp);
 }
 
@@ -4734,6 +4830,14 @@ mod tests {
             signature(&[json!({"b": 1, "a": "\u{e9}"})]),
             "09e09a7b616b14d8"
         );
+    }
+
+    #[test]
+    fn etags_match_as_browsers_send_them() {
+        assert!(etag_matches("\"abc\"", "abc"));
+        assert!(etag_matches("W/\"abc\", \"def\"", "def"));
+        assert!(etag_matches("*", "abc"));
+        assert!(!etag_matches("\"abd\"", "abc"));
     }
 
     #[test]

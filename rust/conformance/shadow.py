@@ -166,8 +166,29 @@ import re  # noqa: E402
 PER_START = re.compile(rb'(<meta name=imp-(?:window|boot) content=")[^"]*(")')
 
 
+LINKED_STYLES = re.compile(rb'(?:<link rel=stylesheet href="(/ui/[^"]+)">)+')
+LINKED_SCRIPTS = re.compile(rb'(?:<script src="(/ui/[^"]+)"></script>)+')
+
+
+def inline_linked(body):
+    """The binary links a page's styles and scripts (/ui/<name>?v=<hash>);
+    Python sends them inline. Fetch each link from the binary and put its
+    text in, so the page can be compared with Python's byte for byte (and
+    what the binary serves at /ui/ is what the page then runs)."""
+    def fetch(block, tag):
+        urls = re.findall(rb'"(/ui/[^"]+)"', block.group(0))
+        text = b"".join(get_raw(RS, u.decode())[3] for u in urls)
+        return b"<%s>%s</%s>" % (tag, text, tag)
+    body = LINKED_STYLES.sub(lambda m: fetch(m, b"style"), body)
+    return LINKED_SCRIPTS.sub(lambda m: fetch(m, b"script"), body)
+
+
 def compare_raw(path):
     a, b = get_raw(PY, path), get_raw(RS, path)
+    if (a[1] or "").startswith("text/html"):
+        # A page: the binary revalidates it by ETag where Python says
+        # no-store; that is the point of the change, not a difference.
+        a, b = a[:2] + (None, a[3]), b[:2] + (None, inline_linked(b[3]))
     if a[:3] != b[:3]:
         return "status/type/cache %r vs %r" % (a[:3], b[:3])
     if (a[1] or "").startswith("application/json"):

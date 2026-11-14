@@ -1707,3 +1707,51 @@ process.stdout.write(JSON.stringify([
         if out.returncode:
             raise AssertionError(out.stderr)
         self.assertEqual(json.loads(out.stdout), [" run", "", " done", ""])
+
+
+@unittest.skipUnless(NODE, "node not installed")
+class LogDiff(unittest.TestCase):
+    """The log keeps the elements of turns that did not change (logDiff says
+    which did); patchLog's DOM work is exercised in the browser."""
+
+    def diff(self, have, want):
+        start = ui.SCRIPT.index("function logDiff")
+        body = ui.SCRIPT[start:ui.SCRIPT.index("// What #log holds", start)]
+        js = body + "\nprocess.stdout.write(JSON.stringify(logDiff(%s, %s)));" % (
+            json.dumps(have), json.dumps(want))
+        out = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True,
+                             encoding="utf-8", timeout=30)
+        if out.returncode:
+            raise AssertionError(out.stderr)
+        return json.loads(out.stdout)
+
+    def turns(self, *pairs):
+        return [{"i": i, "sig": sig} for i, sig in pairs]
+
+    def test_nothing_changed(self):
+        t = self.turns((0, "a"), (1, "b"))
+        self.assertEqual(self.diff(t, t), {"gone": [], "fresh": [], "changed": []})
+
+    def test_a_new_turn_and_a_finished_one(self):
+        have = self.turns((0, "a"), (1, "b"))
+        want = self.turns((0, "a"), (1, "b2"), (2, "c"))
+        self.assertEqual(self.diff(have, want), {"gone": [], "fresh": [2], "changed": [1]})
+
+    def test_showing_earlier_adds_at_the_front_and_keeps_the_rest(self):
+        have = self.turns((5, "e"), (6, "f"))
+        want = self.turns((3, "c"), (4, "d"), (5, "e"), (6, "f"))
+        self.assertEqual(self.diff(have, want), {"gone": [], "fresh": [3, 4], "changed": []})
+
+    def test_a_window_that_slides_drops_the_oldest(self):
+        have = self.turns((0, "a"), (1, "b"), (2, "c"))
+        want = self.turns((1, "b"), (2, "c"), (3, "d"))
+        self.assertEqual(self.diff(have, want), {"gone": [0], "fresh": [3], "changed": []})
+
+    def test_a_turn_hidden_by_the_display_settings_is_gone(self):
+        have = self.turns((0, "a"), (1, "b"))
+        self.assertEqual(self.diff(have, self.turns((1, "b"))), {"gone": [0], "fresh": [], "changed": []})
+
+    def test_the_search_changes_only_the_turns_it_marks(self):
+        have = self.turns((0, "a"), (1, "b|old"))
+        want = self.turns((0, "a"), (1, "b|new"))
+        self.assertEqual(self.diff(have, want), {"gone": [], "fresh": [], "changed": [1]})
