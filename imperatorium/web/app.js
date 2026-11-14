@@ -359,29 +359,6 @@ function drawSessions(){
   // and can take a click.
   if ($("#sessions").dataset.sig !== html){ $("#sessions").innerHTML = html; $("#sessions").dataset.sig = html; }
 
-  document.querySelectorAll(".s").forEach(el =>
-    el.onclick = e => {
-      if (e.target.closest("[data-tasks-toggle]")){ e.stopPropagation(); foldTasks(!tasksOpen); return; }
-      if (e.target.closest("[data-done-toggle]")){ e.stopPropagation(); foldDone(!doneOpen); return; }
-      const item = e.target.closest("[data-task]");
-      if (item && el.dataset.k === selected){ e.stopPropagation(); openTask(item.dataset.task); return; }
-      closeTask();
-      selected = el.dataset.k; showCached(); drawSessions(); refreshTab(true); loadStatus(true); loadProcs();
-    });
-  document.querySelectorAll("[data-fam]").forEach(el => el.onclick = () => famClicked(el.dataset.fam));
-  document.querySelectorAll("[data-pin]").forEach(el => el.onclick = e => {
-    e.stopPropagation(); savePrefs({pinned: toggleIn("pinned", el.dataset.pin)}); });
-  document.querySelectorAll("[data-arch]").forEach(el => el.onclick = e => {
-    e.stopPropagation(); savePrefs({archived: toggleIn("archived", el.dataset.arch)}); });
-  document.querySelectorAll("[data-close]").forEach(el => el.onclick = e => {
-    e.stopPropagation(); closeSession(el.dataset.close); });
-  document.querySelectorAll("[data-dismiss]").forEach(el => el.onclick = e => {
-    e.stopPropagation(); dismissSession(el.dataset.dismiss); });
-  document.querySelectorAll(".badge.pr").forEach(el => el.onclick = e => {
-    e.stopPropagation(); if (el.dataset.url) window.open(el.dataset.url, "_blank"); });
-  const fold = $("#archfold");
-  if (fold) fold.onclick = () => { showArchived = !showArchived; drawSessions(); };
-
   syncDraft();
   drawHead();
   drawTileTasks();
@@ -3956,6 +3933,29 @@ $("#jq").addEventListener("keydown", e => {
   else if (e.key === "Enter"){ e.preventDefault(); const s = hit[jsel]; openJump(false); if (s) pick(key(s)); }
   else if (e.key === "Escape"){ e.preventDefault(); openJump(false); }
 });
+// One listener for the whole list, so a redraw binds nothing: the clicks
+// land on whatever is there now. The small controls inside a tile come first
+// and end the click, as their own handlers did by stopping it.
+$("#sessions").addEventListener("click", e => {
+  const t = e.target;
+  let el;
+  if ((el = t.closest("[data-pin]"))) return savePrefs({pinned: toggleIn("pinned", el.dataset.pin)});
+  if ((el = t.closest("[data-arch]"))) return savePrefs({archived: toggleIn("archived", el.dataset.arch)});
+  if ((el = t.closest("[data-close]"))) return closeSession(el.dataset.close);
+  if ((el = t.closest("[data-dismiss]"))) return dismissSession(el.dataset.dismiss);
+  if ((el = t.closest(".badge.pr"))){ if (el.dataset.url) window.open(el.dataset.url, "_blank"); return; }
+  if (t.closest("#archfold")){ showArchived = !showArchived; drawSessions(); return; }
+  if ((el = t.closest("[data-fam]"))) return famClicked(el.dataset.fam);
+  const s = t.closest(".s");
+  if (!s) return;
+  if (t.closest("[data-tasks-toggle]")) return foldTasks(!tasksOpen);
+  if (t.closest("[data-done-toggle]")) return foldDone(!doneOpen);
+  const item = t.closest("[data-task]");
+  if (item && s.dataset.k === selected) return openTask(item.dataset.task);
+  closeTask();
+  selected = s.dataset.k; showCached(); drawSessions(); refreshTab(true); loadStatus(true); loadProcs();
+});
+
 $("#jlist").addEventListener("click", e => {
   const el = e.target.closest("[data-jk]");
   if (el){ openJump(false); pick(el.dataset.jk); }
