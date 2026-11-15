@@ -703,6 +703,24 @@ mod tests {
     }
 }
 
+/// test_policy.py's direct calls (its `decide` calls are replayed from the
+/// Python goldens by tests/policy_tests.rs).
+#[cfg(test)]
+mod py_ported {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn is_sensitive_handles_both_separators_and_junk() {
+        assert!(is_sensitive(Some(&json!("a/.env"))));
+        assert!(is_sensitive(Some(&json!("a\\.env"))));
+        assert!(!is_sensitive(Some(&json!(""))));
+        assert!(!is_sensitive(None));
+        assert!(!is_sensitive(Some(&Value::Null)));
+        assert!(!is_sensitive(Some(&json!("environment.md"))));
+    }
+}
+
 /// test_rename.py: the policy code is protected under either name.
 #[cfg(test)]
 mod core_tests {
