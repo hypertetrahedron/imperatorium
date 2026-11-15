@@ -241,11 +241,7 @@ impl Notifier {
         let argv = speak_command(text, rate);
         let mut cmd = std::process::Command::new(&argv[0]);
         cmd.args(&argv[1..]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
+        crate::proc::no_window(&mut cmd);
         if let Err(e) = cmd.spawn() {
             *self.last_error.lk() = Some(format!("speak: {e}"));
         }

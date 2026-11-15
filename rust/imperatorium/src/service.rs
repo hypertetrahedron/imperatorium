@@ -141,11 +141,7 @@ fn xml_escape(s: &str) -> String {
 fn output_of(c: &Cmd) -> std::io::Result<std::process::Output> {
     let mut p = std::process::Command::new(&c.prog);
     p.args(&c.args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        p.creation_flags(0x0800_0000);
-    }
+    crate::proc::no_window(&mut p);
     p.output()
 }
 

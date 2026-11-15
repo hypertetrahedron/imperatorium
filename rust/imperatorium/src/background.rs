@@ -96,11 +96,7 @@ pub fn start(prompt: &str, cwd: &str, options: &Map<String, Value>) -> Result<Va
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::proc::no_window(&mut c);
     let mut child = match c.spawn() {
         Ok(ch) => ch,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

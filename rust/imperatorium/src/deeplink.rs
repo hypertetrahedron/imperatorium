@@ -45,13 +45,11 @@ pub fn build(cwd: &str, prompt: &str) -> Result<String, String> {
 pub fn open_url(url: &str) {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         // Through cmd, so the shell resolves the protocol handler; the empty
         // title is needed or a quoted URL is read as the title.
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .creation_flags(0x0800_0000)
-            .status();
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/c", "start", "", url]);
+        let _ = crate::proc::no_window(&mut c).status();
     }
     #[cfg(target_os = "macos")]
     {

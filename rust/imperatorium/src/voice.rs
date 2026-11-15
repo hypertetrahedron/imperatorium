@@ -111,21 +111,7 @@ pub fn available(home: &Path, settings: &Map<String, Value>) -> bool {
 /// End a child and everything under it: a venv's python.exe on Windows is
 /// a launcher whose child is the real interpreter holding the model.
 fn kill_tree(pid: u32) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(0x0800_0000)
-            .status();
-    }
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as i32, libc::SIGKILL);
-    }
+    crate::proc::kill_pid_tree(pid);
 }
 
 struct Proc {
@@ -217,11 +203,7 @@ impl Worker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
+        crate::proc::no_window(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| format!("the dictation process failed: {e}"))?;
         let stdin = child.stdin.take();
         let stdout = BufReader::new(child.stdout.take().unwrap());

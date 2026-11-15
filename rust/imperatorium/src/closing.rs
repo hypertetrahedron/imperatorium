@@ -63,11 +63,7 @@ pub fn type_keys(pid: u32, chunks: &[&str]) -> bool {
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console of its own
-    }
+    crate::proc::no_window(&mut cmd);
     let Ok(mut child) = cmd.spawn() else {
         return false;
     };
@@ -85,20 +81,7 @@ pub fn type_keys(pid: u32, chunks: &[&str]) -> bool {
 }
 
 fn kill(pid: u32) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .creation_flags(0x0800_0000)
-            .status();
-    }
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as i32, libc::SIGKILL);
-    }
+    crate::proc::kill_pid_tree(pid);
 }
 
 /// closing.close: {ok, how: exit | killed | gone, tab_closed}.

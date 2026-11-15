@@ -323,11 +323,7 @@ fn command(args: &[String]) -> Command {
 fn command_of(program: &str, args: &[String]) -> Command {
     let mut c = Command::new(program);
     c.args(args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::proc::no_window(&mut c);
     c
 }
 

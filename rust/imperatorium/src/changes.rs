@@ -4,9 +4,9 @@
 //! PR, discard). Every git call is bounded in time
 //! and output, as there.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -21,56 +21,21 @@ const MAX_DIFF: usize = 400 * 1024;
 /// stdout of `git -C cwd args`; Err(message) as changes.git raises it.
 pub fn git(cwd: &str, args: &[&str], check: bool) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(cwd)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
+    cmd.arg("-C").arg(cwd).args(args);
+    let o = match crate::proc::run_timeout(&mut cmd, Duration::from_secs_f64(TIMEOUT)) {
+        Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err("git is not on PATH".into())
         }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            return Err(format!("git {} took longer than {}s", args[0], TIMEOUT))
+        }
         Err(e) => return Err(e.to_string()),
     };
-    // Both were set to Stdio::piped() above, so both are there.
-    let (mut out, mut err) = (
-        child.stdout.take().expect("stdout is piped"),
-        child.stderr.take().expect("stderr is piped"),
-    );
-    let o = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut out, &mut b);
-        b
-    });
-    let e = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut err, &mut b);
-        b
-    });
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed().as_secs_f64() < TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(5))
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("git {} took longer than {}s", args[0], TIMEOUT));
-            }
-        }
-    };
-    let stdout = String::from_utf8_lossy(&o.join().unwrap_or_default()).into_owned();
+    let status = o.status;
+    let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
     if check && !status.success() {
-        let stderr = String::from_utf8_lossy(&e.join().unwrap_or_default()).into_owned();
+        let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
         let stderr = crate::pyish::strip(&stderr);
         return Err(match splitlines(stderr).last() {
             Some(last) if !stderr.is_empty() => last.to_string(),
@@ -656,57 +621,23 @@ fn find(project: &str, path: &str) -> Result<(Map<String, Value>, Value, Map<Str
 /// changes._run: (exit code, stdout + stderr), 60 s at most.
 fn run(cmd: &[&str], cwd: Option<&str>) -> (i32, String) {
     let mut c = Command::new(cmd[0]);
-    c.args(&cmd[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    c.args(&cmd[1..]);
     if let Some(d) = cwd {
         c.current_dir(d);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let mut child = match c.spawn() {
-        Ok(ch) => ch,
+    let o = match crate::proc::run_timeout(&mut c, Duration::from_secs(60)) {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            return (
+                1,
+                format!("Command '{}' timed out after 60.0 seconds", cmd.join(" ")),
+            )
+        }
         Err(e) => return (1, e.to_string()),
     };
-    // Both were set to Stdio::piped() above, so both are there.
-    let (mut out, mut err) = (
-        child.stdout.take().expect("stdout is piped"),
-        child.stderr.take().expect("stderr is piped"),
-    );
-    let o = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut out, &mut b);
-        b
-    });
-    let e = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut err, &mut b);
-        b
-    });
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed().as_secs_f64() < 60.0 => {
-                std::thread::sleep(Duration::from_millis(10))
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return (
-                    1,
-                    format!("Command '{}' timed out after 60.0 seconds", cmd.join(" ")),
-                );
-            }
-        }
-    };
-    let mut text = String::from_utf8_lossy(&o.join().unwrap_or_default()).into_owned();
-    text.push_str(&String::from_utf8_lossy(&e.join().unwrap_or_default()));
-    (status.code().unwrap_or(1), text)
+    let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&o.stderr));
+    (o.status.code().unwrap_or(1), text)
 }
 
 /// The last `n` characters, as Python's `s[-n:]`.

@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -26,46 +26,16 @@ const SETTLE_SECONDS: f64 = 3.0;
 /// `claude agents --json --all`, or [] when it fails or takes over `timeout`.
 pub fn agents(timeout: Duration) -> Vec<Value> {
     let mut cmd = Command::new("claude");
-    cmd.args(["agents", "--json", "--all"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let Ok(mut child) = cmd.spawn() else {
+    cmd.args(["agents", "--json", "--all"]);
+    let Ok(o) = crate::proc::run_timeout(&mut cmd, timeout) else {
         return vec![];
     };
-    let mut stdout = child.stdout.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut stdout, &mut buf);
-        buf
-    });
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let out = reader.join().unwrap_or_default();
-                if !status.success() {
-                    return vec![];
-                }
-                return match serde_json::from_slice::<Value>(&out) {
-                    Ok(Value::Array(rows)) => rows,
-                    _ => vec![],
-                };
-            }
-            Ok(None) if started.elapsed() < timeout => {
-                std::thread::sleep(Duration::from_millis(20))
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return vec![];
-            }
-        }
+    if !o.status.success() {
+        return vec![];
+    }
+    match serde_json::from_slice::<Value>(&o.stdout) {
+        Ok(Value::Array(rows)) => rows,
+        _ => vec![],
     }
 }
 

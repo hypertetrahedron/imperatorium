@@ -117,11 +117,7 @@ const NO_VULKAN: &str = "this machine has no Vulkan loader (System32\\vulkan-1.d
 fn worker_devices(w: &std::path::Path) -> String {
     let mut c = std::process::Command::new(w);
     c.arg("--devices").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::proc::no_window(&mut c);
     match c.output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         Ok(o) => format!("did not start ({})", o.status),

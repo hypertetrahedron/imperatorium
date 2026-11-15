@@ -6,9 +6,9 @@
 
 use crate::locks::LockExt;
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -73,44 +73,16 @@ pub fn summarise(raw: &Value) -> Value {
 /// missing - a failure worth showing, and the end of polling.
 fn lookup(cwd: &str) -> Result<Option<Value>, String> {
     let mut c = Command::new("gh");
-    c.args(["pr", "view", "--json", FIELDS])
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let mut child = match c.spawn() {
-        Ok(ch) => ch,
+    c.args(["pr", "view", "--json", FIELDS]).current_dir(cwd);
+    let o = match crate::proc::run_timeout(&mut c, Duration::from_secs(20)) {
+        Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("gh is not installed".into()),
         Err(_) => return Ok(None),
     };
-    let mut out = child.stdout.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut out, &mut b);
-        b
-    });
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed().as_secs_f64() < 20.0 => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Ok(None);
-            }
-        }
-    };
-    let stdout = reader.join().unwrap_or_default();
-    if !status.success() {
+    if !o.status.success() {
         return Ok(None);
     }
-    Ok(serde_json::from_slice::<Value>(&stdout).ok().map(|raw| summarise(&raw)))
+    Ok(serde_json::from_slice::<Value>(&o.stdout).ok().map(|raw| summarise(&raw)))
 }
 
 struct Entry {

@@ -390,11 +390,7 @@ pub(crate) fn service_path() -> String {
 fn claude_version() -> Option<(u32, u32, u32)> {
     let mut c = std::process::Command::new(claude_path()?);
     c.arg("--version");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000);
-    }
+    crate::proc::no_window(&mut c);
     let out = c.output().ok()?;
     parse_version(&String::from_utf8_lossy(&out.stdout))
 }

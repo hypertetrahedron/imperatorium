@@ -104,11 +104,7 @@ fn popen(cmd: &[String], cwd: &str) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::proc::no_window(&mut c);
     c.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
