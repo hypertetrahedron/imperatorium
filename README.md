@@ -16,63 +16,70 @@ being necessary.
 
 ## Install
 
-You need Python 3.9+, [Claude Code](https://claude.com/claude-code) 2.1.234+
-(2.1.224 on macOS/Linux) and git. Claude Code 2.1.287+ adds
+You need [Claude Code](https://claude.com/claude-code) 2.1.234+ (2.1.224 on
+macOS/Linux) and git. Claude Code 2.1.287+ adds
 [the Imperatorium mod](#the-imperatorium-mod), which setup offers when it
 finds that version. `gh`, Windows Terminal and Edge are optional; each
 switches a feature on (PR badges, Resume/Fork tabs, a chromeless window).
-For a Claude Code without mods, [v0.1.0](https://github.com/hypertetrahedron/imperatorium/releases/tag/v0.1.0)
+Imperatorium itself is one Rust binary, `imperatorium`, with nothing else to
+install: no Python, no virtualenv. The last version with a Python
+implementation is the tag `last-python`. For a Claude Code without mods,
+[v0.1.0](https://github.com/hypertetrahedron/imperatorium/releases/tag/v0.1.0)
 is the last version built only on hooks, the statusline and each session's
-socket; this one still works that way when the mod is not installed. [ONBOARDING.md](ONBOARDING.md) walks through the whole
-thing step by step, including other machines.
+socket; this one still works that way when the mod is not installed.
+[ONBOARDING.md](ONBOARDING.md) walks through the whole thing step by step,
+including other machines.
 
-**From nothing** - the bootstrap script checks the prerequisites, offers to
-install what is missing (winget for Python and git on Windows, Anthropic's
-installer for Claude Code), clones this repository into `~/imperatorium` and
-runs the setup below:
+**From nothing** - the install script downloads the binary for this machine
+from the latest release, checks its SHA-256 against the release's manifest,
+puts it in `%LOCALAPPDATA%\Programs\imperatorium` (`~/.local/bin` elsewhere)
+and runs `imperatorium install`:
 
 ```
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/hypertetrahedron/imperatorium/main/bootstrap.ps1 | iex
+irm https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.ps1 | iex
+
+# Windows, when PowerShell's policy blocks that (cmd.exe)
+curl -fsSLo install.cmd https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.cmd && install.cmd
 
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/hypertetrahedron/imperatorium/main/bootstrap.sh | bash
+curl -fsSL https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.sh | sh
 ```
 
-**From a clone:**
+`IMPERATORIUM_CHANNEL=preview` takes the preview channel instead of stable.
+
+`imperatorium install` asks where your projects live and which extras you
+want (dictation, Stream Deck, auto-approval, the mod, statusline, tool hooks,
+phone push, the global hotkey, start at logon). Then it copies the binary into
+place, writes `config.json` and `policy.json` from the built-in examples into
+the config folder (`%APPDATA%\imperatorium`, or `~/.config/imperatorium`),
+adds the hooks to `~/.claude/settings.json` (backing it up first) and
+registers the service that keeps the dispatcher up: scheduled tasks on
+Windows, a systemd user unit on Linux, a launchd agent on macOS. Every step
+can be run again safely, and your existing `config.json` and `policy.json` are
+never overwritten. Restart running Claude Code sessions afterwards so they
+pick up the hooks.
 
 ```
-git clone https://github.com/hypertetrahedron/imperatorium.git
-cd imperatorium
-python setup_machine.py
+imperatorium check                  # what is present and missing; changes nothing
+imperatorium install --dry-run      # what install would do
+imperatorium install --yes          # all defaults, no questions
+imperatorium uninstall              # hooks, mod and service; config and state stay
+imperatorium service status         # install | uninstall | restart | status
+imperatorium remote add HOST        # onboard another machine (see "Other machines")
+imperatorium remote check           # every configured host, piece by piece
+imperatorium update                 # self-update from the releases, SHA-256 checked
 ```
 
-It asks where your projects live (default: the folder you cloned into) and
-which extras you want (dictation, Stream Deck, auto-approval, statusline,
-tool hooks, phone push, start at logon). Then it builds `.venv`, writes
-`config.json` and `policy.json` from the `*.example.json` files, fetches the
-Stream Deck driver and checks its hash, adds the hooks to
-`~/.claude/settings.json` (backing it up first) and registers the service
-that keeps the dispatcher up: scheduled tasks on Windows, a systemd user unit
-on Linux, a launchd agent on macOS. Every step can be run again safely, and
-your existing `config.json` and `policy.json` are never overwritten. Restart
-running Claude Code sessions afterwards so they pick up the hooks.
+Hook entries in `~/.claude/settings.json` point at the installed binary, so if
+you move it, run `imperatorium install` again.
 
-```
-python setup_machine.py check              # what is present and missing; changes nothing
-python setup_machine.py --yes              # all defaults, no questions
-python setup_machine.py uninstall          # hooks and the service; your files stay
-python setup_machine.py service status     # install | uninstall | restart | status
-python setup_machine.py remote add HOST    # onboard another machine (see "Other machines")
-python setup_machine.py remote check       # every configured host, piece by piece
-```
-
-Hook paths point into this checkout, so if you move it, run the setup again.
-
+To build it yourself, `cargo build --release` in `rust/` makes the binary;
+`imperatorium install` run from it does the rest.
 ## The window
 
 ```
-python -m imperatorium.window      # chromeless, via Edge --app=
+imperatorium open                  # chromeless, via Edge --app= where there is one
 http://127.0.0.1:8792/         # or just open it
 ```
 
@@ -81,7 +88,7 @@ prompt box underneath. Selecting a session shows what it actually said - text,
 tool calls, tool results - so you can see what a blocked session is blocked on
 instead of guessing from a status dot on another screen. What Claude writes
 is rendered as Markdown - bold and italic, inline code, links, headings,
-lists, quotes, code blocks and tables - by a small renderer in `ui.py`, not
+lists, quotes, code blocks and tables - by a small renderer in the window's own script, not
 a library, so the page still loads with no network. Enter sends to that
 session; ctrl+Enter hands the work to a fresh background session. The prompt
 box keeps an unsent draft per session (in this browser), so switching away
@@ -144,9 +151,9 @@ commands and Monitors still running, the shell processes under it, whether
 its prompt cache is still warm and for how long, context, cost and token
 totals, model, permission mode, prompts and turns, age, compactions and
 branch. Background work and the cache come from the session's transcript
-(`imperatorium/sessionstat.py`, read incrementally), context from the
+(`sessionstat.rs`, read incrementally), context from the
 statusline, and cost and tokens from the transcripts: the whole session,
-subagents included, estimated at API list prices (`imperatorium/costs.py`).
+subagents included, estimated at API list prices (`costs.rs`).
 
 Spend comes in two parts, both read from the transcripts, so a restart loses
 neither. **Global** is everything sent from this machine in the account's
@@ -172,13 +179,12 @@ shows `wakes 20m`: it is idle, but not waiting for you. Hover any of them for
 the long form. The panel's line (the one left when it is folded) says the
 cache the same way, `cache -58m`, and ends with the tile's totals.
 
-Conversations are read through the Agent SDK: its private chain builder
-gives the same message order the supported `get_session_messages` does, and
-`conversation.py` then adds back the three things that reader drops - prompts
-that arrived through the inbox, prompts folded into a running turn, and
-everything before a compaction. Those reach into transcript fields the docs
-call internal; if they move, the reader falls back to the public call and
-only those additions go missing.
+Conversations are read straight from the session transcripts by the binary,
+in the same message order Claude Code shows. That includes what the public
+readers drop: prompts that arrived through the inbox, prompts folded into a
+running turn, and everything before a compaction. These are fields Claude
+Code does not document, so a Claude Code release can move them; the goldens
+(see below) pin what is read today.
 
 Tabs above the conversation show the session's **Changes** (git status and
 diff), its **Activity** (every tool call, what failed and why) and the
@@ -230,7 +236,7 @@ names. A save checks every value first and changes nothing if one is wrong,
 keeps the previous file as `config.json.bak`, and keeps its `_comment` keys.
 Some things are left to `config.json` by design: the auto-approval rules
 (`policy.json`), a bypass permission mode, the ntfy token, and adding or
-removing remote hosts (`setup_machine.py remote add|remove`).
+removing remote hosts (`imperatorium remote add|remove`).
 The bottom of the window lists every keyboard shortcut, with the ones you
 can set showing their current keys.
 
@@ -273,7 +279,7 @@ machine's spend in each of the account's windows, and each session's
 share. By default the status tile keeps a cell of its own even when the
 sessions fill the grid; Settings > Chat > **Always show cost in the matrix**
 (`chat.matrix_status`) off shows it only in spare cells. The
-condensing is done by the dispatcher (`imperatorium/matrix.py`, `GET
+condensing is done by the dispatcher (`matrix.rs`, `GET
 /api/matrix`), so the page polls one small answer.
 
 **States.** Every tile's mark is a colour and a shape, so it reads without
@@ -292,7 +298,7 @@ colour too:
 
 Complete, needs you and failed count as wanting you: the title's count,
 notifications, n for the next one and the Stream Deck (violet, amber) all
-follow them. Complete is decided by the dispatcher (`registry.classify`)
+follow them. Complete is decided by the dispatcher
 the moment the turn ends, rather than when Claude Code's minute-later
 `idle_prompt` arrives, which it may never do.
 
@@ -312,8 +318,8 @@ said for any size of context; Settings > Chat > *Cache-expired warning from
 (tokens)* sets a floor. The session list arrives over server-sent
 events (`/api/stream`), so a session asking for you shows at once; the page
 falls back to polling if the stream drops. An idle list is re-read at most
-every 5 s (`Handler.STREAM_EVERY`; hook events still wake it at once, never
-more often than `STREAM_MIN_GAP`, 2 s), because each re-read runs
+every 5 s (hook events still wake it at once, never
+more than once in 2 s), because each re-read runs
 `claude agents --json` and so starts a `claude.exe` and its `git` children.
 At 1 s that was a steady ~1 new process a second.
 
@@ -353,64 +359,59 @@ Settings window (gear), under Notifications.
 
 ## Requirements
 
-Python 3.9+, standard library only. Claude Code 2.1.234 or later on native
-Windows (2.1.224 on macOS/Linux) - that is when a session's inbox became
-reachable. Claude Code 2.1.287 or later for the mod, which is optional. The
-optional Stream Deck surface has its own dependencies and is kept separate
-for that reason.
+Claude Code 2.1.234 or later on native Windows (2.1.224 on macOS/Linux) - that
+is when a session's inbox became reachable. Claude Code 2.1.287 or later for
+the mod, which is optional. Nothing else: the binary is self-contained. The
+optional dictation worker (`imperatorium-voice`) is fetched with `imperatorium
+voice fetch`.
 
 ## Running it
 
-`impctl.py` is the one front door: service control, sessions, approvals,
-setup and tests, without having to know which file each lives in.
-`impctl.ps1` and `impctl.sh` run it from any folder with the right Python
-(the venv when there is one): `.\impctl.ps1 status`, `./impctl.sh status`.
+`imperatorium` is the one front door: service control, sessions, approvals,
+setup and tests.
 
 ```
-python impctl.py help                      # every command and its parameters
-python impctl.py help send                 # one command in full
-python impctl.py status                    # service components, and is the dispatcher up
-python impctl.py restart [dispatcher]      # stop then start (all, or one component)
-python impctl.py stop | start [COMPONENT]  # stop stays stopped: the task is disabled
-python impctl.py sessions                  # live sessions
-python impctl.py send -s NAME "prompt"     # or -p PROJECT; --dry-run to see the route
-python impctl.py resume | fork | new ID    # sessions by id, id prefix or name
-python impctl.py pending; python impctl.py allow ID
-python impctl.py test                      # every suite, through the venv if there is one
+imperatorium help                      # every command and its parameters
+imperatorium help send                 # one command in full
+imperatorium status                    # service components, and is the dispatcher up
+imperatorium restart [dispatcher]      # stop then start (all, or one component)
+imperatorium stop | start [COMPONENT]  # stop stays stopped: the task is disabled
+imperatorium open                      # raise the window, or open it
+imperatorium sessions                  # live sessions
+imperatorium send -s NAME "prompt"     # or -p PROJECT; --dry-run to see the route
+imperatorium resume | fork | new ID    # sessions by id, id prefix or name
+imperatorium pending; imperatorium allow ID
 ```
+
+The HTTP commands take `--json`, and `IMPERATORIUM_URL` points them at a
+dispatcher other than `http://127.0.0.1:8792`.
 
 The pieces underneath, run directly:
 
 ```
-python -m imperatorium.dispatcher              # http://127.0.0.1:8792
-python hooks/install.py --dry-run          # show what would change
-python hooks/install.py                    # install the hooks (backs up first)
-python hooks/install.py --statusline       # + usage meter data (context, 5h/7d limits)
-python hooks/install.py --tool-hooks       # + live, timed activity (one process per tool call)
-python test_core.py && python test_dispatcher.py
-python test_policy.py && python test_remote.py && python test_conversation.py
-python test_hotkey.py && python test_ui.py        # test_ui needs node; skips without
-.venv\Scripts\python.exe test_streamdeck.py        # needs the venv
-.venv\Scripts\python.exe test_voice.py
-.venv\Scripts\python.exe test_features.py        # the newer tabs, queue, usage, history
-python test_setup.py                               # the installer
-python test_impctl.py                              # the command line
-python test_convcache.py && python test_sessionstat.py  # conversation cache, status panel
-python test_costs.py                               # cost history
-python test_settings.py && python test_quick.py    # Settings window, quick phrases
-python test_closing.py && python test_slash.py     # closing a session, typed commands
-python test_matrix.py && python test_taskout.py    # Chat Matrix, task output
-python test_rename.py                              # installs from before the rename
-# 979 tests in total
+imperatorium run                       # the dispatcher, here, on http://127.0.0.1:8792
+imperatorium install --dry-run         # show what would change, hooks included
+imperatorium hook | statusline | permission    # what Claude Code runs (they read stdin)
 ```
 
-Individual pieces are runnable on their own, which is usually the fastest way
+Tests are Rust and node. `imperatorium test` runs `cargo test` in a checkout;
+by hand:
+
+```
+cd rust && cargo test --workspace
+node --test imperatorium/web/tests/*.test.mjs     # the window; needs node
+```
+
+The goldens under `rust/imperatorium/tests/golden` are the specification; see
+the `README.md` there.
+
+Individual pieces can be asked on their own, which is usually the fastest way
 to see what is wrong:
 
 ```
-python -m imperatorium.registry                            # what is running
-python -m imperatorium.projects "project: gem trip, fix it" # what would it match
-python -m imperatorium.deeplink Y:/projects-software/gem-trip "fix it"
+imperatorium sessions --json            # what is running
+imperatorium projects                   # the catalogue
+imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 ```
 
 ## HTTP surface
@@ -419,7 +420,7 @@ python -m imperatorium.deeplink Y:/projects-software/gem-trip "fix it"
 |---|---|---|
 | GET | `/` | the window |
 | GET | `/api/conversation` | `?session=<id>&limit=N` - what a session said |
-| GET | `/api/sessions` | merged registry (a snapshot up to `STREAM_EVERY`, 5 s, old may be served) |
+| GET | `/api/sessions` | merged registry (a snapshot up to 5 s old may be served) |
 | GET | `/api/stream` | server-sent events: the merged registry whenever it changes |
 | POST | `/api/mod/beat` | the mod's beat: state, usage, prompt acknowledgements; answers the prompts to submit and the status line (mod token) |
 | POST | `/api/mod/check` | the permission policy's verdict on one tool call (mod token) |
@@ -485,7 +486,7 @@ page you merely had open could otherwise drive this.
 `mod/imperatorium` is a [Claude Code mod](https://code.claude.com/docs/en/plugins/mods/overview):
 a small TypeScript module Claude Code loads into every session (2.1.287+),
 listed in `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` by
-`python hooks/install.py --mod` (setup does it when you say yes). It is the
+`imperatorium install` (it offers when it finds Claude Code 2.1.287+). It is the
 dispatcher's hand inside each session:
 
 - **Prompts from the window arrive as your own words.** A prompt sent to a
@@ -493,7 +494,7 @@ dispatcher's hand inside each session:
   Claude treats as someone else's request. With the mod, the dispatcher hands
   the prompt to the session's mod, which submits it with `$.prompt.submit`
   once the session is idle - as you, when you sent it from the window.
-  Anything else - `impctl`, the palette, a script, another Claude session
+  Anything else - `imperatorium send`, the palette, a script, another Claude session
   calling the API - is still submitted framed as someone else's, because
   the window's page token is the only proof the dispatcher has that a person
   sent it. Send As Typed goes the same way, busy session or not.
@@ -565,7 +566,7 @@ text is made one line (line breaks become spaces, control characters go, a
 leading `!` or `#` is dropped so it cannot switch the input mode). It is off
 until you turn it on in Settings, under Chat, and only the window can use it
 or turn it on: the request must come from the page's own origin with the
-token the page was served with. That keeps `impctl`, scripts and other
+token the page was served with. That keeps `imperatorium`, scripts and other
 sessions from typing as you by accident; it is not a wall against a process
 on this machine that sets out to forge it.
 
@@ -574,7 +575,7 @@ Claude session" and to answer by `SendMessage` to its sender - but a
 dispatched prompt has no sender. With two sessions open in one project, an
 agent answered a window prompt by messaging the other session. So every
 dispatched prompt starts with one line saying there is no sending session and
-to reply in its own conversation (`conversation.ORIGIN_NOTE`); the window and
+to reply in its own conversation; the window and
 the event log strip it again. So this dispatches work; approving
 what that work then asks for stays a human job, through the terminal, Remote
 Control, or a `PermissionRequest` hook.
@@ -603,11 +604,12 @@ silently; anything less needs `confirm`. On this machine that correctly lands
 
 ## The hotkey
 
-`hotkey.py` is all that remains of the old palette: it registers a global
-hotkey and raises the window from anywhere, opening one if none is running.
-It finds the window by title, so `ui.render_shell`'s `<title>` and
-`hotkey.WINDOW_TITLE` have to agree - a test pins that, because otherwise a
-press silently opens a second window instead of raising the first.
+`imperatorium hotkey` (Windows) registers a global hotkey and raises the
+window from anywhere, opening one if none is running; `--once` raises it a
+single time and `--hotkey KEYS` picks the keys. It finds the window by title,
+so the window's `<title>` and the hotkey's expected title have to agree - a
+test pins that, because otherwise a press silently opens a second window
+instead of raising the first.
 
 Conflicts are the norm rather than the exception (`ctrl+alt+space` and `win+k`
 were both already taken here), so `palette.hotkey` in `config.json` takes a
@@ -618,8 +620,15 @@ list and the first candidate Windows grants wins.
 Hold **f9** and speak; letting go stops the recording, and the text lands in
 the prompt box. Settings > Dictation > *F9 records* (`voice.shortcut`) set to
 `toggle` makes f9 start on one press and stop on the next instead. The
-Dictate button always starts and stops. The browser records and a dictation process beside the
-dispatcher decodes and transcribes, so nothing leaves the machine.
+Dictate button always starts and stops. The browser records and a dictation
+worker beside the dispatcher decodes and transcribes, so nothing leaves the
+machine.
+
+The worker is `imperatorium-voice` (whisper.cpp), installed next to the
+binary; the models are `ggml-*.bin` files in the models folder
+(`%LOCALAPPDATA%\imperatorium\models`, `~/.local/share/imperatorium/models`,
+or `IMPERATORIUM_MODELS`). `imperatorium voice fetch` downloads the worker and
+the models, and `imperatorium voice status` says what is present.
 
 Voice fills the *prompt*, never the project. Project names here -
 `laser-ledger`, `amarantha`, `bookoferrantpages`, `fiducials` - are close to a
@@ -628,41 +637,33 @@ it would fire a prompt at the wrong repository. Picking from the list costs a
 keystroke and removes that failure completely, leaving speech to do what it is
 good at: roughly 150 words a minute against 50 typed.
 
-Measured on this machine with `large-v3-turbo` at float16: 3.1s to load the
-model, then about 0.09s to transcribe five seconds of speech.
+The model is `voice.model` (default `large-v3-turbo`) on the GPU. With no
+usable GPU (none, or no CUDA runtime) it is loaded on the CPU instead, as
+`voice.cpu_model` (default `small`) rather than `voice.model`:
+`large-v3-turbo` on a CPU makes every dictation a wait. A config that names a
+model other than the default but sets no `cpu_model` keeps that model on the
+CPU. `"device": "cpu"` goes straight there. The Say Line then reads
+"listening on CPU (small)…" and "dictated N chars on CPU (small)", so a slow
+dictation explains itself.
 
-With no usable GPU (none, or no CUDA runtime) the model is loaded on the
-CPU instead, at int8, and as `voice.cpu_model` (default `small`) rather
-than `voice.model`: `large-v3-turbo` on a CPU makes every dictation a wait.
-A config that names a model other than the default but sets no `cpu_model`
-keeps that model on the CPU. `"device": "cpu"` goes straight there. The Say
-Line then reads "listening on CPU (small)…" and "dictated N chars on CPU
-(small)", so a slow dictation explains itself. On this machine, a
-six-second sentence: `small` on the CPU loaded in 6.1 s and transcribed in
-1.9 s; `large-v3-turbo` on the CPU took 8.0 s and 6.7 s; on the GPU, 4.0 s
-and 0.5 s (first call after loading). All three got the sentence right.
-
-The model lives in its own child process, not in the dispatcher: with the
-CUDA runtime it takes a process to ~3.3 GB of private memory (plus ~2 GB of
-VRAM), and only ending the process gives all of that back. With
+The model lives in its own child process, not in the dispatcher: loaded it
+holds about 3 GB, and only ending the process gives all of that back. With
 `voice.preload` (the default) it starts with the dispatcher; after
 `voice.idle_unload` seconds without dictation (default 1800, 0 for never) it
 is ended, and pressing Dictate starts it again while you speak - a cold start
-is 3-4 s, mostly hidden behind the speaking. Only a config with a `voice`
-block turns dictation on.
+is a few seconds, mostly hidden behind the speaking. Only a config with a
+`voice` block turns dictation on.
 
 Near-silence returns nothing without ever calling the model - Whisper will
 happily invent words for a fumbled keypress.
 
-The microphone is now the browser's, so it follows Windows' default input
-device and its own permission prompt rather than `voice.input_device` - that
-setting only applies to the headless `Recorder`, which nothing currently uses.
-Dictation needs the venv (`faster-whisper`, PyAV); without it the window runs
-as before and the button reports that it is unavailable.
+The microphone is the browser's, so it follows Windows' default input device
+and its own permission prompt. Without the worker or a model, the window runs
+as before and the button reports that dictation is unavailable.
 
 ## Stream Deck
 
-`streamdeck_surface.py` puts one session on each key, coloured by what it is
+`imperatorium streamdeck` puts one session on each key, coloured by what it is
 doing: orange blocked, blue working, green idle, grey no session. A project
 with several sessions gets a key for each, with a `1/2` counter in the
 corner. A blocked key carries a badge counting how long it has been waiting,
@@ -671,22 +672,17 @@ colours for five seconds. Pressing a key raises that exact session, or opens
 one if nothing is running.
 
 ```
-.venv\Scripts\python.exe streamdeck_surface.py
+imperatorium streamdeck
 ```
 
-It is a separate process with its own dependencies (`streamdeck`, `pillow`),
-so the dispatcher stays standard-library only, and it holds no state - killing
-or restarting it affects nothing else. Pin the projects you want in fixed
+It is a separate process that talks to the dispatcher over HTTP and holds no
+state - killing or restarting it affects nothing else. The service runs it
+when installed with `--streamdeck`. Pin the projects you want in fixed
 positions under `streamdeck.keys` in `config.json` - each expands into one
 key per session, and keeps a grey key while nothing runs there. Every other
 open session fills the remaining keys, blocked first. When keys run short,
 the grey keys give way first. Remote sessions stay off the deck: a press has
 no window here to raise.
-
-The library's only backend is hidapi, which is not on PyPI, so the official
-libusb release DLL is vendored at `vendor/hidapi.dll`. The venv's `python.exe`
-is a uv shim, so its directory is not on the DLL search path and the surface
-registers the vendor directory with `os.add_dll_directory` at import.
 
 ## Layout
 
@@ -695,54 +691,56 @@ The parts of the window itself are named in
 the UI.
 
 ```
-imperatorium/registry.py    who is running, from `claude agents --json`
-imperatorium/procs.py       is an idle session still waiting on a shell it started
-imperatorium/projects.py    the catalogue, and turning speech into a project
-imperatorium/inbox.py       the named-pipe client
-imperatorium/deeplink.py    claude-cli://open URLs
-imperatorium/background.py  handing work to `claude --bg`
-imperatorium/voice.py       dictation, on the local GPU, in a child process
-imperatorium/remote.py      sessions on other machines: polling, injection, tunnels, reading
-imperatorium/store.py       tokens and events that outlive a restart
-imperatorium/dispatcher.py  the HTTP server and the routing decisions
-imperatorium/ui.py          the window: sidebar, conversation, prompt
+rust/imperatorium/          the `imperatorium` binary: every command below
+  src/registry.rs           who is running, from `claude agents --json`
+  src/procs.rs              is an idle session still waiting on a shell it started
+  src/projects.rs           the catalogue, and turning speech into a project
+  src/inbox.rs              the named-pipe client
+  src/deeplink.rs           claude-cli:// open URLs
+  src/background.rs         handing work to `claude --bg`
+  src/voice.rs              dictation: the dispatcher's side of the worker
+  src/remote.rs             sessions on other machines: polling, injection, tunnels, reading
+  src/store.rs              tokens and events that outlive a restart
+  src/server/               the HTTP server and the routing decisions
+  src/ui.rs                 the window: sidebar, conversation, prompt
+  src/matrix.rs             the Chat Matrix: replies and the step in flight, and spend
+  src/closing.rs            ending a session cleanly, so its terminal tab closes
+  src/transcript.rs         reading transcripts
+  src/conversation.rs       session messages, ready to render
+  src/sessionstat.rs        background work, prompt cache and tokens, from the transcript
+  src/taskout.rs            what awaited shells, Monitors and subagents have written
+  src/policy.rs             what may be auto-approved, and what may not
+  src/winfocus.rs           raising a session's window, by process id
+  src/changes.rs            git status/diff, and background-session worktrees
+  src/activity.rs           tool-call timelines, "doing" lines, failure tallies
+  src/history.rs            searching past sessions; resume and fork
+  src/usage.rs              statusline readings, rate-limit pace, thresholds
+  src/costs.rs              estimated cost history from transcripts, at list prices
+  src/prs.rs                the PR for a session's branch, off the request path
+  src/notify.rs             ntfy pushes and spoken alerts (both off by default)
+  src/install.rs            installing on a machine; check; uninstall
+  src/remote_cli.rs         onboarding other machines
+  src/hotkey.rs             the global hotkey
+  src/streamdeck.rs         the Stream Deck, a separate process
+  tests/golden/             the specification: recorded behaviour the binary must match
+rust/voice/                 imperatorium-voice, the dictation worker (whisper.cpp)
+rust/conformance/           the harnesses that compare the binary with the goldens
+imperatorium/web/           the window's JavaScript, CSS and its tests
 imperatorium/fonts/         Atkinson Hyperlegible Next and Mono, served to the window
-imperatorium/matrix.py      the Chat Matrix: replies and the step in flight, and spend
-imperatorium/closing.py     ending a session cleanly, so its terminal tab closes
-imperatorium/conversation.py  session messages, ready to render
-imperatorium/convcache.py   parsed conversations, reread only when a transcript changes
-imperatorium/sessionstat.py background work, prompt cache and tokens, from the transcript
-imperatorium/taskout.py     what awaited shells, Monitors and subagents have written
-imperatorium/window.py      opening it chromeless
-imperatorium/policy.py      what may be auto-approved, and what may not
-imperatorium/winfocus.py    raising a session's window, by process id
-imperatorium/changes.py     git status/diff, and background-session worktrees
-imperatorium/activity.py    tool-call timelines, "doing" lines, failure tallies
-imperatorium/history.py     searching past sessions; resume and fork
-imperatorium/usage.py       statusline readings, rate-limit pace, thresholds
-imperatorium/costs.py       estimated cost history from transcripts, at list prices
-imperatorium/prs.py         the PR for a session's branch, off the request path
-imperatorium/notify.py      ntfy pushes and spoken alerts (both off by default)
-setup_machine.py        installing on a new machine; check; uninstall;
-                        onboarding other machines; the service
-bootstrap.ps1/.sh       from nothing: prerequisites, clone, setup
-ONBOARDING.md           the step-by-step walkthrough
-*.example.json          what config.json and policy.json start from
-requirements*.txt       core, voice and Stream Deck dependencies
-hooks/cc_statusline.py  the statusline: forwards usage, prints a short line
-impctl.py               the command line: every function below, and a help
-impctl.ps1/.sh          run it from anywhere, with the venv's Python
-hotkey.py               the global hotkey, and nothing else
-streamdeck_surface.py   the Stream Deck, a separate process
-service/tasks.ps1       Windows scheduled tasks that keep all three up
-hooks/                  the hook, and an installer for user settings
+mod/imperatorium/           the Claude Code mod
+install.ps1 install.sh install.cmd   from nothing: download the binary, run `install`
+ONBOARDING.md               the step-by-step walkthrough
+config.example.json policy.example.json   what config.json and policy.json start from
+herdr/                      see the `herdr` branch
 ```
 
+The goldens in `rust/imperatorium/tests/golden` are the specification: see
+the `README.md` there. herdr hosting lives on the separate `herdr` branch.
+
 Runtime state lives in `%LOCALAPPDATA%\imperatorium\state.json` on Windows
-(`$XDG_STATE_HOME/imperatorium`, or `~/.local/state/imperatorium`, elsewhere), not
-beside the source: a checkout on a mapped network drive is common, and
-Windows refuses an atomic rename-over on SMB often enough to matter for a
-file holding tokens.
+(`$XDG_STATE_HOME/imperatorium`, or `~/.local/state/imperatorium`, elsewhere):
+a file holding tokens, kept out of any synced or network-mapped folder, where
+an atomic rename-over is not always allowed.
 
 ## Other machines
 
@@ -752,8 +750,9 @@ daemon and no open port - just a key you already use. Their sessions appear on
 the board tagged with the host.
 
 ```
-python -m imperatorium.remote                  # probe the configured hosts
-python -m imperatorium.remote somehost         # probe one by name
+imperatorium remote-probe                      # poll the configured hosts once and print their sessions
+imperatorium remote-probe somehost             # one by name
+imperatorium hosts                             # hosts and their state, from the dispatcher
 ```
 
 The same SSH call reads the host's `~/.claude/sessions/*.json`, which is where
@@ -763,10 +762,10 @@ waiting just as a local one does.
 ### Adding a host
 
 ```
-python setup_machine.py remote add HOST            # user@host or an ~/.ssh/config alias
-python setup_machine.py remote add HOST --label pi --no-reader
-python setup_machine.py remote check               # what each host has and lacks
-python setup_machine.py remote remove HOST [--purge]
+imperatorium remote add HOST            # user@host or an ~/.ssh/config alias
+imperatorium remote add HOST --label pi
+imperatorium remote check               # what each host has and lacks
+imperatorium remote remove HOST [--purge]
 ```
 
 `remote add` walks through everything a host needs, and each step is safe to
@@ -777,17 +776,15 @@ repeat:
 2. **Claude Code** 2.1.224+ there, found by absolute path. If it is missing or
    old it offers Anthropic's installer (`--install-claude` to skip the
    question). Log in once on the host afterwards.
-3. **python3** there, which the hooks and prompt delivery use.
-4. **The conversation reader** - the Agent SDK in `~/.claude/imperatorium/venv`,
-   ~300MB, so the window can show that host's conversations. `--no-reader`
-   skips it.
-5. **The reporting hooks**, in the host's `~/.claude/settings.json` (backed
+3. **The binary**, put at `~/.claude/imperatorium/bin/imperatorium` on the
+   host and checked by SHA-256. The host needs nothing else but `sh`.
+4. **The reporting hooks**, in the host's `~/.claude/settings.json` (backed
    up first), unless `--no-tunnel`.
-6. **config.json**: the host entry with `"tunnel": true`, then a dispatcher
-   restart.
+5. **config.json**: the host entry with `"tunnel": true`, then a dispatcher
+   restart (`--no-restart` skips it).
 
-The pieces are described below, and can still be done by hand
-(`python hooks/install.py --remote HOST [--dry-run|--uninstall]`).
+`remote remove HOST` takes the hooks and the entry away; `--purge` also removes
+`~/.claude/imperatorium` there.
 
 ### Making a host as controllable as a local session
 
@@ -796,12 +793,13 @@ the host or an open port on either machine:
 
 - **Hooks, through a reverse tunnel.** The dispatcher holds `ssh -N -R` open
   to each tunnelled host, so `127.0.0.1:8792` on the host leads back here and
-  the host runs the same `cc_hook.py`. That is what delivers attention
-  (permission prompts, failed turns) and, above all, the session's inbox
-  token, which Claude Code hands to hooks and nowhere else.
+  the host's hooks run the same `imperatorium hook`. That is what delivers
+  attention (permission prompts, failed turns) and, above all, the session's
+  inbox token, which Claude Code hands to hooks and nowhere else.
 - **Injection, over SSH.** A prompt for a remote session is piped over SSH to
-  a one-line `python3` writer that connects to its Unix socket. The token
-  travels on stdin, never on a command line the host's `ps` could show.
+  `imperatorium inbox-send` on the host, which connects to the session's Unix
+  socket. The token travels on stdin, never on a command line the host's `ps`
+  could show.
 
 The tunnel does **not** land on the dispatcher's own port. It lands on a
 hook-only listener, one local port per host (8793 upward), which answers
@@ -809,32 +807,29 @@ hook-only listener, one local port per host (8793 upward), which answers
 `/api/dispatch` into the sessions on this machine. The host an event came from
 is known from which listener it arrived at, never from the payload, and its
 records are stored under host-qualified keys, so a host can describe only its
-own sessions. The tunnel's `ssh` is bound to the dispatcher with a job object,
-so killing the dispatcher cannot orphan it holding the host's port.
+own sessions. The tunnel's `ssh` is bound to the dispatcher so killing the
+dispatcher cannot orphan it holding the host's port.
 
 With that in place, a remote project dispatches like a local one: into its live
 session if one has reported in, otherwise into a fresh `claude --bg` there.
 Focus still does not cross the wire - there is no window here to raise.
 
 **Conversations** are read on the host, because that is where the transcript
-is. The dispatcher keeps one SSH channel per host open and sends it this
-project's own `conversation.py`, so a remote pane is built by exactly the same
-code as a local one. The host needs the Agent SDK in a venv, which
-`remote add` installs (the interpreter is `reader_python` in `config.json`,
-default `$HOME/.claude/imperatorium/venv/bin/python`).
+is. The dispatcher keeps one SSH channel per host open to the host's copy of
+the binary (`imperatorium remote-channel`), so a remote pane is built by
+exactly the same code as a local one. A new connection per 1.5s poll would pay
+the SSH connect every time; on a kept channel a read is ~10-20ms. The channel
+dies with the dispatcher, and a host that fails is not re-dialled for 30
+seconds.
 
-A new connection per 1.5s poll would pay the SSH connect and the SDK's
-one-off first read (~1s on a Pi) every time; on a kept channel a read is
-~10-20ms. The channel dies with the dispatcher, and a host that fails is not
-re-dialled for 30 seconds.
+**Cache and cost** for a remote tile come over the same channel, read on the
+host: each poll asks it for the live sessions' numbers - when the prompt cache
+expires, the context size and the model - so a remote session gets the cache
+countdown, the `cold` badge and the cache-expired button with its cost, as a
+local one does.
 
-**Cache and cost** for a remote tile are read on the host the same way: a
-second kept channel runs this project's `sessionstat.py` on the host's plain
-`python3` (standard library only, no venv; `python` in `config.json`). Each
-poll asks it for the live sessions' numbers - when the prompt cache expires,
-the context size and the model - so a remote session gets the cache countdown,
-the `cold` badge and the cache-expired button with its cost, as a local one
-does. Without python3 on the host the rows still show, without those numbers.
+A host entry with `"container": NAME` is a container, reached by `docker exec`
+on this machine or on the SSH host named by `"ssh"`.
 
 Remote projects are host-qualified - `developmenthost1/bookoferrantpages` -
 because that name also exists locally, and firing at the wrong machine is the
@@ -852,8 +847,8 @@ Ubuntu, because `.bashrc` returns early.
 ## Auto-approval
 
 At twenty sessions the bottleneck is not how fast agents work, it is how often
-they stop to ask. `hooks/cc_permission.py` answers the cheap asks - reading a
-file inside the project, `git status`, `pytest` - and forwards everything else
+they stop to ask. `imperatorium permission` answers the cheap asks - reading a
+file inside the project, `git status`, a test run - and forwards everything else
 to you unchanged.
 
 The rule that shapes it: **this removes prompts, never answers.** Anything not
@@ -862,8 +857,8 @@ so you keep the power to approve it. Refusing `git push` and `rm -rf` outright
 was the first design and it was wrong - it took away the ability to say yes.
 
 `deny` is reserved for one class: an agent changing the machinery that decides
-what it is allowed to do - `settings.json`, `policy.json`, the hook scripts,
-`policy.py`, or `--dangerously-skip-permissions`. There is no legitimate
+what it is allowed to do - `settings.json`, `policy.json`, the hooks,
+the policy code, or `--dangerously-skip-permissions`. There is no legitimate
 mid-task reason to touch those, and the risk is an agent widening its own
 authority. Secrets (`.env`, `id_rsa`, `.aws/`, `*.pem`) are never
 auto-approved, but they are asked about rather than refused: you may have good
@@ -893,55 +888,28 @@ carries `answers` is taken as the answers. A parked question shows in the
 window's banner as a card - its options with descriptions, multi-select,
 free-text Other - with **Submit answer**, **Answer in terminal** (hands it
 back at once) and **Decline**. A bare Allow is refused for a question, so the
-Stream Deck and `impctl allow` cannot answer one and the deck does not show
+Stream Deck and `imperatorium allow` cannot answer one and the deck does not show
 them. An interactive session's question waits `park.question_wait_seconds`
 (default 120, never longer than the other two waits). Needs the object
 `decision_format`; with the legacy one the terminal asks.
 
 ## Keep it running
 
-`setup_machine.py` registers this for you; `python setup_machine.py service
-install|uninstall|restart|status` does it again on its own.
+`imperatorium install` registers this for you; `imperatorium service
+install|uninstall|restart|status` does it again on its own, and
+`imperatorium status`, `start`, `stop` and `restart` (all, or one of
+`dispatcher`, `streamdeck`, `hotkey`) control it.
 
-- **Windows:** three scheduled tasks, per-user, no elevation - the
-  dispatcher, the Stream Deck and the hotkey (`Imperatorium*`).
+- **Windows:** per-user scheduled tasks, no elevation - the dispatcher, the
+  Stream Deck (with `--streamdeck`) and the hotkey (`Imperatorium*`).
 - **Linux:** systemd user units, `imperatorium-dispatcher.service` (and
   `imperatorium-streamdeck.service`), `Restart=always`. A user unit stops at
   logout unless you run `loginctl enable-linger $USER`.
 - **macOS:** launchd agents, `local.imperatorium.dispatcher` (and
   `.streamdeck`), `KeepAlive`, logging to `~/Library/Logs/imperatorium-*.log`.
 
-### Installed before 2026-10-20
-
-Until then everything internal was called `ccontrol` ("Central Control"):
-the package, the tasks (`CentralControl*`), the units (`ccontrol-*`,
-`local.ccontrol.*`), the state folder and `~/.claude/ccontrol` on remote
-hosts. What happens to an install from then:
-
-- **Service:** `setup_machine.py service install` (or `tasks.ps1 -Action
-  install`) removes the old tasks or units and registers the new ones. Do
-  this first - an old task starts `-m ccontrol.dispatcher`, which no longer
-  exists.
-- **State folder:** the dispatcher moves `ccontrol` to `imperatorium` the
-  first time it starts with the port bound; until then the permission hook
-  keeps writing beside the old one.
-- **Hooks:** entries stamped `ccontrol` in `~/.claude/settings.json` keep
-  working and are recognised as ours; `python hooks/install.py` restamps them.
-- **Remote hosts:** the reader in `~/.claude/ccontrol` is still used;
-  `setup_machine.py remote add HOST` moves it and re-points the hooks.
-- **Browser state** (folds, drafts, what was seen) carries over on the first
-  load.
-- **Environment variables** are now `IMPERATORIUM_*`; the old `CCONTROL_*`
-  names are not read.
-
-The Windows tasks can also be driven directly:
-
-```
-powershell -ExecutionPolicy Bypass -File service\tasks.ps1 -Action status
-powershell -ExecutionPolicy Bypass -File service\tasks.ps1 -Action install
-powershell -ExecutionPolicy Bypass -File service\tasks.ps1 -Action restart
-powershell -ExecutionPolicy Bypass -File service\tasks.ps1 -Action uninstall
-```
+`imperatorium run` runs the dispatcher in the terminal you are in, for
+debugging (stop the service first).
 
 The dispatcher has to outlive any single Claude Code session: started from a
 session's shell it is a child of that session and dies with it, taking the
@@ -955,6 +923,13 @@ opened at logon. What actually self-heals is a second `-Once` trigger starting
 immediately and repeating every minute, with `MultipleInstances=IgnoreNew` so
 each repeat is discarded for free while the task is running. Measured
 recovery after a force-kill: about 20 seconds.
+
+### Installed from the Python version
+
+An install from before the Rust binary has hooks and tasks pointing at Python
+scripts that no longer exist. Run `imperatorium install` once from the new
+binary, and `imperatorium remote add HOST` again for each host. Environment
+variables are `IMPERATORIUM_*`; the older `CCONTROL_*` names are not read.
 
 ## Deliberately not built
 
