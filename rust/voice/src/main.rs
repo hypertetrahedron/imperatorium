@@ -474,4 +474,29 @@ mod tests {
     fn refuses_what_is_not_wav() {
         assert!(decode_wav(b"\x1aE\xdf\xa3webm").unwrap_err().contains("not WAV"));
     }
+
+    // test_voice.py's transcription guards: nothing reaches the model unless
+    // there is something to transcribe. (A model name that could never load:
+    // if a guard leaks, the call fails loudly instead of loading something.)
+    fn never_loads() -> Transcriber {
+        let settings = json!({"model": "no-such-model-should-never-load", "device": "cpu"});
+        Transcriber::new(settings.as_object().unwrap().clone())
+    }
+
+    #[test]
+    fn empty_and_silent_input_return_empty_without_loading() {
+        let mut t = never_loads();
+        assert_eq!(t.transcribe(&[], None).unwrap(), "");
+        // A fumbled key is near-silence, and the model would invent words for it.
+        assert_eq!(t.transcribe(&vec![0.0; 16000], None).unwrap(), "");
+        assert_eq!(t.transcribe(&vec![0.001; 16000], None).unwrap(), "");
+        assert!(t.ctx.is_none());
+    }
+
+    #[test]
+    fn audible_input_does_reach_the_model() {
+        let mut t = never_loads();
+        let err = t.transcribe(&vec![0.5; 16000], None).unwrap_err();
+        assert!(err.contains("no model file"), "{err}");
+    }
 }

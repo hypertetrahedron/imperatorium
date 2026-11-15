@@ -343,3 +343,293 @@ mod tests {
         assert_eq!(s["idle_unload"], 1800);
     }
 }
+
+/// test_voice.py, ported: the settings, and the protocol between the
+/// dispatcher and the dictation child (a stand-in child, compiled once from
+/// the source below, which speaks it the way imperatorium-voice does).
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::OnceLock;
+
+    // -- Settings -----------------------------------------------------------
+
+    fn s(v: Value) -> Map<String, Value> {
+        settings_from(Some(&v))
+    }
+
+    #[test]
+    fn defaults_apply_when_there_is_no_config() {
+        let d = settings_from(None);
+        assert_eq!(d["model"], "large-v3-turbo");
+        assert_eq!(d["language"], "en");
+        // An empty block, a non-object block and no block are all the defaults.
+        assert_eq!(s(json!({})), d);
+        assert_eq!(settings_from(Some(&json!("junk"))), d);
+    }
+
+    #[test]
+    fn config_overrides_only_known_keys() {
+        // config.json is hand-edited and carries "_comment"; letting that
+        // through would reach the worker as a setting.
+        let got = s(json!({"model": "small", "_comment": "note to self", "nonsense": true}));
+        assert_eq!(got["model"], "small");
+        assert!(!got.contains_key("_comment"));
+        assert!(!got.contains_key("nonsense"));
+    }
+
+    #[test]
+    fn disabling_voice_is_expressed_in_settings() {
+        assert_eq!(s(json!({"enabled": false}))["enabled"], false);
+        assert_eq!(settings_from(None)["enabled"], true);
+    }
+
+    #[test]
+    fn the_cpu_gets_a_smaller_model_by_default() {
+        assert_eq!(settings_from(None)["cpu_model"], "small");
+        assert_eq!(s(json!({}))["cpu_model"], "small");
+    }
+
+    #[test]
+    fn a_model_named_in_config_is_kept_on_the_cpu() {
+        assert_eq!(s(json!({"model": "medium"}))["cpu_model"], "medium");
+        // The example config names the default; that is not a choice for the CPU.
+        assert_eq!(s(json!({"model": "large-v3-turbo"}))["cpu_model"], "small");
+        assert_eq!(s(json!({"model": "medium", "cpu_model": "base"}))["cpu_model"], "base");
+    }
+
+    #[test]
+    fn an_input_device_index_survives() {
+        assert_eq!(s(json!({"input_device": 16}))["input_device"], 16);
+    }
+
+    // -- The child process --------------------------------------------------
+
+    /// A std-only program with the worker's protocol. It logs `start` (with
+    /// its arguments) and `load` to the file named by settings "log", and
+    /// answers a transcribe with "<n> bytes, hint=<hint>", or with the
+    /// error in settings "fail".
+    const FAKE: &str = r#"
+use std::io::{BufRead, Read, Write};
+fn field(s: &str, key: &str) -> Option<String> {
+    let at = s.find(&format!("\"{key}\":"))? + key.len() + 3;
+    let rest = s[at..].trim_start();
+    if rest.starts_with("null") { return None; }
+    let rest = rest.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => break,
+            '\\' => out.push(chars.next()?),
+            c => out.push(c),
+        }
+    }
+    Some(out)
+}
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let settings = args.get(2).cloned().unwrap_or_default();
+    let log = field(&settings, "log");
+    let fail = field(&settings, "fail");
+    let note = |what: &str| {
+        if let Some(l) = &log {
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(l).unwrap();
+            writeln!(f, "{what}").unwrap();
+        }
+    };
+    note(&format!("start\t{}\t{}", args.get(1).cloned().unwrap_or_default(), settings));
+    let mut inp = std::io::BufReader::new(std::io::stdin());
+    let mut out = std::io::stdout();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if inp.read_line(&mut line).unwrap_or(0) == 0 { return; }
+        let reply = if line.contains("\"load\"") {
+            note("load");
+            "{\"ok\": true, \"device\": \"cpu\", \"model\": null}".to_string()
+        } else {
+            let at = line.find("\"bytes\":").unwrap() + 8;
+            let n: usize = line[at..].trim_start().chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap();
+            let mut data = vec![0u8; n];
+            inp.read_exact(&mut data).unwrap();
+            note(&format!("transcribe {n}"));
+            match &fail {
+                Some(e) => format!("{{\"ok\": false, \"error\": \"{e}\"}}"),
+                None => format!("{{\"ok\": true, \"text\": \"{n} bytes, hint={}\", \"device\": \"cpu\", \"model\": null}}",
+                    field(&line, "hint").unwrap_or_else(|| "None".into())),
+            }
+        };
+        writeln!(out, "{reply}").unwrap();
+        out.flush().unwrap();
+    }
+}
+"#;
+
+    /// The compiled stand-in, and IMPERATORIUM_VOICE_BIN pointing at it
+    /// (once, for every test here: they all want the same one).
+    fn fake_exe() -> &'static PathBuf {
+        static EXE: OnceLock<PathBuf> = OnceLock::new();
+        EXE.get_or_init(|| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            FAKE.hash(&mut h);
+            let dir = std::env::temp_dir().join("imp-fakevoice");
+            std::fs::create_dir_all(&dir).unwrap();
+            let ext = if cfg!(windows) { ".exe" } else { "" };
+            let exe = dir.join(format!("fakevoice-{:x}{ext}", h.finish()));
+            if !exe.is_file() {
+                let src = dir.join(format!("fakevoice-{}.rs", std::process::id()));
+                std::fs::write(&src, FAKE).unwrap();
+                let tmp = dir.join(format!("fakevoice-{}{ext}", std::process::id()));
+                let rustc = std::env::var_os("RUSTC").map(PathBuf::from).or_else(|| {
+                    option_env!("CARGO").map(|c| Path::new(c).with_file_name(format!("rustc{}", if cfg!(windows) { ".exe" } else { "" })))
+                }).unwrap_or_else(|| "rustc".into());
+                let made = Command::new(rustc).args(["--edition", "2021", "-O", "-o"]).arg(&tmp).arg(&src).output().unwrap();
+                assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+                let _ = std::fs::rename(&tmp, &exe);
+                let _ = std::fs::remove_file(&tmp);
+                let _ = std::fs::remove_file(&src);
+            }
+            std::env::set_var("IMPERATORIUM_VOICE_BIN", &exe);
+            exe
+        })
+    }
+
+    struct Rig {
+        dir: PathBuf,
+        log: PathBuf,
+        w: Arc<Worker>,
+    }
+
+    impl Rig {
+        fn new(extra: Value) -> Self {
+            static N: AtomicU32 = AtomicU32::new(0);
+            fake_exe();
+            let dir = std::env::temp_dir().join(format!("imp-voice-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let model = dir.join("model.bin"); // a path as the model: no models folder needed
+            std::fs::write(&model, b"x").unwrap();
+            let log = dir.join("log.txt");
+            let mut settings = json!({"model": model.to_string_lossy(), "idle_unload": 0,
+                                      "log": log.to_string_lossy()}).as_object().unwrap().clone();
+            settings.extend(extra.as_object().unwrap().clone());
+            Rig { w: Worker::new(settings, &dir), dir, log }
+        }
+
+        fn lines(&self) -> Vec<String> {
+            std::fs::read_to_string(&self.log).unwrap_or_default().lines().map(str::to_string).collect()
+        }
+
+        fn count(&self, prefix: &str) -> usize {
+            self.lines().iter().filter(|l| l.starts_with(prefix)).count()
+        }
+    }
+
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            self.w.stop();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn audio_goes_through_and_text_comes_back() {
+        let r = Rig::new(json!({}));
+        assert_eq!(r.w.transcribe_bytes(b"abcde", Some("laser")).unwrap(), "5 bytes, hint=laser");
+        assert_eq!(r.w.transcribe_bytes(b"xy", None).unwrap(), "2 bytes, hint=None");
+        assert_eq!(r.count("start"), 1);
+        assert!(r.w.running());
+        r.w.stop(); // stdin closed: it exits
+        assert!(!r.w.running());
+    }
+
+    #[test]
+    fn the_worker_learns_where_the_model_runs() {
+        let r = Rig::new(json!({}));
+        assert_eq!(r.w.where_(), None);
+        r.w.transcribe_bytes(b"abc", None).unwrap();
+        assert_eq!(r.w.where_(), Some(json!({"device": "cpu", "model": null})));
+    }
+
+    #[test]
+    fn nothing_recorded_never_starts_a_process() {
+        let r = Rig::new(json!({}));
+        assert_eq!(r.w.transcribe_bytes(b"", None).unwrap(), "");
+        assert_eq!(r.count("start"), 0);
+        assert!(!r.w.running());
+    }
+
+    #[test]
+    fn load_builds_the_model_once_per_process() {
+        let r = Rig::new(json!({}));
+        r.w.load().unwrap();
+        r.w.load().unwrap();
+        assert_eq!((r.count("start"), r.count("load")), (1, 2));
+    }
+
+    #[test]
+    fn a_failure_in_the_child_is_reported_and_the_child_kept() {
+        let r = Rig::new(json!({"fail": "no GPU"}));
+        let err = r.w.transcribe_bytes(b"abc", None).unwrap_err();
+        assert!(err.contains("no GPU"), "{err}");
+        assert!(r.w.running());
+    }
+
+    #[test]
+    fn a_child_that_died_is_started_again() {
+        let r = Rig::new(json!({}));
+        r.w.load().unwrap();
+        {
+            let mut st = r.w.state.lk();
+            let p = st.proc.as_mut().unwrap();
+            p.child.kill().unwrap(); // as if it had exited
+            p.child.wait().unwrap();
+        }
+        assert_eq!(r.w.transcribe_bytes(b"a", None).unwrap(), "1 bytes, hint=None");
+        assert_eq!(r.count("start"), 2);
+    }
+
+    #[test]
+    fn an_idle_child_is_ended_and_a_busy_one_is_not() {
+        let r = Rig::new(json!({"idle_unload": 60}));
+        r.w.load().unwrap();
+        r.w.reap();
+        assert!(r.w.running()); // just used
+        {
+            let mut st = r.w.state.lk(); // mid-transcription
+            st.used = now() - 61.0;
+            drop(st);
+            let _busy = r.w.state.lk();
+            r.w.reap();
+        }
+        assert!(r.w.running());
+        r.w.reap(); // idle past the limit, nothing holding it
+        assert!(!r.w.running());
+        r.w.load().unwrap(); // comes back on demand
+        assert_eq!(r.count("start"), 2);
+    }
+
+    #[test]
+    fn zero_means_never_unload() {
+        let r = Rig::new(json!({"idle_unload": 0}));
+        r.w.load().unwrap();
+        r.w.state.lk().used = now() - 1e6;
+        r.w.reap();
+        assert!(r.w.running());
+    }
+
+    #[test]
+    fn the_child_is_run_with_the_worker_flag_and_its_settings() {
+        let r = Rig::new(json!({}));
+        r.w.load().unwrap();
+        let line = r.lines().into_iter().find(|l| l.starts_with("start")).unwrap();
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        assert_eq!(parts[1], "--worker");
+        let sent: Value = serde_json::from_str(parts[2]).unwrap();
+        assert_eq!(sent["model"], r.w.settings["model"]);
+        assert_eq!(sent["idle_unload"], 0);
+    }
+}
