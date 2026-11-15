@@ -702,3 +702,21 @@ mod tests {
         assert_eq!(r.reason, "policy error (TypeError)");
     }
 }
+
+/// test_rename.py: the policy code is protected under either name.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_policy_code_is_protected_under_either_name() {
+        let on = json!({"enabled": true, "defaults": {}});
+        for path in ["imperatorium/policy.py", r"imperatorium\policy.py", "ccontrol/policy.py"] {
+            let req = json!({"tool_name": "Bash", "tool_input": {"command": format!("edit {path}")},
+                             "cwd": "/w/p"});
+            let r = decide(&req, &on);
+            assert_eq!((r.verdict, r.tier), (DENY, "self"), "{path}");
+        }
+    }
+}

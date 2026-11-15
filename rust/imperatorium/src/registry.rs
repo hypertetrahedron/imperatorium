@@ -606,3 +606,253 @@ mod tests {
         assert!(!moved_on(&r, Some(100.0)));
     }
 }
+
+/// test_core.py: IdleStates, StaleAttention, FailureCaptions,
+/// AttentionBookkeeping (the moved_on half) and Worktrees.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    fn row(v: Value) -> Row {
+        v.as_object().unwrap().clone()
+    }
+
+    fn idle(extra: Value) -> Row {
+        let mut r = row(json!({"sessionId": "a", "status": "idle", "status_changed_at": 50.0,
+                               "work": {"alive": true, "agents": 0, "shells": 0, "monitors": 0, "wakeups": 0}}));
+        for (k, v) in extra.as_object().unwrap() {
+            r.insert(k.clone(), v.clone());
+        }
+        r
+    }
+
+    #[test]
+    fn an_idle_prompt_while_tasks_run_is_not_shown() {
+        let mut r = idle(json!({"work": {"monitors": 1}, "attention": true,
+                                "attention_kind": "notification", "last_notification": "idle_prompt"}));
+        classify(&mut r);
+        assert_eq!(r["attention"], json!(false));
+    }
+
+    #[test]
+    fn idle_prompt_is_complete() {
+        let mut r = idle(json!({"attention": true, "attention_kind": "notification",
+                                "attention_reason": "waiting for you",
+                                "last_notification": "idle_prompt", "attention_since": 9.0}));
+        classify(&mut r);
+        assert_eq!((r["attention_kind"].clone(), r["attention_since"].clone()), (json!("complete"), json!(9.0)));
+    }
+
+    #[test]
+    fn blocked_and_failed_keep_their_attention() {
+        let mut r = idle(json!({"attention": true, "attention_kind": "notification",
+                                "last_notification": "permission_prompt"}));
+        classify(&mut r);
+        assert_eq!(r["attention_kind"], json!("notification"));
+        let mut r = idle(json!({"attention": true, "attention_kind": "failure",
+                                "last_notification": "idle_prompt"}));
+        classify(&mut r);
+        assert_eq!(r["attention_kind"], json!("failure"));
+    }
+
+    #[test]
+    fn working_and_finished_jobs_are_left_alone() {
+        let mut r = idle(json!({"status": "busy", "last_event": "Stop"}));
+        classify(&mut r);
+        assert!(!r.contains_key("attention"));
+        let mut r = idle(json!({"state": "done", "last_event": "Stop"}));
+        classify(&mut r);
+        assert!(!r.contains_key("attention"));
+    }
+
+    fn stale(status: &str, changed: Option<f64>) -> Row {
+        let mut r = row(json!({"sessionId": "sid", "status": status}));
+        if let Some(c) = changed {
+            r.insert("status_changed_at".into(), json!(c));
+        }
+        r
+    }
+
+    #[test]
+    fn moved_on_edges() {
+        const PROMPTED: f64 = 1000.0;
+        // working again means the prompt was answered
+        assert!(moved_on(&stale("busy", Some(PROMPTED + 10.0)), Some(PROMPTED)));
+        // a status older than the prompt proves nothing
+        assert!(!moved_on(&stale("busy", Some(PROMPTED - 10.0)), Some(PROMPTED)));
+        // the same instant is the prompt appearing, not an answer
+        assert!(!moved_on(&stale("busy", Some(PROMPTED + 0.2)), Some(PROMPTED)));
+        // no status clock leaves the hook in charge
+        assert!(!moved_on(&stale("busy", None), Some(PROMPTED)));
+        // nothing was waiting in the first place
+        assert!(!moved_on(&stale("busy", Some(PROMPTED + 10.0)), None));
+        // still idle is still waiting
+        assert!(!moved_on(&stale("idle", Some(PROMPTED + 10.0)), Some(PROMPTED)));
+    }
+
+    #[test]
+    fn moved_on_sources() {
+        let at = |s: &str| {
+            row(json!({"sessionId": "sid", "status": "busy", "status_changed_at": 2000.0,
+                       "status_at_change": s}))
+        };
+        // `moved_on` is only consulted for notification attention: work
+        // resuming proves a permission prompt was answered.
+        assert!(moved_on(&at("busy"), Some(1000.0)));
+        // `shell` in the session file, `busy` from `agents --json`: both mean executing.
+        assert!(moved_on(&at("shell"), Some(1000.0)));
+        // sources disagreeing about anything else clears nothing
+        assert!(!moved_on(&at("idle"), Some(1000.0)));
+    }
+
+    fn merged(agents: Value, files: Value) -> Vec<Row> {
+        let agents: Vec<Value> = agents.as_array().unwrap().clone();
+        let files: HashMap<String, Row> = files
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_object().unwrap().clone()))
+            .collect();
+        merge(&agents, &files, &HashMap::new())
+    }
+
+    #[test]
+    fn the_status_clock_is_carried_off_the_session_file() {
+        let rows = merged(
+            json!([{"sessionId": "sid", "status": "busy"}]),
+            json!({"sid": {"sessionId": "sid", "statusUpdatedAt": 1790036818458u64}}),
+        );
+        let got = rows[0]["status_changed_at"].as_f64().unwrap();
+        assert!((got - 1790036818.458).abs() < 1e-6, "{got}");
+    }
+
+    #[test]
+    fn a_missing_or_junk_stamp_is_simply_absent() {
+        for stamp in [Value::Null, json!("soon"), json!(true)] {
+            let rows = merged(
+                json!([{"sessionId": "sid", "status": "busy"}]),
+                json!({"sid": {"sessionId": "sid", "statusUpdatedAt": stamp}}),
+            );
+            assert!(!rows[0].contains_key("status_changed_at"), "{stamp}");
+        }
+    }
+
+    #[test]
+    fn a_desktop_app_session_is_flagged() {
+        let rows = merged(
+            json!([{"sessionId": "app"}, {"sessionId": "cli"}, {"sessionId": "bare"}]),
+            json!({"app": {"sessionId": "app", "entrypoint": "claude-desktop"},
+                   "cli": {"sessionId": "cli", "entrypoint": "cli"}}),
+        );
+        let flag = |sid: &str| {
+            let r = rows.iter().find(|r| r["sessionId"] == sid).unwrap();
+            truthy(r.get("desktop_app"))
+        };
+        assert_eq!((flag("app"), flag("cli"), flag("bare")), (true, false, false));
+    }
+
+    #[test]
+    fn a_vs_code_session_is_flagged() {
+        let rows = merged(
+            json!([{"sessionId": "ide"}, {"sessionId": "cli"}]),
+            json!({"ide": {"sessionId": "ide", "entrypoint": "claude-vscode"},
+                   "cli": {"sessionId": "cli", "entrypoint": "cli"}}),
+        );
+        let ide = |sid: &str| rows.iter().find(|r| r["sessionId"] == sid).unwrap().get("ide").cloned();
+        assert_eq!(ide("ide"), Some(json!("vscode")));
+        assert!(ide("cli").is_none_or(|v| v.is_null()));
+    }
+
+    #[test]
+    fn failure_captions() {
+        assert_eq!(failure_caption(Some("overloaded"), ""), Some("API overloaded - wait and retry"));
+        assert_eq!(failure_caption(Some("server_error"), ""), Some("API unavailable - retry"));
+        // Claude Code maps this one to no blocked state, so nor do we.
+        assert_eq!(failure_caption(Some("max_output_tokens"), ""), None);
+        assert_eq!(
+            failure_caption(Some("invalid_request"), "prompt is too long"),
+            Some("request too large - /compact or trim")
+        );
+        assert_eq!(
+            failure_caption(Some("invalid_request"), "bad field"),
+            Some("invalid API request - see detail")
+        );
+        for error in [Some("a_new_error_code"), None, Some("unknown")] {
+            assert_eq!(failure_caption(error, ""), Some("API error"), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn every_documented_error_has_a_caption() {
+        // The enum as the binary lists it; a new one must not crash a tile.
+        for error in [
+            "authentication_failed", "oauth_org_not_allowed", "account_on_hold",
+            "verification_required", "billing_error", "rate_limit", "overloaded",
+            "invalid_request", "model_not_found", "server_error", "unknown",
+            "max_output_tokens", "cloud_credential_error",
+        ] {
+            let caption = failure_caption(Some(error), "");
+            assert!(caption.is_none_or(|c| !c.trim().is_empty()), "{error}");
+        }
+    }
+
+    fn placed(cwd: &str) -> (Value, Value) {
+        place(Some(&json!(cwd)))
+    }
+
+    #[test]
+    fn worktree_paths_on_either_platform() {
+        for cwd in [
+            r"C:\src\hai-proof\.claude\worktrees\fizzy-wondering-lark",
+            "/home/me/hai-proof/.claude/worktrees/fizzy-wondering-lark/",
+        ] {
+            assert_eq!(placed(cwd), (json!("hai-proof"), json!("fizzy-wondering-lark")), "{cwd}");
+        }
+    }
+
+    #[test]
+    fn a_plain_folder_is_its_own_project() {
+        assert_eq!(placed(r"C:\src\hai-proof"), (json!("hai-proof"), Value::Null));
+        assert_eq!(place(None), (Value::Null, Value::Null));
+    }
+
+    #[test]
+    fn a_linked_worktree_is_read_from_its_git_file() {
+        let d = std::env::temp_dir().join(format!("imp-place-core-{}", std::process::id()));
+        let wt = d.join("side-branch");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: C:/src/hai-proof/.git/worktrees/side-branch\n").unwrap();
+        let got = placed(&wt.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(got, (json!("hai-proof"), json!("side-branch")));
+    }
+
+    fn labelled(cwd: &str, name: &str) -> Row {
+        let (project, worktree) = placed(cwd);
+        row(json!({"cwd": cwd, "name": name, "project": project, "worktree": worktree}))
+    }
+
+    #[test]
+    fn chosen_names_and_plain_sessions_keep_theirs() {
+        let wt = r"C:\src\hai-proof\.claude\worktrees\fizzy-wondering-lark";
+        assert_eq!(label(&labelled(wt, "Proof checker")), "Proof checker");
+        assert_eq!(label(&labelled(r"C:\src\hai-proof", "hai-proof-5b")), "hai-proof-5b");
+        // the default name: the worktree says it all
+        assert_eq!(label(&labelled(wt, "fizzy-wondering-lark-c9")), "hai-proof-fizzy-wondering-lark");
+        assert_eq!(short_label(&labelled(wt, "fizzy-wondering-lark-c9")), "fizzy-wondering-lark");
+        assert_eq!(short_label(&labelled(r"C:\src\hai-proof", "hai-proof-5b")), "5b");
+        assert_eq!(short_label(&labelled(wt, "Proof checker")), "Proof checker");
+    }
+
+    #[test]
+    fn merge_fills_the_fields() {
+        let rows = merged(
+            json!([{"sessionId": "a", "name": "lark-c9", "cwd": "/r/hai-proof/.claude/worktrees/lark"}]),
+            json!({}),
+        );
+        assert_eq!(
+            (rows[0]["project"].clone(), rows[0]["worktree"].clone(), rows[0]["display_name"].clone()),
+            (json!("hai-proof"), json!("lark"), json!("hai-proof-lark"))
+        );
+    }
+}

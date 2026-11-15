@@ -282,3 +282,83 @@ mod tests {
         assert_eq!(match_title("", &w(&[(1, "")])), None);
     }
 }
+
+/// test_core.py's WindowTitles.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    const BUSY: &str = "\u{25d1} Project tiles status not updating"; // glyph while working
+    const IDLE: &str = "\u{2733} Vercel OIDC token sufficiency"; // glyph while waiting
+
+    fn w(v: &[(isize, &str)]) -> Vec<(isize, String)> {
+        v.iter().map(|(h, t)| (*h, t.to_string())).collect()
+    }
+
+    #[test]
+    fn the_same_title_either_way_round() {
+        assert_eq!(normalise_title(BUSY), "project tiles status not updating");
+        assert_eq!(normalise_title(BUSY), normalise_title("Project tiles status not updating"));
+    }
+
+    #[test]
+    fn an_empty_title_normalises_to_nothing() {
+        for value in ["", "   ", "\u{25d1}"] {
+            assert_eq!(normalise_title(value), "", "{value:?}");
+        }
+    }
+
+    #[test]
+    fn the_right_window_is_picked() {
+        assert_eq!(
+            match_title("Project tiles status not updating", &w(&[(11, BUSY), (22, IDLE)])),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn a_background_tab_matches_nothing() {
+        // Its window is showing another tab, so its title is nowhere.
+        assert_eq!(
+            match_title("Skills executed display in workflows", &w(&[(11, BUSY), (22, IDLE)])),
+            None
+        );
+    }
+
+    #[test]
+    fn an_elided_title_still_matches() {
+        assert_eq!(
+            match_title("Project tiles status not updating", &w(&[(11, "\u{25d1} Project tiles status")])),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn two_windows_claiming_the_same_title_pick_neither() {
+        assert_eq!(
+            match_title("Project tiles status not updating", &w(&[(11, BUSY), (22, BUSY)])),
+            None
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_picks_neither() {
+        assert_eq!(
+            match_title(
+                "Project tiles status not updating",
+                &w(&[(11, "\u{25d1} Project"), (22, "\u{2733} Project tiles")])
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn no_title_never_matches_anything() {
+        assert_eq!(match_title("", &w(&[(11, ""), (22, IDLE)])), None);
+    }
+
+    #[test]
+    fn no_windows_is_not_an_error() {
+        assert_eq!(match_title("anything", &[]), None);
+    }
+}

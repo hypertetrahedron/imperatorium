@@ -640,3 +640,105 @@ pub fn check_lines() -> i32 {
     }
     0
 }
+
+/// test_quick.py: the quick-phrase key and phrases, and the shortcut list.
+#[cfg(test)]
+mod quick_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn key() -> &'static Value {
+        field("quick.key").unwrap()
+    }
+
+    fn phrases() -> &'static Value {
+        field("quick.phrases").unwrap()
+    }
+
+    fn put(f: &Value, v: Value) -> Result<Value, String> {
+        check(f, &v, &Value::Null)
+    }
+
+    #[test]
+    fn a_combination_is_stored_in_the_pages_order() {
+        assert_eq!(put(key(), json!("Shift + Ctrl + Q")), Ok(json!("ctrl+shift+q")));
+        assert_eq!(put(key(), json!("alt+space")), Ok(json!("alt+space")));
+    }
+
+    #[test]
+    fn shift_alone_or_no_modifier_is_refused() {
+        for v in ["q", "shift+q", "ctrl", "ctrl+alt", "ctrl+"] {
+            assert!(put(key(), json!(v)).is_err(), "{v}");
+        }
+    }
+
+    #[test]
+    fn reserved_keys_are_refused() {
+        for v in ["ctrl+enter", "alt+enter", "ctrl+k", "alt+3"] {
+            let err = put(key(), json!(v)).unwrap_err();
+            assert!(err.contains("already"), "{v}: {err}");
+        }
+    }
+
+    #[test]
+    fn phrase_text_and_lists() {
+        assert_eq!(
+            put(phrases(), json!("continue, as recommended\n\n  implement as recommended \n")),
+            Ok(json!(["continue, as recommended", "implement as recommended"]))
+        );
+        assert_eq!(put(phrases(), json!(["a, b", " ", "c"])), Ok(json!(["a, b", "c"])));
+    }
+
+    #[test]
+    fn phrase_limits() {
+        assert!(put(phrases(), json!(vec!["x"; 51])).is_err());
+        assert!(put(phrases(), json!(vec!["x"; 50])).is_ok());
+        assert!(put(phrases(), json!(["x".repeat(1001)])).is_err());
+        assert!(put(phrases(), json!(["x".repeat(1000)])).is_ok());
+    }
+
+    #[test]
+    fn defaults_include_the_common_ones() {
+        assert!(phrases()["default"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("implement as recommended")));
+        assert_eq!(key()["default"], json!("ctrl+space"));
+    }
+
+    fn shortcuts() -> Vec<(String, String, String)> {
+        schema()["shortcuts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                let f = |k: &str| s[k].as_str().unwrap().to_string();
+                (f("where"), f("keys"), f("what"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_key_named_by_a_setting_is_a_real_setting() {
+        let named = regex::Regex::new(r"^[a-z]+\.[a-z_]+$").unwrap();
+        let mut seen = 0;
+        for (_, keys, _) in shortcuts() {
+            if named.is_match(&keys) {
+                seen += 1;
+                assert!(field(&keys).is_some(), "{keys}");
+            }
+        }
+        assert!(seen >= 1, "no shortcut is named by a setting any more");
+    }
+
+    #[test]
+    fn every_reserved_key_is_on_the_list() {
+        // The list is what people read; a key the setting refuses should be
+        // one they can find there.
+        let listed = shortcuts().iter().map(|s| s.1.to_lowercase()).collect::<Vec<_>>().join(" ");
+        for combo in ["ctrl+enter", "alt+enter", "ctrl+k", "ctrl+f", "alt+n"] {
+            assert!(listed.contains(combo), "{combo} is not in {listed}");
+        }
+        assert!(listed.contains("alt+up"), "{listed}");
+    }
+}

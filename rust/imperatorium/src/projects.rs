@@ -287,3 +287,78 @@ pub fn check_lines() -> i32 {
     }
     0
 }
+
+/// test_core.py's Matching: the spoken forms of a real catalogue, resolved.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn catalogue() -> Vec<Value> {
+        [
+            "laser-ledger", "bookoferrantpages", "gem-trip", "amarantha", "amarantha-story",
+            "pulse-palette", "diceCounter", "elixir-forge", "fiducials", "rank-craft",
+        ]
+        .iter()
+        .map(|n| json!({"name": n, "path": format!("Y:/projects-software/{n}"), "source": "root"}))
+        .collect()
+    }
+
+    fn certain(said: &str, expect: &str) {
+        let res = resolve(said, &catalogue());
+        assert_eq!(res["confidence"], "certain", "{said} -> {res}");
+        assert_eq!(res["match"]["name"], expect, "{said}");
+    }
+
+    #[test]
+    fn spoken_forms_of_real_projects() {
+        certain("laser ledger", "laser-ledger");
+        certain("book of errant pages", "bookoferrantpages");
+        certain("gem trip", "gem-trip");
+        certain("dice counter", "diceCounter");
+        certain("elixir forge", "elixir-forge");
+        certain("rank craft", "rank-craft");
+    }
+
+    #[test]
+    fn case_and_separators_do_not_matter() {
+        certain("LASER-LEDGER", "laser-ledger");
+        certain("Laser_Ledger", "laser-ledger");
+    }
+
+    #[test]
+    fn unknown_project_is_refused_not_guessed() {
+        let res = resolve("home assistant", &catalogue());
+        assert_eq!(res["confidence"], "none");
+        assert!(res["match"].is_null());
+    }
+
+    #[test]
+    fn near_tie_is_not_certain() {
+        // "amarantha" and "amarantha-story" are close enough that acting
+        // silently would be a coin flip.
+        let res = resolve("amarantha story", &catalogue());
+        assert_ne!(res["confidence"], "none");
+        if res["confidence"] == "certain" {
+            assert_eq!(res["match"]["name"], "amarantha-story");
+        }
+    }
+
+    #[test]
+    fn empty_input_matches_nothing() {
+        assert_eq!(resolve("", &catalogue())["confidence"], "none");
+    }
+
+    #[test]
+    fn candidates_are_ranked_and_bounded() {
+        let res = resolve("gem trip", &catalogue());
+        let scores: Vec<f64> = res["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["score"].as_f64().unwrap())
+            .collect();
+        assert!(scores.len() <= 5 && !scores.is_empty());
+        assert!(scores.windows(2).all(|w| w[0] >= w[1]), "{scores:?}");
+    }
+}

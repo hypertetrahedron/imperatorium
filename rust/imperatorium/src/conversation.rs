@@ -632,3 +632,40 @@ pub fn with_origin(content: &str) -> String {
     }
     format!("{ORIGIN_NOTE}\n\n{content}")
 }
+
+/// test_native.py: the chain is classified as before.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    #[test]
+    fn the_chain_is_classified() {
+        let chain = vec![
+            json!({"type": "user", "uuid": "1", "sessionId": "s",
+                   "message": {"role": "user", "content": "hello"}}),
+            json!({"type": "assistant", "uuid": "2", "sessionId": "s",
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}}),
+            json!({"type": "user", "uuid": "3", "isMeta": true, "origin": {"kind": "peer"},
+                   "message": {"role": "user", "content": "from the window"}}),
+            json!({"type": "attachment", "uuid": "4",
+                   "attachment": {"type": "queued_command", "prompt": "queued one"}}),
+            json!({"type": "user", "uuid": "5", "isMeta": true,
+                   "message": {"role": "user", "content": "hidden meta"}}),
+            json!({"type": "user", "uuid": "6", "isCompactSummary": true,
+                   "message": {"role": "user", "content": "summary"}}),
+        ];
+        let msgs = messages(&chain);
+        // uuids 1, 2, 3, 4 and 6: the plain meta entry (5) is hidden
+        assert_eq!(msgs.len(), 5);
+        let texts: Vec<String> = msgs
+            .iter()
+            .map(|m| text_of(m.message.get("content")))
+            .collect();
+        assert_eq!(texts, ["hello", "hi", "from the window", "queued one", "summary"]);
+        assert_eq!(msgs[2].via, Some("inbox"));
+        assert_eq!(msgs[3].via, Some("inbox"));
+        assert_eq!(msgs[4].system, Some(NOTE_SUMMARY));
+        assert!(msgs[..4].iter().all(|m| m.system.is_none()));
+        assert!(!to_items(&msgs, 0, false).is_empty());
+    }
+}

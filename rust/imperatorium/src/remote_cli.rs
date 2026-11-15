@@ -724,3 +724,17 @@ mod tests {
         assert_eq!(check_rows(&f, true)[1].2, "not found");
     }
 }
+
+/// test_rename.py: a host from before the rename is noticed.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    #[test]
+    fn a_host_from_before_the_rename_is_noticed() {
+        let f = parse_probe("home=/home/les\nlegacy=ok\n");
+        assert!(f.legacy);
+        assert_eq!(f.home, "/home/les");
+        assert!(!parse_probe("home=/home/les\n").legacy);
+    }
+}

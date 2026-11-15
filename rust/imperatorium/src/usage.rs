@@ -611,3 +611,21 @@ mod features_tests {
         assert_ne!(quiet["label"], "AWS Bedrock");
     }
 }
+
+/// test_rename.py: a statusline from before the rename still reports.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    #[test]
+    fn provider_of_reads_either_name() {
+        let p = |v: Value| provider_of(v.as_object().unwrap());
+        assert_eq!(p(json!({"ccontrol_provider": "bedrock"})).as_deref(), Some("bedrock"));
+        assert_eq!(p(json!({"imperatorium_provider": "vertex"})).as_deref(), Some("vertex"));
+        // the new name wins when both are there
+        assert_eq!(
+            p(json!({"imperatorium_provider": "vertex", "ccontrol_provider": "bedrock"})).as_deref(),
+            Some("vertex")
+        );
+    }
+}
