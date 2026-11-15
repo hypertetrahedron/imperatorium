@@ -18,7 +18,10 @@ pub struct Console {
 
 /// The environment a console gets: this one minus STRIPPED, PATH the
 /// stand-in one (`bin_dir` first), plus `extra`.
-pub fn console_env(bin_dir: &Path, extra: &[(&str, &std::ffi::OsStr)]) -> Vec<(OsString, OsString)> {
+pub fn console_env(
+    bin_dir: &Path,
+    extra: &[(&str, &std::ffi::OsStr)],
+) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
         .filter(|(k, _)| {
             let key = k.to_string_lossy().to_uppercase();

@@ -45,10 +45,9 @@ fn neutral(text: &str, ids: &BTreeMap<String, String>) -> String {
     for (real, name) in ids {
         t = t.replace(real.as_str(), name);
     }
-    let uuid = regex::Regex::new(
-        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
-    )
-    .unwrap();
+    let uuid =
+        regex::Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+            .unwrap();
     let t = uuid.replace_all(&t, "<new-uuid>");
     let pipe = regex::Regex::new(r#""cannot open [^"]*""#).unwrap();
     pipe.replace_all(&t, "\"<cannot open the inbox>\"")
@@ -101,7 +100,10 @@ fn zero_ids(v: &Value) -> Value {
 
 /// fakecli's launches (not the consoles' keys and lines).
 fn launches(d: &Dispatcher) -> usize {
-    d.fake_log().iter().filter(|e| e["prog"] != "console").count()
+    d.fake_log()
+        .iter()
+        .filter(|e| e["prog"] != "console")
+        .count()
 }
 
 fn did_launch(want: &Value) -> bool {
@@ -166,7 +168,10 @@ fn session_twin_answers_as_python_did() {
             args.push("--stubborn");
         }
         let c = Console::start(&d.bin_dir.join("claude.exe"), &args, &env, &work);
-        let id = format!("{}bbbb-1111-4111-8111-111111111111", digit.to_string().repeat(4));
+        let id = format!(
+            "{}bbbb-1111-4111-8111-111111111111",
+            digit.to_string().repeat(4)
+        );
         let mut rec = json!({"pid": c.pid, "cwd": work, "name": format!("twin-{role}"),
                              "kind": "interactive",
                              "status": if *role == "busy" { "busy" } else { "idle" }});
@@ -213,10 +218,13 @@ fn session_twin_answers_as_python_did() {
                 if path == "/api/dispatch" && !hooked {
                     // The typing console becomes reachable (a token, and an
                     // inbox that is not there), so routing can find it.
-                    let (code, _) = d.post("/hook", &json!({
+                    let (code, _) = d.post(
+                        "/hook",
+                        &json!({
                         "hook_event_name": "SessionStart", "session_id": sid["typing"],
                         "cwd": work, "source": "startup", "messaging_token": "tok",
-                        "messaging_socket": format!(r"\\.\pipe\{pipe_tag}")}));
+                        "messaging_socket": format!(r"\\.\pipe\{pipe_tag}")}),
+                    );
                     assert_eq!(code, 200);
                     hooked = true;
                 }
@@ -282,9 +290,12 @@ fn session_twin_answers_as_python_did() {
                         // A permission request parked for 2 s (its wait is
                         // scaled), seen in /api/pending before typing.
                         let park = scope.spawn(|| {
-                            d.post("/permission/park", &json!({
+                            d.post(
+                                "/permission/park",
+                                &json!({
                                 "session_id": typing, "tool_name": "Bash",
-                                "tool_input": {"command": "ls"}, "wait": 2.0 / SCALE}))
+                                "tool_input": {"command": "ls"}, "wait": 2.0 / SCALE}),
+                            )
                         });
                         let seen = wait_until(Duration::from_secs(10), || {
                             let (_, p) = d.get("/api/pending");
@@ -330,10 +341,8 @@ fn session_twin_answers_as_python_did() {
                             for a in args.iter_mut() {
                                 let s = a.as_str().unwrap_or("").to_string();
                                 if s.to_lowercase().ends_with("wt.exe") {
-                                    *a = json!(Path::new(&s)
-                                        .file_name()
-                                        .unwrap()
-                                        .to_string_lossy());
+                                    *a =
+                                        json!(Path::new(&s).file_name().unwrap().to_string_lossy());
                                 }
                             }
                         }

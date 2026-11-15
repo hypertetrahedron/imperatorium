@@ -50,7 +50,11 @@ pub const TEST_LOG_ENV: &str = "IMPERATORIUM_TEST_DEEPLINK_LOG";
 pub fn open_url(url: &str) {
     if let Some(log) = crate::paths::env_nonempty(TEST_LOG_ENV) {
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+        {
             let _ = writeln!(f, "{url}");
         }
         return;

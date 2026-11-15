@@ -42,6 +42,9 @@ random part), `<pid>`, `<sid>`, `<side>` (py/rs), `<twin-home>`, `<feat>`,
 | `projects_compare/` | projects_compare.py | pure_checks.rs | _norm, resolve, parse_utterance, deeplink.build; made-up catalogue only (this machine's project list is not recorded) |
 | `focus_compare/cases.jsonl` | focus_compare.py | pure_checks.rs | normalise_title, match_title (the pure half; the live window enumeration is machine state and not recorded) |
 | `install_compare/cases.jsonl` | install_compare.py | install_compare.rs | settings.json after install-hooks, per start x variant x once/twice; `start_text` is the exact starting file |
+| `session_twin/steps.jsonl` | session_twin.py | session_twin.rs | every resume/new/close, typing, dispatch and focus answer (neutral(); typing with id/at as 0), fakecli's log in order, the events, the closed consoles exited, the typed lines; time scale 10 (see below) |
+| (none: expectations in the test) | remote_twin.py | remote_twin.rs | the script's 32 checks against fakecli as ssh (fakessh.py's answers), plus: the hook listener is up, only the fake host was called |
+| (none: expectations in the test) | remote_cli_twin.py | remote_cli.rs | the script's 27 checks, fakecli as ssh in its sh mode (sandbox HOME); skipped without `sh` |
 
 The local-only full corpus is not here: see "The local corpus" below.
 
@@ -185,13 +188,20 @@ Two rules for every replay (from `rust`, after python-out/runtime):
   (`hello world !`, `/model opus`, `rm -rf build`).
 - Never send mode `launch`, nor `auto` with a failing target: either opens
   a real Claude window through the deep link.
+- Replay (session_twin.rs): IMPERATORIUM_TEST_TIME_SCALE is 10, not below
+  1: the queue sweep must not drain the queued `/compact` (in the recording
+  it did not), and the park's `wait` is divided by the scale.
+  IMPERATORIUM_TEST_DEEPLINK_LOG sends deep links to a file; the test stops
+  at the first one, at a launch fakecli did not log, and before the first
+  step unless `wt` and `claude` resolve to the fakes (tests/common/safety.rs).
 
 ### remote_twin.py: nothing recorded
 
 It has no Python side: its expectations are written in the script (from
 dispatcher.py's remote paths) and it runs only the binary, against
-`fakessh.py` (a Python stand-in for ssh). Porting it means porting fakessh
-(e.g. a fakecli mode) and the script's checks as they are.
+`fakessh.py` (a Python stand-in for ssh). Ported as remote_twin.rs, fakessh as
+fakecli copied to ssh.exe (remote_cli_twin.py's sh-running ssh is its
+`FAKESSH_MODE=sh`, remote_cli.rs).
 
 ## The local corpus (never committed)
 

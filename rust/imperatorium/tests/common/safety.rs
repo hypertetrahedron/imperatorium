@@ -63,7 +63,14 @@ pub fn assert_launches_are_fakes(bin_dir: &Path) {
             found.display()
         );
     }
-    let real = ["wt.exe", "claude.exe", "wt.cmd", "claude.cmd", "wt.bat", "claude.bat"];
+    let real = [
+        "wt.exe",
+        "claude.exe",
+        "wt.cmd",
+        "claude.cmd",
+        "wt.bat",
+        "claude.bat",
+    ];
     for dir in std::env::split_paths(&path).skip(1) {
         for n in real {
             assert!(
