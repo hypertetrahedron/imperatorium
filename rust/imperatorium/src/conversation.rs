@@ -46,6 +46,14 @@ pub struct Message {
     pub message: Value,
     pub system: Option<&'static str>,
     pub via: Option<&'static str>,
+    /// The transcript entry's `timestamp` (ISO 8601), put on each block it
+    /// gives so the window can show when (View > Display Times).
+    pub at: Option<String>,
+}
+
+/// An entry's `timestamp`, when it has one.
+fn ts(e: &Map<String, Value>) -> Option<String> {
+    s(e, "timestamp").filter(|t| !t.is_empty()).map(str::to_owned)
 }
 
 fn s<'a>(e: &'a Map<String, Value>, k: &str) -> Option<&'a str> {
@@ -133,6 +141,7 @@ fn sent(content: Option<&Value>, origin: Option<&Value>) -> Message {
             message,
             system: Some(NOTE_SUBAGENT),
             via: None,
+            at: None,
         }
     } else {
         Message {
@@ -140,6 +149,7 @@ fn sent(content: Option<&Value>, origin: Option<&Value>) -> Message {
             message,
             system: None,
             via: Some("inbox"),
+            at: None,
         }
     }
 }
@@ -160,19 +170,23 @@ pub fn messages(chain: &[Value]) -> Vec<Message> {
                 message: e.get("message").cloned().unwrap_or(Value::Null),
                 system: system_origin(e),
                 via: None,
+                at: ts(e),
             });
         } else if is_peer_prompt(e) {
             let content = e
                 .get("message")
                 .and_then(Value::as_object)
                 .and_then(|m| m.get("content"));
-            out.push(sent(content, e.get("origin")));
+            let mut m = sent(content, e.get("origin"));
+            m.at = ts(e);
+            out.push(m);
         } else if is_queued_prompt(e) {
             let att = e["attachment"].as_object().unwrap();
             let empty = Value::String(String::new());
             let prompt = or(att.get("prompt"), Some(&empty));
             let origin = att.get("origin");
             let mut m = sent(prompt, origin);
+            m.at = ts(e);
             if origin_kind(origin) == Some("task-notification")
                 || s(att, "commandMode") == Some("task-notification")
             {
@@ -443,6 +457,15 @@ pub fn to_items(messages: &[Message], limit: usize, merge: bool) -> Vec<Value> {
         if blocks.is_empty() {
             continue;
         }
+        // Each block keeps when its entry was written: a merged turn spans
+        // many entries, so the turn alone cannot say when a line came.
+        if let Some(at) = &entry.at {
+            for b in blocks.iter_mut() {
+                if let Some(o) = b.as_object_mut() {
+                    o.insert("at".into(), json!(at));
+                }
+            }
+        }
         let speaker = if note.is_some() {
             SYSTEM
         } else {
@@ -590,6 +613,7 @@ mod tests {
             message: json!({"role": "user", "content": [{"type": "tool_result", "content": "ok", "tool_use_id": "t"}]}),
             system: None,
             via: None,
+            at: None,
         };
         let items = to_items(&[m], 0, true);
         assert_eq!(items[0]["speaker"], "tool");
@@ -602,10 +626,32 @@ mod tests {
             message: json!({"role": "user", "content": "<task-notification><summary> built ok </summary></task-notification>"}),
             system: None,
             via: None,
+            at: None,
         };
         let items = to_items(&[m], 0, true);
         assert_eq!(items[0]["note"], NOTE_TASK);
         assert_eq!(items[0]["blocks"][0]["text"], "built ok");
+    }
+
+    #[test]
+    fn each_block_says_when_its_entry_was_written() {
+        let chain = [
+            json!({"type": "user", "timestamp": "2026-11-15T16:00:00.000Z",
+                   "message": {"role": "user", "content": "go"}}),
+            json!({"type": "assistant", "timestamp": "2026-11-15T16:00:05.000Z",
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": "in 10 minutes"}]}}),
+            json!({"type": "assistant", "timestamp": "2026-11-15T16:10:00.000Z",
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]}}),
+            json!({"type": "user", "message": {"role": "user", "content": "no time"}}),
+        ];
+        let items = to_items(&messages(&chain), 0, true);
+        let at = |i: usize, j: usize| items[i]["blocks"][j].get("at").cloned();
+        assert_eq!(at(0, 0), Some(json!("2026-11-15T16:00:00.000Z")));
+        // One merged turn, two times: each line keeps its own.
+        assert_eq!(items[1]["blocks"].as_array().unwrap().len(), 2);
+        assert_eq!(at(1, 0), Some(json!("2026-11-15T16:00:05.000Z")));
+        assert_eq!(at(1, 1), Some(json!("2026-11-15T16:10:00.000Z")));
+        assert_eq!(at(2, 0), None, "no timestamp, no time");
     }
 
     #[test]
@@ -645,6 +691,7 @@ mod py_ported {
             message: json!({"role": kind, "content": content}),
             system: None,
             via: None,
+            at: None,
         }
     }
     fn assistant(blocks: Vec<Value>) -> Message {
@@ -794,9 +841,9 @@ mod py_ported {
     #[test]
     fn malformed_entries_do_not_raise() {
         let msgs = [
-            Message { kind: "assistant", message: Value::Null, system: None, via: None },
-            Message { kind: "assistant", message: json!({"role": "assistant"}), system: None, via: None },
-            Message { kind: "assistant", message: json!({"content": "x"}), system: None, via: None },
+            Message { kind: "assistant", message: Value::Null, system: None, via: None, at: None },
+            Message { kind: "assistant", message: json!({"role": "assistant"}), system: None, via: None, at: None },
+            Message { kind: "assistant", message: json!({"content": "x"}), system: None, via: None, at: None },
             assistant(vec![text()]),
         ];
         let it = items(&msgs);

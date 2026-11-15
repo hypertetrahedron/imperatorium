@@ -93,6 +93,10 @@ function workParts(w, now, all){
 const workHtml = (w, now, cls, all) => workParts(w, now, all).map(p =>
   `<span class="${cls} ${p.cls}" title="${esc(p.title)}">${esc(p.text)}</span>`).join("");
 
+// How long a session has been idle: whole minutes and up ("<1m", "4m",
+// "2h 5m"); seconds are more resolution than a wait needs.
+const idleSpan = sec => sec < 60 ? "<1m" : span(Math.floor(sec / 60) * 60);
+
 // Pure: what the open tile adds under its first two lines - how long it has
 // been idle (or working), its context size, what it has cost so far (from
 // the status panel's answer, `spend`), and what it still has running while
@@ -100,7 +104,7 @@ const workHtml = (w, now, cls, all) => workParts(w, now, all).map(p =>
 function tileDetails(s, now, spend){
   const out = [], w = s.work || {}, u = s.usage || {};
   const idle = s.status === "idle" && s.status_changed_at;
-  if (idle) out.push({text: "idle " + span(now - idle), title: "idle since its last turn ended"});
+  if (idle) out.push({text: "idle " + idleSpan(now - idle), title: "idle since its last turn ended"});
   else {
     const at = s.status_changed_at || s.last_event_at;
     if (at) out.push({text: (stateOf(s)[0] === "d-busy" ? "working " : "active ") + span(now - at),
@@ -431,6 +435,27 @@ const SUMMARY_NOTE = "earlier conversation, summarised";
 let shape = {};
 try { shape = JSON.parse(localStorage.getItem("imperatorium.shape") || "{}") || {}; } catch (e) { shape = {}; }
 function modeOf(cat){ return MODES.includes(shape[cat]) ? shape[cat] : "full"; }
+// View > Display Times: each block of the chat says when it was written, so
+// "done in 10 minutes" can be read against a clock. Off unless turned on.
+let showTimes = false;
+try { showTimes = localStorage.getItem("imperatorium.times") === "1"; } catch (e) {}
+
+// Pure: the stamp for a block written at `at` (ISO), seen at `now` (ms):
+// "14:05" today, "Nov 14 14:05" before; null when there is no time.
+function blockTime(at, now){
+  const d = new Date(at || "");
+  if (!at || isNaN(d)) return null;
+  const p = n => String(n).padStart(2, "0");
+  const hm = p(d.getHours()) + ":" + p(d.getMinutes());
+  const today = d.toDateString() === new Date(now).toDateString();
+  const day = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()] +
+    " " + d.getDate() + " ";
+  return {text: (today ? "" : day) + hm, title: d.toLocaleString()};
+}
+function stampHtml(b){
+  const t = showTimes && blockTime(b.at, Date.now());
+  return t ? `<span class=bt title="${esc(t.title)}">${esc(t.text)}</span>` : "";
+}
 
 function categoryOf(it, b){
   if (it.note) return "system";
@@ -460,7 +485,7 @@ function shapeBlocks(it, i, opened){
     const m = modeOf(categoryOf(it, b));
     if (m === "hidden") return "";
     const k = i + "." + j;
-    return m === "compact" ? compactBlock(b, k, opened.has(k)) : renderBlock(b);
+    return stampHtml(b) + (m === "compact" ? compactBlock(b, k, opened.has(k)) : renderBlock(b));
   }).join("");
 }
 
@@ -472,7 +497,8 @@ function drawShape(){
     return `<label>${label}<select class="tiny${m === "full" ? " full" : ""}" data-shape="${cat}">${
       MODES.map(x => `<option value="${x}"${x === m ? " selected" : ""}>${
         x[0].toUpperCase() + x.slice(1)}</option>`).join("")}</select></label>`;
-  }).join("");
+  }).join("") + `<label title="show when each part of the chat was written">Display Times<input type=checkbox data-times${
+    showTimes ? " checked" : ""}></label>`;
 }
 
 let logItems = [], opened = new Set(), openedFor = null;
@@ -2124,28 +2150,10 @@ function drawTimeline(){
 window.addEventListener("resize", () => drawTimeline());
 
 // -- what the session is waiting on ------------------------------------------
-// A tab per shell, monitor or subagent the selected session is waiting on,
-// showing the end of what it has printed - for a subagent, what it has said
-// and the tools it called (read from the files Claude Code writes them to).
-// Several get an Auto tab first, which follows whichever printed last.
-let procTasks = [], procFor = null, procPick = "auto", procShown = "";
-const PROC_MARK = {monitor: "mon", agent: "agent"};
-
-// Pure: the tabs and the task to show for `tasks` with `pick` chosen.
-function procView(tasks, pick){
-  if (!tasks.length) return {tabs: [], show: null, pick: "auto"};
-  const latest = tasks.reduce((a, b) =>
-    ((b.mtime || 0) > (a.mtime || 0) || ((b.mtime || 0) === (a.mtime || 0)
-      && (b.started || 0) >= (a.started || 0))) ? b : a);
-  const auto = tasks.length > 1;
-  if (pick !== "auto" && !tasks.some(t => t.id === pick)) pick = "auto";
-  if (!auto && pick === "auto") pick = tasks[0].id;
-  const show = pick === "auto" ? latest : tasks.find(t => t.id === pick);
-  const tabs = tasks.map(t => ({id: t.id, kind: t.kind, label: t.label || t.id,
-                                on: t.id === pick, live: pick === "auto" && t === latest}));
-  if (auto) tabs.unshift({id: "auto", label: "Auto", on: pick === "auto"});
-  return {tabs, show, pick};
-}
+// The shells, monitors and subagents the selected session has going, for its
+// tile's task list (an item there opens in place of the chat). The strip of
+// their output that sat under the chat went 2026-11-15: the tile shows it.
+let procTasks = [], procFor = null;
 
 function procWanted(){
   const s = current(), w = (s && s.work) || {};
@@ -2163,7 +2171,6 @@ async function loadProcs(){
   let d;
   try { d = await get("/api/awaited?session=" + encodeURIComponent(want)); } catch (e) { return; }
   if (want !== selected || !d.ok) return;
-  if (procFor !== want) procPick = "auto";
   procTasks = d.tasks || []; procFor = want;
   drawProcs();
 }
@@ -2171,29 +2178,6 @@ async function loadProcs(){
 function drawProcs(){
   drawTileTasks();
   drawTaskView();
-  if (held("#procs", drawProcs)) return;
-  const box = $("#procs");
-  const v = procView((procFor === selected ? procTasks : []).filter(t =>
-    !t.done && ["shell", "monitor", "agent"].includes(t.kind)), procPick);
-  procPick = v.pick;
-  box.hidden = !v.show || taskShown();
-  if (box.hidden){ procShown = ""; return; }
-  const tabs = v.tabs.map(t => `<button role=tab data-proc="${esc(t.id)}" class="${t.on ? "on" : ""}${
-      t.live ? " live" : ""}" title="${esc(t.id === "auto" ? "follows whichever printed last" : t.label)}">${
-      t.kind ? `<span class=k>${PROC_MARK[t.kind] || "$"}</span>` : ""}${esc(t.label)}</button>`).join("");
-  // Against what was drawn, not innerHTML: the browser writes that back with
-  // its own quoting (role="tab"), so it never matched and the tabs were
-  // rebuilt every second.
-  if ($("#proctabs").dataset.sig !== tabs){ $("#proctabs").innerHTML = tabs; $("#proctabs").dataset.sig = tabs; }
-  const pre = $("#proctext"), text = v.show.text || "";
-  const sig = v.show.id + "\n" + text;
-  if (sig === procShown) return;
-  // Keep following the end unless the reader has scrolled up to look.
-  const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 4
-    || !procShown.startsWith(v.show.id + "\n");
-  pre.innerHTML = text.trim() ? esc(text.replace(/\n+$/, "")) : `<span class=none>no output yet</span>`;
-  procShown = sig;
-  if (atEnd) pre.scrollTop = pre.scrollHeight;
 }
 
 // -- the session's tasks, in its tile ------------------------------------------
@@ -2204,10 +2188,14 @@ function drawProcs(){
 // the last half hour waits under its own folded "Recently completed" row.
 // An item opens in place of the chat (the tool call jumps to it in the chat
 // instead); a click anywhere else on the tile, Chat, or Escape returns.
-let tasksOpen = false, doneOpen = false, taskView = null, taskLast = null, tvShown = "";
+// Teammates waiting for a message fold under their own "Idle Agents" row,
+// between what runs and what ended; one that takes up work again is back
+// among the running rows on the next poll.
+let tasksOpen = false, doneOpen = false, idleOpen = false, taskView = null, taskLast = null, tvShown = "";
 try {
   tasksOpen = localStorage.getItem("imperatorium.tasksOpen") === "1";
   doneOpen = localStorage.getItem("imperatorium.doneOpen") === "1";
+  idleOpen = localStorage.getItem("imperatorium.idleOpen") === "1";
 } catch (e) {}
 const TASK_MARK = {tool: "tool", shell: "$", monitor: "mon", agent: "agent", wakeup: "wake",
                    process: "proc", mcp: "mcp", hooks: "hook"};
@@ -2234,10 +2222,11 @@ function taskList(s, tasks){
                            label: n + (n === 1 ? " process" : " processes") + " started by its shells"});
   return out;
 }
-// Pure: "2 shells · 1 subagent · 3 processes", "2 idle subagents", or
-// "none running". Every row in `list` is counted (a processes row by how
-// many it stands for), so the heading never says none above a running row.
-function taskSummary(list, idle){
+// Pure: "2 shells · 1 subagent · 3 processes", or "none running". Every row
+// in `list` is counted (a processes row by how many it stands for), so the
+// heading never says none above a running row. Idle teammates are counted
+// on their own row, not here.
+function taskSummary(list){
   const n = {};
   for (const t of list){
     const k = TASK_KINDS_SAID.some(([w]) => w === t.kind) ? t.kind : "task";
@@ -2245,8 +2234,6 @@ function taskSummary(list, idle){
   }
   const said = TASK_KINDS_SAID.concat([["task", "task"]]).filter(([k]) => n[k])
     .map(([k, w]) => n[k] + " " + w + (n[k] === 1 ? "" : w.endsWith("s") ? "es" : "s"));
-  const waiting = (idle || []).length;
-  if (waiting) said.push(waiting + " idle subagent" + (waiting === 1 ? "" : "s"));
   return said.join(" · ") || "none running";
 }
 const taskWhen = (t, now) => t.done ? (t.ended ? age(t.ended) + " ago" : "")
@@ -2264,6 +2251,11 @@ function foldDone(open){
   try { localStorage.setItem("imperatorium.doneOpen", open ? "1" : "0"); } catch (e) {}
   drawTileTasks();
 }
+function foldIdle(open){
+  idleOpen = open;
+  try { localStorage.setItem("imperatorium.idleOpen", open ? "1" : "0"); } catch (e) {}
+  drawTileTasks();
+}
 function taskRow(t, now, sub, running){
   const on = (taskView && taskView.id === t.id ? " on" : "") +
     (running && t.kind !== "wakeup" ? " run" : "") + (t.idle ? " idle" : "");
@@ -2272,30 +2264,30 @@ function taskRow(t, now, sub, running){
   const status = t.idle ? `<span class=st title="waiting for a message">idle</span>`
     : t.done && t.status && t.status !== "completed"
     ? `<span class="st ${t.status === "failed" ? "bad" : ""}">${esc(STATUS_WORD[t.status] || t.status)}</span>` : "";
-  let html = `<div class="tki${on}${t.done ? " done" : ""}${sub ? " sub" : ""}" data-task="${esc(t.id)}" title="${
+  // A subagent's own calls are not listed beneath it: opening it shows them.
+  return `<div class="tki${on}${t.done ? " done" : ""}${sub ? " sub" : ""}" data-task="${esc(t.id)}" title="${
     esc(why + (t.label || t.id))}"><span class=k>${TASK_MARK[t.kind] || "?"}</span><span class=l>${
     esc(t.label || t.id)}</span>${status}${live ? "<span class=live></span>" : ""}<span class=a>${
     esc(taskWhen(t, now))}</span></div>`;
-  // A subagent's own call in flight, beneath it.
-  if (t.kind === "agent" && t.current && !t.done)
-    html += `<div class="tki sub static" title="${esc(t.current.name + " " + (t.current.summary || ""))}">` +
-      `<span class=k>↳</span><span class=l>${esc(t.current.name)} ${esc(t.current.summary || "")}</span></div>`;
-  return html;
 }
 function drawTileTasks(){
   const box = document.querySelector("#sessions .s.on .tk");
   if (!box) return;
   const s = current(), now = Date.now() / 1000;
   const l = taskList(s, procFor === selected ? procTasks : []);
-  let items = l.running.map(t => taskRow(t, now, false, true)).join("") +
-    l.idle.map(t => taskRow(t, now)).join("") || `<div class="tki static">nothing running</div>`;
+  let items = l.running.map(t => taskRow(t, now, false, true)).join("") ||
+    `<div class="tki static">nothing running</div>`;
+  if (l.idle.length)
+    items += `<div class="tki grp" data-idle-toggle title="teammates waiting for a message">` +
+      `<span class=ar>${idleOpen ? "&#9662;" : "&#9656;"}</span><span class=l>Idle Agents (${l.idle.length})</span></div>` +
+      (idleOpen ? l.idle.map(t => taskRow(t, now, true)).join("") : "");
   if (l.done.length)
     items += `<div class="tki grp" data-done-toggle title="tasks that ended in the last half hour">` +
       `<span class=ar>${doneOpen ? "&#9662;" : "&#9656;"}</span><span class=l>Recently completed (${l.done.length})</span></div>` +
       (doneOpen ? l.done.map(t => taskRow(t, now, true)).join("") : "");
   items += l.extra.map(t => taskRow(t, now)).join("");
   const html = `<button type=button class=tkh data-tasks-toggle aria-expanded="${tasksOpen}">` +
-    `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running, l.idle))}${
+    `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running))}${
       l.extra.some(t => t.kind === "hooks") ? ` <span class="st bad">hook errors</span>` : ""}</button><div class=tkl>${items}</div>`;
   box.classList.toggle("open", tasksOpen);
   if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }
@@ -2482,30 +2474,6 @@ async function procLoop(){
   try { await loadProcs(); } catch (e) {}
   setTimeout(procLoop, 1000);
 }
-
-$("#proctabs").addEventListener("click", e => {
-  const b = e.target.closest("[data-proc]");
-  if (!b) return;
-  procPick = b.dataset.proc; procShown = ""; drawProcs();
-});
-try { const h = +localStorage.getItem("imperatorium.procsHeight");
-      if (h > 0) $("#procs").style.setProperty("--ph", h + "px"); } catch (e) {}
-$("#procgrip").addEventListener("pointerdown", e => {
-  const box = $("#procs"), y0 = e.clientY, h0 = box.offsetHeight;
-  const most = $("#sessionpane").clientHeight * 0.8;
-  e.preventDefault(); box.classList.add("drag");
-  e.target.setPointerCapture(e.pointerId);
-  const move = m => box.style.setProperty("--ph",
-    Math.round(Math.max(64, Math.min(most, h0 + y0 - m.clientY))) + "px");
-  const up = () => {
-    box.classList.remove("drag");
-    e.target.removeEventListener("pointermove", move);
-    e.target.removeEventListener("pointerup", up);
-    try { localStorage.setItem("imperatorium.procsHeight", String(box.offsetHeight)); } catch (x) {}
-  };
-  e.target.addEventListener("pointermove", move);
-  e.target.addEventListener("pointerup", up);
-});
 
 // Where `el` sits in the log's own scroll coordinates. Not `offsetTop`: the
 // chat text size zooms every turn (`#log>*{zoom:var(--chatz)}`), and Chrome
@@ -3848,7 +3816,7 @@ $("#prompt").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(e.ctrlKey ? "background" : "auto"); }
 });
 $("#filter").addEventListener("input", drawSessions);
-["#sessions", "#status", "#procs", "#log"].forEach(holdPresses);
+["#sessions", "#status", "#log"].forEach(holdPresses);
 // On the window, so a press released outside the panel still lets it redraw.
 window.addEventListener("pointerup", releasePresses, true);
 window.addEventListener("pointercancel", releasePresses, true);
@@ -3881,6 +3849,12 @@ $("#status").addEventListener("click", e => {
 $("#jnext").onclick = () => jump(1);
 drawShape();
 $("#shape").addEventListener("change", e => {
+  if (e.target.matches("[data-times]")){
+    showTimes = e.target.checked;
+    try { localStorage.setItem("imperatorium.times", showTimes ? "1" : "0"); } catch (x) {}
+    drawLog();
+    return;
+  }
   const cat = e.target.dataset.shape;
   if (!cat) return;
   if (e.target.value === "full") delete shape[cat]; else shape[cat] = e.target.value;
@@ -4043,6 +4017,7 @@ $("#sessions").addEventListener("click", e => {
   if (!s) return;
   if (t.closest("[data-tasks-toggle]")) return foldTasks(!tasksOpen);
   if (t.closest("[data-done-toggle]")) return foldDone(!doneOpen);
+  if (t.closest("[data-idle-toggle]")) return foldIdle(!idleOpen);
   const item = t.closest("[data-task]");
   if (item && s.dataset.k === selected) return openTask(item.dataset.task);
   closeTask();

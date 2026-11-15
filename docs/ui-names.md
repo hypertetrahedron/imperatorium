@@ -78,8 +78,10 @@ the Chat Matrix; everything else is filled in by the script).
     - Tab Picker `#tabpick`: Conversation, Changes, Activity, Worktrees
     - **New / Fork Menu** `#launch`: New, New+close, Fork, Fork in bg
     - **View Menu** `#viewmenu`: Copy Resume Button (`#copybtn`), Current
-      Prompt Button (`#curbtn`), Display Shapes (`#shape`). Its button is
-      lit while any kind of text is not shown in full
+      Prompt Button (`#curbtn`), Display Shapes (`#shape`), and under them
+      Display Times (`[data-times]`, off by default: each block of the chat
+      shows when it was written, as a Block Time `.bt`). Its button is lit
+      while any kind of text is not shown in full
     - Find Bar `#findbar` (below), shown on the Conversation tab only
     - Session Actions `#acts`: the ones that stay buttons - Resume,
       Resume in bg, Show Window. Between the two pairs of arrows, to keep
@@ -99,12 +101,9 @@ the Chat Matrix; everything else is filled in by the script).
     - Via-Inbox Tag `.via`
     - Show Most Recent Button `.newest button`: floats at the bottom of
       the log while its end is out of view
-  - **Process Drawer** `#procs`
-    - Drawer Grip `#procgrip`
-    - Process Tabs `#proctabs`: one per running shell (`$`), Monitor
-      (`mon`) and subagent (`agent`), led by an Auto Tab when there are
-      several
-    - Process Output `#proctext`
+  - **Task View** `#taskview`: a task opened from the tile's Task List, in
+    place of the chat (Task Header `#tvhead`, Task Text `#tvtext`). The
+    Process Drawer (`#procs`) that sat here was removed 2026-11-15
   - **Changes Panel** `#changes`: Review Box (`#review`, holding Line
     Comments `.rv`), Branch Line, File List, Diff View, Recent Commits
   - **Activity Panel** `#activity`: Totals Line, Event Rows (`.ev`)

@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  SCRIPT, ESC, between, tail, find, evalJs, evalJson, j, cat, renderShell, renderMatrix,
+  SCRIPT, CSS, ESC, between, tail, find, evalJs, evalJson, j, cat, renderShell, renderMatrix,
   runRenderer as run, assertIn, assertNotIn, assertLess,
 } from "./load.mjs";
 
@@ -65,19 +65,19 @@ describe("RedrawGuards", () => {
   /** Panels redrawn on a timer replace their content only when it changed. */
   it("timer panels are held while pressed", () => {
     const js = SCRIPT;
-    for (const [fn, sel] of [["drawSessions", "#sessions"], ["drawStatus", "#status"], ["drawProcs", "#procs"]]) {
+    for (const [fn, sel] of [["drawSessions", "#sessions"], ["drawStatus", "#status"]]) {
       const start = find(js, `function ${fn}(){`);
       assertIn(`held("${sel}", ${fn})`, js.slice(start, start + 200), fn);
     }
     const start = find(js, "function drawLog(force){");
     assertIn('held("#log", () => drawLog(force))', js.slice(start, start + 200));
-    assertIn('["#sessions", "#status", "#procs", "#log"].forEach(holdPresses)', js);
+    assertIn('["#sessions", "#status", "#log"].forEach(holdPresses)', js);
     assertIn('window.addEventListener("pointerup", releasePresses, true)', js);
   });
 
   it("timer panels compare against what they drew", () => {
     const js = SCRIPT;
-    for (const el of ["#sessions", "#proctabs", "#meter", "#activity", "#curbody"]) {
+    for (const el of ["#sessions", "#meter", "#activity", "#curbody"]) {
       assertIn(`if ($("${el}").dataset.sig !== `, js, el);
     }
     assertIn("if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }", js);
@@ -127,8 +127,56 @@ describe("TileTasks", () => {
       "const l = taskList({status: 'idle'}, [{id: 'w1', kind: 'agent', label: 'wait', idle: true},",
       "                                    {id: 'w2', kind: 'agent', label: 'wait'}]);",
       "process.stdout.write(JSON.stringify([l.running.map(t => t.id), l.idle.map(t => t.id),",
-      " taskSummary(l.running, l.idle)]));"));
-    assert.deepEqual(got, [["w2"], ["w1"], "1 subagent · 1 idle subagent"]);
+      " taskSummary(l.running)]));"));
+    assert.deepEqual(got, [["w2"], ["w1"], "1 subagent"]);
+  });
+
+  /** drawTileTasks into a stub tile: the list's HTML, Idle Agents folded or open. */
+  const drawn = (tasks, idleOpen) =>
+    evalJs(cat(ESC, "\n",
+      "const RUNNING = {busy: 1, shell: 1}; const age = () => '';\n",
+      "const localStorage = {getItem: () => null, setItem() {}};\n",
+      "const box = {classList: {toggle() {}}, dataset: {}, innerHTML: ''};\n",
+      "const document = {querySelector: () => box};\n",
+      "let selected = 'a', procFor = 'a', procTasks = ", j(tasks), ";\n",
+      "const current = () => ({status: 'idle'});\n",
+      between(SCRIPT, "let tasksOpen = false", "const taskShown"),
+      "\nidleOpen = ", j(idleOpen), "; drawTileTasks(); process.stdout.write(box.innerHTML);"));
+  const TEAM = [
+    { id: "w1", kind: "agent", label: "reviewer", idle: true },
+    { id: "w2", kind: "agent", label: "tester", idle: true },
+    { id: "a1", kind: "agent", label: "builder", current: { name: "Bash", summary: "cargo test" } },
+    { id: "d1", kind: "shell", label: "old", done: true, ended: 1 },
+  ];
+
+  it("idle agents fold under their own row, between the tasks and what ended", () => {
+    const html = drawn(TEAM, false);
+    assertIn("Idle Agents (2)", html);
+    assertLess(html.indexOf('data-task="a1"'), html.indexOf("Idle Agents"));
+    assertLess(html.indexOf("Idle Agents"), html.indexOf("Recently completed"));
+    // Folded: the idle ones are not listed.
+    assertNotIn('data-task="w1"', html);
+    const open = drawn(TEAM, true);
+    assertLess(open.indexOf("Idle Agents"), open.indexOf('data-task="w1"'));
+    assertLess(open.indexOf('data-task="w2"'), open.indexOf("Recently completed"));
+  });
+
+  it("an agent that works again is back among the tasks", () => {
+    const busy = TEAM.map((t) => (t.id === "w1" ? { ...t, idle: false } : t));
+    const html = drawn(busy, false);
+    assertIn("Idle Agents (1)", html);
+    assertLess(html.indexOf('data-task="w1"'), html.indexOf("Idle Agents"));
+    assertIn("Tasks · 2 subagents", html);
+  });
+
+  it("no idle agents, no Idle Agents row", () => {
+    assertNotIn("Idle Agents", drawn(TEAM.filter((t) => !t.idle), true));
+  });
+
+  it("a subagent's own call is not listed beneath it", () => {
+    const html = drawn(TEAM, true);
+    assertNotIn("cargo test", html);
+    assertNotIn("↳", html);
   });
 
   it("an idle session has no tool call and times read right", () => {
@@ -144,43 +192,14 @@ describe("TileTasks", () => {
 });
 
 describe("AwaitedPanel", () => {
-  /** The tabs under the chat for what the session is waiting on. */
-  const view = (tasks, pick = "auto") =>
-    evalJson(between(SCRIPT, "function procView(", "function procWanted(") +
-             `\nprocess.stdout.write(JSON.stringify(procView(${j(tasks)}, ${j(pick)})));`);
-  const A = { id: "ba", kind: "shell", label: "npm test", started: 1, mtime: 50, text: "a" };
-  const B = { id: "bb", kind: "monitor", label: "watch log", started: 2, mtime: 40, text: "b" };
-
-  it("nothing awaited shows nothing", () => {
-    assert.equal(view([]).show, null);
-  });
-
-  it("one task has no auto tab", () => {
-    const got = view([A]);
-    assert.deepEqual(got.tabs.map((t) => t.id), ["ba"]);
-    assert.equal(got.show.id, "ba");
-    assert.equal(got.tabs[0].on, true);
-  });
-
-  it("several put auto first and follow the latest output", () => {
-    const got = view([A, B]);
-    assert.deepEqual(got.tabs.map((t) => t.id), ["auto", "ba", "bb"]);
-    assert.equal(got.show.id, "ba");
-    assert.equal(got.tabs[1].live, true);
-    const later = { ...B, mtime: 60 };
-    assert.equal(view([A, later]).show.id, "bb");
-  });
-
-  it("a chosen tab sticks until its task ends", () => {
-    assert.equal(view([A, B], "bb").show.id, "bb");
-    const got = view([A, B], "gone");
-    assert.deepEqual([got.pick, got.show.id], ["auto", "ba"]);
-  });
-
-  it("panel sits directly under the chat", () => {
+  /** The strip of task output under the chat is gone (2026-11-15): the
+   * tile's task list has it, and an item opens in place of the chat. */
+  it("nothing sits between the chat and the prompt but the task view", () => {
     const page = renderShell();
-    assertIn(cat("<div id=log></div><div id=taskview hidden><div id=tvhead></div><pre id=tvtext></pre></div>",
-                 "<div id=procs hidden>"), page);
+    assertIn("<div id=log></div><div id=taskview hidden><div id=tvhead></div><pre id=tvtext></pre></div>" +
+             "<div id=changes", page);
+    for (const gone of ["id=procs", "id=proctabs", "id=proctext", "id=procgrip"]) assertNotIn(gone, page);
+    for (const gone of ["#procs", "#proctabs", "procView", "procsHeight"]) assertNotIn(gone, SCRIPT + CSS);
   });
 });
 

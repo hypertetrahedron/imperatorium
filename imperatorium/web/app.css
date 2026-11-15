@@ -235,29 +235,14 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .coldbtn .segs button{flex:1;border-radius:0;background:transparent;color:var(--warn);font-weight:600;padding:7px 10px}
 .coldbtn .segs button + button{border-left:1px solid var(--warn)}
 .coldbtn .segs button:hover{background:var(--warn);color:var(--onaccent)}
-/* What the session is waiting on, under the chat: a tab per shell or
-   monitor (Auto first when there are several), sized for the tabs and four
-   lines, dragged taller or shorter by its top edge. */
-#procs{flex:none;display:flex;flex-direction:column;height:var(--ph,116px);min-height:64px;
-  border-top:1px solid var(--line);background:var(--panel)}
-#procgrip{flex:none;height:6px;margin-top:-3px;cursor:ns-resize;touch-action:none}
-#procgrip:hover,#procs.drag #procgrip{background:var(--line)}
-#proctabs{flex:none;display:flex;gap:2px;padding:0 10px;overflow-x:auto;scrollbar-width:thin}
-#proctabs button{flex:none;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;
-  color:var(--muted);font-size:12px;padding:3px 8px}
-#proctabs button:hover{color:var(--ink)}
-#proctabs button.on{color:var(--ink);border-bottom-color:var(--busy)}
-#proctabs button.live::after{content:"";display:inline-block;width:6px;height:6px;margin-left:5px;
-  border-radius:50%;background:var(--busy);vertical-align:1px}
-#proctabs .k{font:12px var(--mono);color:var(--busy);margin-right:5px}
-#proctext{flex:1;min-height:0;margin:0;overflow:auto;padding:4px 16px 6px;
-  font:12.5px/18px var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--ink)}
-#proctext .none{color:var(--muted);font-style:italic}
 #shape{display:flex;flex-direction:column;gap:4px;padding:2px 9px 4px;font-size:12px;color:var(--muted)}
 #shape label{display:flex;align-items:center;justify-content:space-between;gap:14px;white-space:nowrap}
 #shape select.full{color:var(--muted)}
 #shape select:not(.full){color:var(--ink);border-color:var(--busy)}
+#shape input[type=checkbox]{margin:0}
+/* View > Display Times: when each block was written, at the right of its
+   first line, out of the way of the text. */
+#log .bt{float:right;margin:1px 0 0 10px;font:12px var(--mono);color:var(--muted);user-select:none}
 #jump{display:flex;gap:4px;flex:none}
 #jump button{padding:2px 8px;font-size:12px;opacity:.75}
 #jump button:hover{opacity:1}

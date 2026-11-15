@@ -266,6 +266,67 @@ describe("Shape", () => {
   });
 });
 
+describe("DisplayTimes", () => {
+  /** View > Display Times: each block says when it was written. */
+  const body = () => {
+    const a = find(SCRIPT, "function renderBlock(b)");
+    return between(SCRIPT, "const attr =", "// -- end highlighting --") + "\n" +
+      SCRIPT.slice(a, find(SCRIPT, "let logItems", a));
+  };
+  // Local noon on 2026-11-15, and the same clock a day earlier.
+  const NOON = new Date(2026, 10, 15, 12, 5).toISOString();
+  const YESTERDAY = new Date(2026, 10, 14, 9, 30).toISOString();
+  const NOW = new Date(2026, 10, 15, 18, 0).getTime();
+  const run = (times, code) => evalJson(cat(
+    "const renderText = t => '[' + t + ']';\n",
+    "const teammateParts = () => null;\n",
+    "const localStorage = {getItem: k => k === 'imperatorium.times' ? ", j(times ? "1" : "0"), " : '{}'};\n",
+    "let html = '';\n",
+    "const $ = () => ({classList: {toggle() {}}, set innerHTML(v) { html = v; }});\n",
+    ESC, "\n", body(), "\n", code));
+
+  it("off by default: no stamps, and the menu offers it unticked", () => {
+    const got = run(false, cat(
+      "drawShape();",
+      "process.stdout.write(JSON.stringify([shapeBlocks({speaker: 'you', blocks: [{kind: 'text', text: 'go', at: ",
+      j(NOON), "}]}, 0, new Set()), html]));"));
+    assert.equal(got[0], "[go]");
+    assertIn("Display Times<input type=checkbox data-times>", got[1]);
+    // Under the shapes, after the last of them.
+    assertLess(got[1].indexOf('data-shape="system"'), got[1].indexOf("Display Times"));
+  });
+
+  it("on: each block carries its own time", () => {
+    const got = run(true, cat(
+      "Date.now = () => ", j(NOW), ";",
+      "drawShape();",
+      "process.stdout.write(JSON.stringify([shapeBlocks({speaker: 'claude', blocks: [",
+      "{kind: 'text', text: 'in 10 minutes', at: ", j(NOON), "},",
+      "{kind: 'text', text: 'old', at: ", j(YESTERDAY), "},",
+      "{kind: 'text', text: 'no time'}]}, 0, new Set()), html]));"));
+    assertIn('<span class=bt title="', got[0]);
+    assertIn(">12:05</span>[in 10 minutes]", got[0]);
+    assertIn(">Nov 14 09:30</span>[old]", got[0]);
+    assertIn("</span>[old][no time]", got[0]);
+    assertIn("data-times checked", got[1]);
+  });
+
+  it("a hidden block has no stamp either", () => {
+    const got = run(true, cat(
+      "shape = {thinking: 'hidden'};",
+      "process.stdout.write(JSON.stringify(shapeBlocks({speaker: 'claude', blocks: [",
+      "{kind: 'thinking', text: 'x', at: ", j(NOON), "}]}, 0, new Set())));"));
+    assert.equal(got, "");
+  });
+
+  it("times are only as fine as minutes, and a bad time is none", () => {
+    const got = run(true, cat(
+      "process.stdout.write(JSON.stringify([blockTime(", j(NOON), ", ", j(NOW), ").text,",
+      " blockTime('nonsense', 0), blockTime(null, 0)]));"));
+    assert.deepEqual(got, ["12:05", null, null]);
+  });
+});
+
 describe("WorkAtAGlance", () => {
   /** The tile's cache countdown, its signals, and what the open tile adds. */
   const runTileJs = (call) => {
@@ -323,6 +384,15 @@ describe("WorkAtAGlance", () => {
     assert.deepEqual(got, ["idle 12m", "ctx 230k (45%)", "≈$4.10", "3 running"]);
     const waiting = details({ status: "idle", attention: true, status_changed_at: 10000 - 720 });
     assert.deepEqual(waiting, ["idle 12m"]);
+  });
+
+  it("idle time is whole minutes, under one is <1m", () => {
+    const idle = (secs) => details({ status: "idle", status_changed_at: 10000 - secs })[0];
+    assert.equal(idle(0), "idle <1m");
+    assert.equal(idle(59), "idle <1m");
+    assert.equal(idle(60), "idle 1m");
+    assert.equal(idle(119), "idle 1m");
+    assert.equal(idle(3 * 3600 + 5 * 60 + 40), "idle 3h 5m");
   });
 
   it("a working session says how long and nothing running is left out", () => {
