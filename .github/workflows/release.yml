@@ -16,6 +16,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.100.0"   # as check.yml
 
 jobs:
   # The same tests as every push (check.yml): a tag whose commit fails them
@@ -28,12 +29,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Rust ${{ env.RUST_TOOLCHAIN }}
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
       - name: Version from the tag
         shell: bash
         run: echo "IMPERATORIUM_BUILD_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - name: imperatorium.exe (C runtime linked in, see rust/.cargo/config.toml)
         working-directory: rust
-        run: cargo build --release -p imperatorium
+        run: cargo build --release --locked -p imperatorium
       - name: Vulkan SDK for the dictation worker
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
@@ -46,7 +50,7 @@ jobs:
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
         # A short target folder: the Vulkan shader generator's sub-build
         # nests ~225 characters below it (Windows' limit is 260).
-        run: build-voice.cmd build --release --no-default-features --features vulkan --target-dir C:\vk
+        run: build-voice.cmd build --release --locked --no-default-features --features vulkan --target-dir C:\vk
       - name: Gather the Windows binaries
         shell: bash
         run: |
@@ -62,6 +66,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Rust ${{ env.RUST_TOOLCHAIN }}
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
       - name: Version from the tag
         run: echo "IMPERATORIUM_BUILD_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - name: Static musl builds, linked with rust-lld (no cross C toolchain)
@@ -69,7 +76,7 @@ jobs:
         run: |
           rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
           for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            cargo build --release -p imperatorium --no-default-features --target "$t"
+            cargo build --release --locked -p imperatorium --no-default-features --target "$t"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -86,6 +93,9 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+      - name: Rust ${{ env.RUST_TOOLCHAIN }}
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
       - name: Version from the tag
         run: echo "IMPERATORIUM_BUILD_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - name: Both architectures
@@ -93,7 +103,7 @@ jobs:
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
           for t in aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --release -p imperatorium --target "$t"
+            cargo build --release --locked -p imperatorium --target "$t"
           done
       - uses: actions/upload-artifact@v4
         with:

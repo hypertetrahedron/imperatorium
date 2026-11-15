@@ -400,7 +400,23 @@ by hand:
 ```
 cd rust && cargo test --workspace
 node --test imperatorium/web/tests/*.test.mjs     # the window; needs node
+cd rust && cargo clippy --workspace --all-targets -- -D warnings   # CI gates on this
 ```
+
+CI (`.github/workflows/check.yml`) builds and tests with `--locked` on a
+pinned toolchain (`RUST_TOOLCHAIN` there), on Windows and Ubuntu, runs
+`cargo audit` on both lockfiles, and measures line coverage with
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) (reported in the
+run summary and as an artifact, not gated). The same locally:
+
+```
+cargo install cargo-llvm-cov && rustup component add llvm-tools-preview
+cd rust && cargo build -p fakecli --target-dir target/llvm-cov-target
+cargo llvm-cov --workspace --html     # report in target/llvm-cov/html
+```
+
+The suite starts many processes. Run it in a console of its own, not one
+another tool shares and may interrupt.
 
 The goldens under `rust/imperatorium/tests/golden` are the specification; see
 the `README.md` there.
