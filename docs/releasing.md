@@ -382,22 +382,30 @@ too, so leaving is as easy as arriving.
 
 ## 10. Checklist summary
 
+CI on GitHub first ran when `main` moved to the native build (2026-11-15)
+and needed these to pass there, all in PR #1: Linux builds of the test
+helpers, the runner's 8.3 short TEMP path (a real bug in worktree lookups
+too), the goldens' time zone (US Eastern, set on the runners), gh's wording
+under Actions, Windows-only tests marked so, and two test threads on the
+4-core Windows runner. `remote add` from a Linux machine has no test yet.
+
+
 Before the first public release (0.4.0-preview.1):
 
-- [ ] `main` fast-forwarded to `rust`; live worktree on `main`; merged branches deleted
-- [ ] Rulesets: `main` (PR + `check`), tags `v*` (create-only, restricted)
-- [ ] Cargo version `0.4.0-dev`; `release.yml` tag/branch/version checks
-- [ ] Rolling `preview` release updated in place, not recreated
-- [ ] Installer smoke test in `publish`
-- [ ] `install.sh` / `install.ps1` truncation-safe; `IMPERATORIUM_VERSION`
-- [ ] `CHANGELOG.md`
-- [ ] README on `main` shows the native install
+- [x] `main` fast-forwarded to `rust`; live worktree on `main`; merged branches deleted (2026-11-15)
+- [x] Rulesets: `main` (PR + `check` on both runners), tags `v*` (create admin-only; never moved or deleted) (2026-11-15)
+- [x] Cargo version `0.4.0-dev`; `release.yml` tag/branch/version checks
+- [x] Rolling `preview` release updated in place, not recreated *(written; first runs on the first preview tag)*
+- [x] Installer smoke tests before `publish` *(written; first runs on the first preview tag)*
+- [x] `install.sh` / `install.ps1` truncation-safe; `IMPERATORIUM_VERSION` (install.ps1 tested piped and as a file on PowerShell 5.1 and 7)
+- [x] `CHANGELOG.md`
+- [x] README on `main` shows the native install
 
 Before the first stable (0.4.0):
 
-- [ ] Signed manifest, verified by `update`
-- [ ] `state_version` and forward migrations with backup
-- [ ] `update --rollback` and `update --version`
-- [ ] Build provenance attestations; actions pinned by SHA
-- [ ] Windows code signing (or a stated reason to ship unsigned)
-- [ ] macOS marked experimental in notes and installer
+- [x] Signed manifest, verified by `update` (key made 2026-11-15; see the key section above)
+- [x] `state_version` and forward migrations with backup (checked by `serve --live`; no migrations yet)
+- [x] `update --rollback` and `update --version` (rollback restores the main binary; the voice worker stays as it is)
+- [x] Build provenance attestations; actions pinned by SHA
+- [ ] Windows code signing (or a stated reason to ship unsigned) - the maintainer is getting a certificate
+- [x] macOS marked experimental in notes and installer
