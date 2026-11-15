@@ -1,6 +1,6 @@
-//! The Settings window's fields: settings.FIELDS/SECTIONS, written from
-//! `imperatorium/settings.py` by `rust/assets/export_ui.py` and compiled in,
-//! with `settings.value` (a field's value in config.json, else its default).
+//! The Settings window's fields: `assets/settings_fields.json`, compiled in
+//! and maintained by hand (it began as an export of `imperatorium/settings.py`;
+//! the `schema_structure` test below guards its shape), with `settings.value` (a field's value in config.json, else its default).
 
 use std::sync::OnceLock;
 
@@ -166,6 +166,74 @@ mod tests {
         assert_eq!(value(&json!({}), "voice.enabled"), json!(false));
         assert_eq!(value(&json!({"voice": {}}), "voice.enabled"), json!(true));
         assert!(field("chat.font_size").is_some());
+    }
+
+    /// settings_fields.json is hand-maintained (the Python generator is
+    /// gone), so this is what keeps a typo out: every field has what the
+    /// form and `check` read, its default is a value of its own type that
+    /// `check` accepts, and the pieces the file refers to by name exist.
+    #[test]
+    fn schema_structure() {
+        let s = schema();
+        for k in ["fields", "sections", "restart", "shortcuts", "reserved_keys", "modifiers"] {
+            assert!(!s[k].is_null(), "settings_fields.json lacks {k}");
+        }
+        let sections: Vec<&str> =
+            s["sections"].as_array().unwrap().iter().map(|p| p[0].as_str().unwrap()).collect();
+        for p in s["sections"].as_array().unwrap() {
+            assert!(p[0].is_string() && p[1].is_string(), "section {p}");
+        }
+        let procs = s["restart"].as_object().unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for f in s["fields"].as_array().unwrap() {
+            let key = f["key"].as_str().unwrap_or_else(|| panic!("field without a key: {f}"));
+            assert!(seen.insert(key), "duplicate field {key}");
+            for k in ["label", "help", "type", "section", "applies"] {
+                assert!(f[k].is_string(), "{key}: {k} must be text");
+            }
+            assert!(sections.contains(&f["section"].as_str().unwrap()), "{key}: unknown section");
+            let applies = f["applies"].as_str().unwrap();
+            assert!(applies == "live" || procs.contains_key(applies), "{key}: applies {applies}");
+            let t = f["type"].as_str().unwrap();
+            let d = &f["default"];
+            let voice_block = d.get("from").and_then(Value::as_str) == Some("voice_block");
+            match t {
+                "bool" => assert!(d.is_boolean() || voice_block, "{key}: default"),
+                "int" | "optint" | "numbers" => {
+                    assert!(f["min"].is_number() && f["max"].is_number(), "{key}: min/max");
+                    assert!(f["min"].as_f64() <= f["max"].as_f64(), "{key}: min > max");
+                    match t {
+                        "int" => assert!(d.is_i64(), "{key}: default"),
+                        "optint" => assert!(d.is_i64() || d.is_null(), "{key}: default"),
+                        _ => assert!(d.as_array().is_some_and(|a| a.iter().all(Value::is_number))),
+                    }
+                }
+                "choice" => {
+                    let c = f["choices"].as_array().unwrap_or_else(|| panic!("{key}: choices"));
+                    assert!(!c.is_empty() && c.contains(d), "{key}: default not among choices");
+                }
+                "color" => {
+                    assert!(f["name"].is_string(), "{key}: name");
+                    assert!(d.is_string());
+                }
+                "name" | "url" | "topic" | "lang" | "key" => assert!(d.is_string(), "{key}: default"),
+                "paths" | "phrases" | "hotkeys" | "names" => assert!(
+                    d.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
+                    "{key}: default"
+                ),
+                other => panic!("{key}: unknown type {other}"),
+            }
+            if !voice_block {
+                assert_eq!(check(f, d, d).as_ref().ok(), Some(d), "{key}: default fails check");
+            }
+        }
+        for sh in s["shortcuts"].as_array().unwrap() {
+            for k in ["where", "keys", "what"] {
+                assert!(sh[k].is_string(), "shortcut {sh}");
+            }
+        }
+        assert!(s["reserved_keys"].as_object().unwrap().values().all(Value::is_string));
+        assert!(s["modifiers"].as_array().unwrap().iter().all(Value::is_string));
     }
 }
 

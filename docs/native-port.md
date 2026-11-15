@@ -180,11 +180,12 @@ A cold snapshot costs about 1.4 s, nearly all of it `claude agents` itself
 window's `/api/stream` keeps the cache warm so requests rarely see it. The
 binary will do the same once `/api/stream` is ported.
 
-Then the window itself: `rust/assets/export_ui.py` writes the three pages
-from ui.py (with `_with_meta` switched off) and settings.FIELDS as JSON;
-the binary embeds them, adds the token, boot id and `look_head` as
-`_with_meta` does, and serves the fonts. A Python test fails when ui.py or
-settings.py changes without an export. Also ported: `/api/history` (list,
+Then the window itself: the binary embeds the pages (imperatorium/web/) and
+`rust/imperatorium/assets/settings_fields.json`, adds the token, boot id and
+`look_head` as `_with_meta` does, and serves the fonts. (The JSON began as
+an export of settings.FIELDS by `rust/assets/export_ui.py`; since
+2026-11-14 it is hand-maintained, guarded by the `settings::tests::
+schema_structure` test, and settings.py may drift from it.) Also ported: `/api/history` (list,
 search, snippets), `/api/stream` (the SSE feed, timing as Python's), and
 `/api/events`, `/queue`, `/prefs`, `/decisions`, `/quick`. shadow.py: 165
 requests identical - the pages byte for byte bar the per-start token and
