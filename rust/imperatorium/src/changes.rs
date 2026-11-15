@@ -254,6 +254,20 @@ fn norm(p: &str) -> String {
     paths::abs_normcase(p).unwrap_or_default()
 }
 
+/// Is git's `listed` path the folder the caller named (`want` is that name
+/// through norm)? Python's comparison first; then, for two spellings of one
+/// folder that it misses - an 8.3 short name (`C:\Users\RUNNER~1`, as a
+/// short TEMP gives) against the long one git reports - the canonical paths.
+fn same_dir(listed: &str, want: &str, named: &str) -> bool {
+    if norm(listed) == want {
+        return true;
+    }
+    match (std::fs::canonicalize(listed), std::fs::canonicalize(named)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// True for a worktree Claude Code made for a background session.
 fn is_agent_worktree(main: &str, path: &str) -> bool {
     let root = norm(
@@ -449,7 +463,7 @@ pub fn worktree_diff(project: &str, path: &str) -> Value {
         .as_array()
         .and_then(|w| {
             w.iter()
-                .find(|wt| norm(wt["path"].as_str().unwrap_or("")) == want)
+                .find(|wt| same_dir(wt["path"].as_str().unwrap_or(""), &want, path))
         })
         .cloned();
     let Some(wt) = found else {
@@ -604,7 +618,7 @@ fn find(project: &str, path: &str) -> Result<Found, Value> {
     }
     let want = norm(path);
     for wt in listed["worktrees"].as_array().into_iter().flatten() {
-        if norm(wt["path"].as_str().unwrap_or("")) == want {
+        if same_dir(wt["path"].as_str().unwrap_or(""), &want, path) {
             let base = match &wt["base"] {
                 Value::String(b) if !b.is_empty() => wt["base"].clone(),
                 _ => listed["base"].clone(),

@@ -64,6 +64,14 @@ pub fn home_dir() -> PathBuf {
 /// trailing separator).
 pub fn system_temp() -> PathBuf {
     let t = std::env::temp_dir();
+    // The long spelling: a TEMP given in 8.3 form (C:\Users\RUNNER~1 on
+    // GitHub's runners) is not what git, or the binary through git, reports,
+    // so paths the tests map back to placeholders would not match.
+    #[cfg(windows)]
+    let t = std::fs::canonicalize(&t)
+        .ok()
+        .and_then(|c| c.to_str().map(|s| PathBuf::from(s.trim_start_matches(r"\\?\"))))
+        .unwrap_or(t);
     let s = t.to_string_lossy();
     PathBuf::from(s.trim_end_matches(['\\', '/']).to_string())
 }

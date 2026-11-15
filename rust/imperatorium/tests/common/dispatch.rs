@@ -700,6 +700,31 @@ pub fn children_of(pid: u32) -> Vec<(u32, String)> {
     out
 }
 
+/// (pid, name) of the processes whose parent is `pid`, from /proc. The
+/// console tests that use these are Windows-only; this keeps the shared
+/// helpers compiling (and meaning the same) on Linux CI.
+#[cfg(not(windows))]
+pub fn children_of(pid: u32) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(child) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else { continue };
+        // "pid (comm) state ppid ...": comm may hold spaces and parentheses.
+        let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else { continue };
+        let ppid = stat[close + 1..].split_whitespace().nth(1).and_then(|p| p.parse::<u32>().ok());
+        if ppid == Some(pid) {
+            out.push((child, stat[open + 1..close].to_string()));
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+pub fn running(pid: u32, exe: &str) -> bool {
+    let want = exe.strip_suffix(".exe").unwrap_or(exe);
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == want)
+}
+
 /// Is a process with this pid and exe name still there? (A freed pid is
 /// reused quickly, so the name is what says it is the same one.)
 #[cfg(windows)]

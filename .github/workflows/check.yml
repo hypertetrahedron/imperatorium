@@ -74,13 +74,31 @@ jobs:
         working-directory: rust
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # The goldens were recorded on a machine in US Eastern time: the twins
+      # compare the times they print ("resets 19:00"), so the runner keeps
+      # that clock too.
+      - name: Time zone of the goldens
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then MSYS_NO_PATHCONV=1 tzutil /s "Eastern Standard Time"
+          else sudo timedatectl set-timezone America/New_York; fi
+
+      # --no-fail-fast: one run shows every failing test binary, not the first.
       - name: cargo test
         working-directory: rust
         env:
           IMPERATORIUM_REQUIRE_NODE: "1"   # web_js.rs must run node, not skip
         run: |
+          # gh words its "not logged in" error differently inside Actions (and
+          # under CI); the worktree twin's golden has the wording everyone else
+          # sees. GITHUB_* cannot be overridden in `env:`, only unset here.
+          unset GITHUB_ACTIONS CI
+          # The Windows runner has 4 cores; the unit tests that start
+          # PowerShell, ping and named pipes against 30 s deadlines ran out of
+          # time with 4 at once (82 s there against 28 s on a desktop). Two
+          # at a time keeps them honest.
+          if [ "$RUNNER_OS" = Windows ]; then export RUST_TEST_THREADS=2; fi
           if [ "$RUNNER_OS" = Linux ]; then flags=--no-default-features; fi
-          cargo test --workspace --locked $flags
+          cargo test --workspace --locked --no-fail-fast $flags
 
       # The window's JavaScript, directly (cargo test above also runs it, via
       # rust/imperatorium/tests/web_js.rs; this shows its output on its own).
@@ -128,16 +146,24 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
+      - name: Time zone of the goldens
+        run: MSYS_NO_PATHCONV=1 tzutil /s "Eastern Standard Time"
       - name: cargo llvm-cov
         working-directory: rust
         env:
           IMPERATORIUM_REQUIRE_NODE: "1"
         run: |
+          unset GITHUB_ACTIONS CI   # as in check: gh's wording, for the worktree twin
           # fakecli (a stub, so not instrumented) goes beside the binary in
           # llvm-cov's own target folder, where the integration tests look;
           # cargo test builds only its test harness.
           cargo build -p fakecli --locked --target-dir target/llvm-cov-target
-          cargo llvm-cov --workspace --locked --no-fail-fast --no-report
+          # The examples (fakessh, the stand-in ssh the remote tests run) likewise.
+          cargo build -p imperatorium --examples --locked --target-dir target/llvm-cov-target
+          # Not gated: a failing test is the check job's to report; here it
+          # only warns, and the report is still made.
+          cargo llvm-cov --workspace --locked --no-fail-fast --no-report \
+            || echo "::warning::tests failed under coverage (the check job gates them)"
           cargo llvm-cov report --lcov --output-path lcov.info
           cargo llvm-cov report --html --output-dir coverage
           cargo llvm-cov report --summary-only | tee coverage-summary.txt

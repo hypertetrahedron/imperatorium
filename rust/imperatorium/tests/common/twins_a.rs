@@ -201,6 +201,7 @@ pub fn start_notify(
 
 // ----------------------------------------------------------------- pipes
 
+#[cfg(windows)]
 mod ffi {
     use std::ffi::c_void;
     #[link(name = "kernel32")]

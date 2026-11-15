@@ -472,7 +472,10 @@ pub fn triple_for(arch: &str) -> Option<&'static str> {
 pub fn local_build(triple: &str) -> Option<PathBuf> {
     let mut places = Vec::new();
     if let Some(dir) = crate::paths::env_nonempty("IMPERATORIUM_REMOTE_BUILDS") {
-        places.push(Path::new(&dir).join(triple).join("imperatorium"));
+        // Only there: a test that empties it must not find a checkout's
+        // own cross build instead.
+        let p = Path::new(&dir).join(triple).join("imperatorium");
+        return p.is_file().then_some(p);
     }
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
         places.push(dir.join("targets").join(triple).join("imperatorium"));

@@ -7,11 +7,15 @@
 //!
 //! No golden: each expectation is the script's.
 //!
+//! Windows-only, as the other twins: fakecli stands in as `ssh.exe` and
+//! `claude.exe`. `remote add` from a Linux machine is not covered here.
+//!
 //! Beyond the script, for safety: `check` gets `--port` (a free port, not
 //! the live dispatcher's 8792), `--settings` (the sandbox's, not this
 //! machine's ~/.claude/settings.json) and `--task-prefix` (no such tasks);
 //! a fakecli claude.exe is first on PATH, so `claude --version` never runs
 //! the real one; `--no-restart` everywhere, stdin closed (no prompts).
+#![cfg(windows)]
 
 mod common;
 use common::fakessh::FakeSsh;
@@ -203,8 +207,12 @@ fn remote_add_remove_check_against_a_sandbox_host() {
         || stop.to_string(),
     );
     c.check(
-        "no permission hook, no tool hooks on the host",
-        h["hooks"].get("PermissionRequest").is_none() && h["hooks"].get("PreToolUse").is_none(),
+        // Since c61634d a host has a permission hook again, but only the
+        // park-only one: its requests are answered here, never by policy there.
+        "only the park-only permission hook, no tool hooks on the host",
+        h["hooks"]["PermissionRequest"].as_array().is_some_and(|b| {
+            b.len() == 1 && b[0]["hooks"][0]["args"] == json!(["permission", "--park-only"])
+        }) && h["hooks"].get("PreToolUse").is_none(),
         || {
             format!(
                 "{:?}",
