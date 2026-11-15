@@ -36,6 +36,8 @@ Every test in the Python suite that is going away, and where its behaviour is te
 
 test_herdr.py, test_herdr_mods.py, test_herdrsetup.py: dropped with herdr. test_ui.py: ported to node elsewhere.
 
+**Resolved since (2026-11-15):** of the 11 DIFFERS rows, 8 are fixed in the binary (conversation cache budget and single parse, dismissal on reappearance, uninstall asking first, run_timeout's job object x3, the CPU voice model) and 3 will not be (the pre-rename `ccontrol` state folder, `ccontrol-*` units and `CentralControl*` tasks: a clean break with the Python version). Each row says which. The counts above are as mapped.
+
 
 ## test_closing.py
 
@@ -67,8 +69,8 @@ Summary: 8 tests - 0 COVERED already, 6 PORT now COVERED by new Rust tests, 0 MO
 | CacheTests.test_merging_does_not_change_the_cached_messages | COVERED | new: tests/core_convcache.rs `merging_does_not_change_the_cached_messages` |
 | CacheTests.test_without_a_transcript_file_it_reads_through | COVERED | new: tests/core_convcache.rs `without_a_transcript_file_nothing_is_cached` |
 | CacheTests.test_least_recently_used_sessions_are_dropped | COVERED | new: tests/core_convcache.rs `least_recently_used_sessions_are_dropped` |
-| CacheTests.test_a_weight_budget_keeps_at_least_the_newest | DIFFERS | the binary bounds the cache by count only (CONVS_KEPT = 32 in server/conv.rs); there is no byte-weight budget, so a huge transcript is kept like a small one. Nothing to test |
-| CacheTests.test_concurrent_requests_share_one_parse | DIFFERS | the binary has no per-session fill lock: server/conv.rs `conversation` checks the cache, then parses outside any lock, so N simultaneous polls of one changed transcript parse N times. Not observable through the API (only the parse count would show it) |
+| CacheTests.test_a_weight_budget_keeps_at_least_the_newest | DIFFERS | FIXED 2026-11-15 (`4920b38`): byte budget, setting chat.conversation_cache_mb; conv.rs `a_weight_budget_keeps_at_least_the_newest`, tests/conv_cache.rs. Was: the binary bounds the cache by count only (CONVS_KEPT = 32 in server/conv.rs); there is no byte-weight budget, so a huge transcript is kept like a small one. Nothing to test |
+| CacheTests.test_concurrent_requests_share_one_parse | DIFFERS | FIXED 2026-11-15 (`4920b38`): per-session fill lock; tests/conv_cache.rs `polls_that_arrive_together_share_one_parse`. Was: the binary has no per-session fill lock: server/conv.rs `conversation` checks the cache, then parses outside any lock, so N simultaneous polls of one changed transcript parse N times. Not observable through the API (only the parse count would show it) |
 
 
 ## test_conversation.py
@@ -583,7 +585,7 @@ All ported to unit tests beside `History` (the spend views are in-process; the H
 | ResumeMethod.test_close_session_without_a_process_is_refused | COVERED | tests/features_api.rs features_api::features_close_and_dismiss_refuse_what_has_no_process_or_still_runs |
 | ResumeMethod.test_dismissing_a_session_with_no_process_takes_it_off_the_list | COVERED | tests/features_api.rs features_api::features_close_and_dismiss_refuse_what_has_no_process_or_still_runs (a hook-only session is dismissed; its tokens and archive entry go too; the dismissal survives in state.json) |
 | ResumeMethod.test_a_running_session_is_not_dismissed | COVERED | tests/features_api.rs features_api::features_close_and_dismiss_refuse_what_has_no_process_or_still_runs |
-| ResumeMethod.test_a_dismissed_session_comes_back_when_it_runs_again | DIFFERS | Python cleared the dismissal when the row came back with a process (assertNotIn(SID, store.dismissed()) right after listing); the binary lists the row at once (snapshot.rs ignores the mark for a row with a pid) but clears the mark at that session's next hook event (hook.rs store.undismiss). Tested as the binary does it: tests/features_api.rs features_api::features_close_and_dismiss_refuse_what_has_no_process_or_still_runs |
+| ResumeMethod.test_a_dismissed_session_comes_back_when_it_runs_again | DIFFERS | FIXED 2026-11-15 (`c8511f4`): the mark is cleared when the row is listed with a process; features_api.rs. Was: Python cleared the dismissal when the row came back with a process (assertNotIn(SID, store.dismissed()) right after listing); the binary lists the row at once (snapshot.rs ignores the mark for a row with a pid) but clears the mark at that session's next hook event (hook.rs store.undismiss). Tested as the binary does it: tests/features_api.rs features_api::features_close_and_dismiss_refuse_what_has_no_process_or_still_runs |
 | ResumeMethod.test_a_dismissed_session_comes_back_on_session_start | COVERED | tests/features_api.rs features_api::features_close_and_dismiss_refuse_what_has_no_process_or_still_runs |
 | ResumeMethod.test_new_and_close_without_a_process_launches_nothing | COVERED | tests/features_api.rs features_api::features_resume_of_running_and_dead_sessions_and_new_beside_one |
 | ResumeMethod.test_a_resume_error_is_reported_not_raised | COVERED | tests/features_api.rs features_api::features_resume_and_fork_launch_through_wt_and_claude (a gone folder comes back as ok false, not an error) |
@@ -689,7 +691,7 @@ The Rust CLI (src/cli.rs) is black-boxed here against a recording fake dispatche
 | Passthrough.test_leading_flags_reach_the_script | MOOT | Python impctl handed argv to install.py; the binary dispatches in-process (install flags: cli.rs `arguments_read_as_argparse_does`, install.rs `opts`) |
 | Passthrough.test_remote_keeps_its_subcommand_and_flags | MOOT | same; `remote add ...` is handled in-binary (remote_cli.rs tests) |
 | Passthrough.test_unknown_flags_on_other_commands_are_still_refused | COVERED | cli.rs `arguments_read_as_argparse_does`; black-box exit 2 in tests/impctl_cli.rs `impctl_unknown_flags_are_refused` |
-| Uninstall.test_a_no_runs_nothing | DIFFERS | `service uninstall` without --yes and without a terminal refuses and removes nothing (exit 1): tests/impctl_cli.rs `impctl_service_uninstall_without_yes_or_a_terminal_removes_nothing`. But Python's `impctl uninstall` also asked; the binary's top-level `uninstall` (install.rs uninstall_main, main.rs) does NOT ask: it edits settings.json and removes the tasks at once. Not exercised (unsafe), so no ignored test |
+| Uninstall.test_a_no_runs_nothing | DIFFERS | FIXED 2026-11-15 (`206df1d`): top-level uninstall asks first; impctl_cli.rs `uninstall_without_yes_or_a_terminal_removes_nothing`. Was: `service uninstall` without --yes and without a terminal refuses and removes nothing (exit 1): tests/impctl_cli.rs `impctl_service_uninstall_without_yes_or_a_terminal_removes_nothing`. But Python's `impctl uninstall` also asked; the binary's top-level `uninstall` (install.rs uninstall_main, main.rs) does NOT ask: it edits settings.json and removes the tasks at once. Not exercised (unsafe), so no ignored test |
 | Uninstall.test_yes_skips_the_question | COVERED | cli.rs `impctl_cov::yes_skips_the_question` |
 | Uninstall.test_install_does_not_ask | COVERED | tests/impctl_cli.rs `impctl_service_install_does_not_ask` |
 | FindSession.test_by_exact_name | COVERED | cli.rs `a_session_is_found_by_id_name_or_title` |
@@ -944,7 +946,7 @@ Summary: 12 tests - 2 COVERED already, 7 PORT now COVERED by new Rust tests, 0 M
 | Test | Verdict | Rust test or reason |
 |---|---|---|
 | StateFolder.test_finding_the_old_folder_does_not_move_it | COVERED | new: tests/core_rename.rs `the_old_state_folder_is_found_and_left_in_place` |
-| StateFolder.test_the_old_folder_is_moved_on_first_start | DIFFERS | the binary never moves ccontrol to imperatorium (no rename anywhere in src; paths::state_dir only prefers the old folder while the new one is absent). The Python dispatcher's migrate_state_dir has no counterpart. Recorded as the #[ignore]d tests/core_rename.rs `the_old_folder_is_moved_on_first_start` |
+| StateFolder.test_the_old_folder_is_moved_on_first_start | DIFFERS | WON'T FIX 2026-11-15 (user decision: a clean break with the Python version; old installs uninstall with their own version first). Was: the binary never moves ccontrol to imperatorium (no rename anywhere in src; paths::state_dir only prefers the old folder while the new one is absent). The Python dispatcher's migrate_state_dir has no counterpart. Recorded as the #[ignore]d tests/core_rename.rs `the_old_folder_is_moved_on_first_start` |
 | StateFolder.test_a_folder_that_cannot_move_goes_on_being_used | COVERED | new: tests/core_rename.rs `the_old_state_folder_is_found_and_left_in_place (the move failing cannot happen: the binary never moves; the second half, the permission hook writing beside the old folder, is exactly what this test checks)` |
 | StateFolder.test_a_new_install_uses_the_new_name | COVERED | new: tests/core_rename.rs `a_new_install_uses_the_new_name` |
 | StateFolder.test_once_moved_the_old_one_is_ignored | COVERED | new: tests/core_rename.rs `once_the_new_folder_exists_the_old_one_is_ignored` |
@@ -952,9 +954,9 @@ Summary: 12 tests - 2 COVERED already, 7 PORT now COVERED by new Rust tests, 0 M
 | Hooks.test_anyone_elses_is_not | COVERED | install_compare.rs (start 'someone else's hooks' kept through install and uninstall) + install::tests::hooks_replace_ours_and_keep_others |
 | Hooks.test_a_statusline_from_before_the_rename_still_reports | COVERED | new: usage::core_tests::provider_of_reads_either_name; tests/core_rename.rs ccontrol_statusline_event_is_ingested |
 | Policy.test_the_policy_code_is_protected_under_either_name | COVERED | new: policy::core_tests::the_policy_code_is_protected_under_either_name |
-| Units.test_the_old_unit_names_are_known_so_install_can_remove_them | DIFFERS | the binary's service.rs knows only the Imperatorium names (service::tests::names_per_backend); it does not list or remove the pre-rename ccontrol-* units / local.ccontrol.* agents, so an install from before the rename leaves them behind |
+| Units.test_the_old_unit_names_are_known_so_install_can_remove_them | DIFFERS | WON'T FIX 2026-11-15 (user decision: a clean break with the Python version; old installs uninstall with their own version first). Was: the binary's service.rs knows only the Imperatorium names (service::tests::names_per_backend); it does not list or remove the pre-rename ccontrol-* units / local.ccontrol.* agents, so an install from before the rename leaves them behind |
 | Units.test_a_host_from_before_the_rename_is_noticed | COVERED | new: remote_cli::core_tests::a_host_from_before_the_rename_is_noticed |
-| Tasks.test_install_and_uninstall_remove_the_old_task_names | DIFFERS | service.rs / service_ctl.rs have no CentralControl* legacy names (grep finds none); the binary's install and uninstall do not remove the old scheduled tasks. service/tasks.ps1, the file the Python test reads, still does |
+| Tasks.test_install_and_uninstall_remove_the_old_task_names | DIFFERS | WON'T FIX 2026-11-15 (user decision: a clean break with the Python version; old installs uninstall with their own version first). Was: service.rs / service_ctl.rs have no CentralControl* legacy names (grep finds none); the binary's install and uninstall do not remove the old scheduled tasks. service/tasks.ps1, the file the Python test reads, still does |
 
 
 ## test_sessionstat.py
@@ -1141,9 +1143,9 @@ The binary's counterpart is src/proc.rs: run_timeout (bounded, drains both pipes
 |---|---|---|
 | Tree.test_a_timeout_kills_the_grandchild_too | COVERED | proc.rs `subproc_cov::a_timeout_kills_the_grandchild_too` (windows) |
 | Tree.test_keep_leaves_what_it_started_running | COVERED | proc.rs `subproc_cov::a_clean_exit_leaves_what_it_started_running` (windows; the binary's only mode) |
-| Tree.test_a_clean_exit_kills_what_it_left | DIFFERS | Python's default killed a grandchild left after a clean exit (job object); the binary's run_timeout leaves it running. Ignored test: proc.rs `subproc_cov::a_clean_exit_kills_what_it_left` |
-| Tree.test_a_child_left_suspended_by_a_clean_exit_is_killed | DIFFERS | same cause: no sweep of leftovers after a clean exit in the binary |
-| Tree.test_a_sealed_job_refuses_a_late_child | DIFFERS | not in binary: no job object / sealing in proc.rs (remote.rs uses a job only for its ssh child) |
+| Tree.test_a_clean_exit_kills_what_it_left | DIFFERS | FIXED 2026-11-15 (`b18199f`): run_timeout's job object; the test is no longer ignored. Was: Python's default killed a grandchild left after a clean exit (job object); the binary's run_timeout leaves it running. Ignored test: proc.rs `subproc_cov::a_clean_exit_kills_what_it_left` |
+| Tree.test_a_child_left_suspended_by_a_clean_exit_is_killed | DIFFERS | FIXED 2026-11-15 (`b18199f`): proc.rs `a_member_left_suspended_goes_with_the_job`. Was: same cause: no sweep of leftovers after a clean exit in the binary |
+| Tree.test_a_sealed_job_refuses_a_late_child | DIFFERS | FIXED 2026-11-15 (`b18199f`): proc.rs `a_sealed_job_refuses_a_late_child`. Was: not in binary: no job object / sealing in proc.rs (remote.rs uses a job only for its ssh child) |
 | Tree.test_kill_tree_ends_a_long_lived_child_and_its_children | COVERED | proc.rs `subproc_cov::kill_tree_ends_a_long_lived_child_and_its_children_and_twice_is_harmless` (windows) |
 | RunLike.test_output_input_and_return_code | COVERED | output: `collects_both_streams`; exit status and stdout: proc.rs `subproc_cov::the_exit_status_comes_back`; stdin input is not in the binary (stdin is null) |
 | RunLike.test_check_raises | MOOT | Python subprocess.run API (check=True); callers in Rust inspect Output.status |
@@ -1191,14 +1193,14 @@ Worker tests run against a stand-in child (std-only program compiled with rustc 
 | test_the_cpu_gets_a_smaller_model_by_default | COVERED | `voice::worker_tests::the_cpu_gets_a_smaller_model_by_default` (the `cpu_model` setting; `on_cpu` and `compute_type=int8` are not in the binary, see test_cpu_config below) |
 | test_a_model_named_in_config_is_kept_on_the_cpu | COVERED | `voice::worker_tests::a_model_named_in_config_is_kept_on_the_cpu` |
 | test_an_input_device_index_survives | COVERED | `voice::worker_tests::an_input_device_index_survives` |
-| test_empty_input_returns_empty_without_loading | PORT | Written, NOT RUN: `rust/voice` `tests::empty_and_silent_input_return_empty_without_loading`. The worker crate is its own workspace; whisper-rs needs cmake and a C++/GPU toolchain, none on this machine. |
-| test_silence_returns_empty_without_loading | PORT | Same test as above (zeros and 0.001 faint input, the binary's threshold is 0.005); written, not run. |
-| test_audible_input_does_reach_the_model | PORT | Written, NOT RUN: `rust/voice` `tests::audible_input_does_reach_the_model` (a model that cannot load makes the call fail with `no model file`). |
+| test_empty_input_returns_empty_without_loading | PORT | RUN 2026-11-15, passing (rustoiceuild-voice.cmd test --release, with VS CMake and libclang). Was written, not run: `rust/voice` `tests::empty_and_silent_input_return_empty_without_loading`. The worker crate is its own workspace; whisper-rs needs cmake and a C++/GPU toolchain, none on this machine. |
+| test_silence_returns_empty_without_loading | PORT | Same test as above (zeros and 0.001 faint input, the binary's threshold is 0.005); RUN 2026-11-15, passing. |
+| test_audible_input_does_reach_the_model | PORT | RUN 2026-11-15, passing (rustoiceuild-voice.cmd test --release, with VS CMake and libclang). Was written, not run: `rust/voice` `tests::audible_input_does_reach_the_model` (a model that cannot load makes the call fail with `no model file`). |
 | test_a_fresh_recorder_is_not_recording | MOOT | Python `voice.Recorder` (sounddevice microphone capture) is not in the binary: the window records audio and posts bytes, which `Worker::transcribe_bytes` sends on. |
 | test_stopping_without_starting_yields_nothing | MOOT | Same: `Recorder` is Python-only. |
 | test_settings_merge_over_defaults | MOOT | Same: `Recorder` is Python-only (the settings merge itself is `settings_from`, covered above). |
 | test_no_gpu_falls_back_to_the_cpu_model | PORT | BLOCKED: the fallback is `Transcriber::load` in rust/voice, which builds a real whisper-rs `WhisperContext`; there is no seam to fake it without editing non-test code. |
-| test_a_cpu_config_starts_on_the_cpu_model | DIFFERS | Python: `device: cpu` loads `cpu_model` (small) at int8. Binary (rust/voice `Transcriber::load`, the `Err(_)` arm for `!want_gpu`): loads `self.model` (the configured/default model, e.g. large-v3-turbo) on the CPU; only a GPU failure falls to `cpu_model`. Found by reading; no test (needs whisper). |
+| test_a_cpu_config_starts_on_the_cpu_model | DIFFERS | FIXED 2026-11-15: voice_plan.rs (shared with rust/voice) `a_cpu_config_starts_on_the_cpu_model`. Was: Python: `device: cpu` loads `cpu_model` (small) at int8. Binary (rust/voice `Transcriber::load`, the `Err(_)` arm for `!want_gpu`): loads `self.model` (the configured/default model, e.g. large-v3-turbo) on the CPU; only a GPU failure falls to `cpu_model`. Found by reading; no test (needs whisper). |
 | test_audio_goes_through_and_text_comes_back | COVERED | `voice::worker_tests::audio_goes_through_and_text_comes_back` (against a stand-in child compiled from std-only source; Python used a thread over pipes) |
 | test_the_worker_learns_where_the_model_runs | COVERED | `voice::worker_tests::the_worker_learns_where_the_model_runs` |
 | test_nothing_recorded_never_starts_a_process | COVERED | `voice::worker_tests::nothing_recorded_never_starts_a_process` |

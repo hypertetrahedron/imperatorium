@@ -926,9 +926,10 @@ recovery after a force-kill: about 20 seconds.
 
 ### Installed from the Python version
 
-An install from before the Rust binary has hooks and tasks pointing at Python
-scripts that no longer exist. Run `imperatorium install` once from the new
-binary, and `imperatorium remote add HOST` again for each host. Environment
+This version is a clean break with the Python one: it does not migrate or
+remove anything the Python version installed. Uninstall that first, with its own
+`setup_machine.py uninstall` (from that checkout), then run `imperatorium install`
+and `imperatorium remote add HOST` again for each host. Environment
 variables are `IMPERATORIUM_*`; the older `CCONTROL_*` names are not read.
 
 ## Deliberately not built

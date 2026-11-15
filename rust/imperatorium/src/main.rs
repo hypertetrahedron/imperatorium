@@ -76,6 +76,9 @@ mod ui;
 mod update;
 mod usage;
 mod voice;
+// The voice worker's model choice: compiled into rust/voice, tested here.
+#[cfg(test)]
+mod voice_plan;
 mod winfocus;
 
 use std::io::{BufRead, Write};

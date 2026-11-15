@@ -25,6 +25,9 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadParams,
 };
 
+#[path = "../../imperatorium/src/voice_plan.rs"]
+mod voice_plan;
+
 const SAMPLE_RATE: u32 = 16_000;
 const VAD_MODEL: &str = "ggml-silero-v6.2.0.bin";
 
@@ -82,36 +85,37 @@ impl Transcriber {
     }
 
     /// Transcriber.load: the model on its device, or the CPU model on the
-    /// CPU when the GPU cannot have it.
+    /// CPU - for `device: cpu`, or when the GPU cannot have it (voice_plan).
     fn load(&mut self) -> Result<(), String> {
         if self.ctx.is_some() {
             return Ok(());
         }
-        let want_gpu = self.device != "cpu";
-        let first = if want_gpu && gpu_present() {
-            Self::build(&self.model, true)
-        } else {
-            Err("no GPU device".into())
-        };
-        match first {
-            Ok(c) => {
-                self.ctx = Some(c);
-                // The settings' "cuda" only means "a GPU"; report the one
-                // this build really runs on (nothing reads more than "cpu").
-                self.device = gpu_backend().into();
-            }
-            Err(e) if want_gpu => {
-                eprintln!("imperatorium-voice: {e}; falling back to the CPU");
-                let cpu = s(&self.settings, "cpu_model", "small").to_string();
-                self.ctx = Some(Self::build(&cpu, false)?);
-                self.device = "cpu".into();
-                self.model = cpu;
-            }
-            Err(_) => {
-                self.ctx = Some(Self::build(&self.model, false)?);
+        let gpu = gpu_present();
+        if self.device != "cpu" && !gpu {
+            eprintln!("imperatorium-voice: no GPU device; on the CPU");
+        }
+        let cpu_model = s(&self.settings, "cpu_model", "small").to_string();
+        let plan = voice_plan::loads(&self.device, &self.model, &cpu_model, gpu);
+        let mut last = String::new();
+        for (i, (model, on_gpu)) in plan.iter().enumerate() {
+            match Self::build(model, *on_gpu) {
+                Ok(c) => {
+                    self.ctx = Some(c);
+                    // The settings' "cuda" only means "a GPU"; report the one
+                    // this build really runs on (nothing reads more than "cpu").
+                    self.device = if *on_gpu { gpu_backend().into() } else { "cpu".into() };
+                    self.model = model.clone();
+                    return Ok(());
+                }
+                Err(e) => {
+                    if i + 1 < plan.len() {
+                        eprintln!("imperatorium-voice: {e}; falling back to the CPU");
+                    }
+                    last = e;
+                }
             }
         }
-        Ok(())
+        Err(last)
     }
 
     fn transcribe(&mut self, audio: &[f32], hint: Option<&str>) -> Result<String, String> {
