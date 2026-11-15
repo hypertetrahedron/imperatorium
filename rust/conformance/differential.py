@@ -12,14 +12,20 @@ A difference is reported as one of:
   REASON   same verdict, different reason or tier
 
     python rust/conformance/differential.py [--show N]
+    python rust/conformance/differential.py --record DIR
+
+--record writes every case with Python's answer (golden.py;
+tests/differential.rs replays them and classifies as here).
 """
 import ast
+import json
 import itertools
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, RustDecider  # noqa: E402
+from golden import Places, record_dir  # noqa: E402
 
 os.chdir(REPO)
 from imperatorium import policy  # noqa: E402
@@ -115,20 +121,9 @@ def cases():
         for pol in (on, on_edits):
             yield {"tool_name": tool, "tool_input": {"file_path": path}, "cwd": cwd}, pol
     # Shapes: other path keys, lists, edits, malformed inputs.
-    shapes = [
-        {}, {"path": "src"}, {"notebook_path": "a.ipynb"}, {"filePath": "x"},
-        {"file_paths": ["a", "b"]}, {"file_paths": "ab"}, {"file_paths": 5},
-        {"file_paths": {"a": 1}}, {"file_paths": ["a", None, ""]},
-        {"edits": [{"file_path": "a"}, {"file_path": "../b"}]}, {"edits": "x"},
-        {"edits": 3}, {"edits": [1, "x", {"old": "y"}]},
-        {"file_path": "policy.json", "file_paths": 5}, {"file_path": "ok", "edits": 5},
-        {"command": ["ls"]}, {"command": 5}, {"command": None}, {"command": "policy.json"},
-        {"command": {"policy.json": 1}}, {"pattern": "TODO"},
-    ]
-    for shape, tool, pol in itertools.product(shapes, TOOLS, POLICIES):
+    for shape, tool, pol in itertools.product(SHAPES, TOOLS, POLICIES):
         yield {"tool_name": tool, "tool_input": shape, "cwd": CWD}, pol
-    for bad in ({}, {"tool_name": None}, {"tool_name": "Bash", "tool_input": "no"},
-                {"tool_name": "Read", "tool_input": None}, [], "x", 5, None):
+    for bad in BAD:
         for pol in POLICIES:
             yield bad, pol
 
@@ -156,7 +151,57 @@ def reason_key(reason):
     return reason.split(":")[0]
 
 
+BAD = [{}, {"tool_name": None}, {"tool_name": "Bash", "tool_input": "no"},
+       {"tool_name": "Read", "tool_input": None}, [], "x", 5, None]
+SHAPES = [
+    {}, {"path": "src"}, {"notebook_path": "a.ipynb"}, {"filePath": "x"},
+    {"file_paths": ["a", "b"]}, {"file_paths": "ab"}, {"file_paths": 5},
+    {"file_paths": {"a": 1}}, {"file_paths": ["a", None, ""]},
+    {"edits": [{"file_path": "a"}, {"file_path": "../b"}]}, {"edits": "x"},
+    {"edits": 3}, {"edits": [1, "x", {"old": "y"}]},
+    {"file_path": "policy.json", "file_paths": 5}, {"file_path": "ok", "edits": 5},
+    {"command": ["ls"]}, {"command": 5}, {"command": None}, {"command": "policy.json"},
+    {"command": {"policy.json": 1}}, {"pattern": "TODO"},
+]
+
+
+def record(folder):
+    """The corpus as the lists it is crossed from (spec.json: the Rust test
+    rebuilds the cases in cases()' order, checked against `samples`) and
+    Python's answers as indexes into a table of the distinct ones."""
+    from golden import write_json
+    places = Places()
+    table, index, samples = {}, [], []
+    for i, (request, pol) in enumerate(cases()):
+        want = list(policy.decide(request, pol))
+        key = json.dumps(want)
+        if key not in table:
+            table[key] = len(table)
+        # Twice the answer's index, plus one when the documented, stricter
+        # choices in policy.rs would explain a difference (explained()).
+        index.append(table[key] * 2 + (1 if explained(request, pol) else 0))
+        if i % 997 == 0:
+            samples.append({"i": i, "request": request, "policy": pol})
+    on = {"enabled": True, "defaults": {}}
+    spec = {"strings": harvested() + HOSTILE, "paths": PATHS, "cwds": CWDS, "policies": POLICIES,
+            "tools": TOOLS, "shapes": SHAPES, "bad": BAD, "cwd": CWD, "on": on,
+            "on_edits": {"enabled": True, "defaults": {"auto_edit": True}}}
+    write_json(os.path.join(folder, "spec.json"), places(spec))
+    write_json(os.path.join(folder, "samples.json"), places(samples))
+    answers = [json.loads(k) for k in table]
+    write_json(os.path.join(folder, "answers.json"), {"table": places(answers), "count": len(index)})
+    # One line of indexes, so a diff of a re-capture stays readable.
+    with open(os.path.join(folder, "index.txt"), "w", encoding="utf-8", newline="\n") as fh:
+        for start in range(0, len(index), 64):
+            fh.write(" ".join(map(str, index[start:start + 64])) + "\n")
+    print("recorded %d cases, %d distinct answers" % (len(index), len(table)))
+    return 0
+
+
 def main():
+    folder = record_dir()
+    if folder:
+        return record(folder)
     rust = RustDecider()
     groups = {}
     total = 0

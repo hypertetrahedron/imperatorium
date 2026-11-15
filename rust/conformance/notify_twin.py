@@ -12,6 +12,12 @@ idle check a minute after Stop; that a prompt answered within the delay and
 a channel switched off push nothing; and /api/notify's counters.
 
     python rust/conformance/notify_twin.py      (about 75 s: the idle check)
+    python rust/conformance/notify_twin.py --record DIR
+
+--record (golden.py): both twins are Python (start() runs the "rs" side
+from a copy of the package too, for every twin that uses it); the steps,
+the pushes and the events go to DIR/steps.jsonl. The 5-hour reset time is
+local time, so it is recorded as <local HH:MM of 4102444800>.
 """
 import http.server
 import json
@@ -28,6 +34,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary, require_free, stop_tree  # noqa: E402
 from inbox_twin import record  # noqa: E402
 from twin import env, get, post  # noqa: E402
+import golden  # noqa: E402
+from golden import python_dispatcher, rec, recording  # noqa: E402
 
 PY_PORT, RS_PORT, FAKE_PORT = 8817, 8818, 8819
 ASKS = "a1a1a1a1-1111-4111-8111-111111111111"     # permission prompt, left waiting
@@ -65,6 +73,11 @@ def start(root, extra_config=None, extra_env=None):
     shutil.copytree(os.path.join(REPO, "imperatorium"), os.path.join(py_home, "imperatorium"),
                     ignore=shutil.ignore_patterns("__pycache__"))
     os.makedirs(rs_home)
+    if recording():
+        # Recording: the "rs" twin is Python as well, from a copy of its own.
+        shutil.copytree(os.path.join(REPO, "imperatorium"), os.path.join(rs_home, "imperatorium"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        golden.REC.file("config.json", dict(config("twin-<side>"), **(extra_config or {})))
     for home, topic in ((py_home, "twin-py"), (rs_home, "twin-rs")):
         with open(os.path.join(home, "config.json"), "w", encoding="utf-8") as fh:
             json.dump(dict(config(topic), **(extra_config or {})), fh)
@@ -78,6 +91,8 @@ def start(root, extra_config=None, extra_env=None):
         if side == "py":
             cmd, cwd = [sys.executable, "-m", "imperatorium.dispatcher", "--port", str(port),
                         "--state", state], py_home
+        elif recording():
+            cmd, cwd = python_dispatcher(port, state), rs_home
         else:
             cmd, cwd = [binary(), "serve", "--port", str(port), "--home", rs_home, "--state", state], REPO
         procs.append(subprocess.Popen(cmd, cwd=cwd, env=e,
@@ -101,6 +116,7 @@ def hook(event, sid, root, **extra):
 
 def both(path, body):
     got = [post(port, path, body) for port in (PY_PORT, RS_PORT)]
+    rec("post", path=path, body=body, want=list(got[0]))
     return got
 
 
@@ -110,6 +126,7 @@ def pushes(topic):
 
 def main():
     root = tempfile.mkdtemp(prefix="imp-notify-twin-")
+    golden.start_recording(tmp=root)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", FAKE_PORT), Fake)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     for sid, name in ((ASKS, "twin-asks"), (ANSWERED, "twin-answered"), (FAILS, "twin-fails"),
@@ -126,22 +143,27 @@ def main():
                                           message="Claude needs your permission to use Bash")))
         answers.append(both("/hook", hook("Notification", ANSWERED, root, notification_type="permission_prompt")))
         time.sleep(0.3)
+        rec("sleep", seconds=0.3)
         answers.append(both("/hook", hook("Stop", ANSWERED, root)))  # answered: Stop clears it
         answers.append(both("/hook", hook("StopFailure", FAILS, root, error="rate_limit")))
         answers.append(both("/hook", {"hook_event_name": "imperatorium_statusline", "session_id": ASKS,
                                       "rate_limits": {"five_hour": {"used_percentage": 91,
                                                                     "resets_at": 4102444800}}}))
         time.sleep(3)
+        rec("sleep", seconds=3)
         # Switched off from the window: nothing more is pushed.
         answers.append(both("/api/notify", {"channel": "ntfy", "enabled": False}))
         answers.append(both("/hook", hook("Notification", LATER, root, notification_type="permission_prompt")))
         time.sleep(3)
+        rec("sleep", seconds=3)
         answers.append(both("/api/notify", {"channel": "ntfy", "enabled": True}))
         # The idle check is due 60 s after its Stop; its push follows once
         # the still-waiting check has looked again (claude agents: seconds).
         while time.time() < stop_at + 100 and min(len(pushes("twin-py")), len(pushes("twin-rs"))) < 5:
             time.sleep(0.5)
         print("idle push after %.1f s" % (time.time() - stop_at))
+        rec("idle push", note="the idle check's push arrives about 60 s after the first Stop;"
+            " wait (up to 100 s) for 5 pushes from the twin")
         time.sleep(2)
         for a, b in answers:
             if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True) and "enabled" not in json.dumps(a):
@@ -150,6 +172,12 @@ def main():
         if statuses[0] != statuses[1]:
             failures.append(("/api/notify", "%r vs %r" % tuple(statuses)))
         py, rs = pushes("twin-py"), pushes("twin-rs")
+        rec("get", path="/api/notify", want=statuses[0])
+        local = time.strftime("%H:%M", time.localtime(4102444800))
+        rec("pushes", note="sorted; compare as a multiset",
+            want=sorted((json.loads(json.dumps(p).replace("resets " + local,
+                                                          "resets <local HH:MM of 4102444800>"))
+                         for p in py), key=json.dumps))
         print("pushes: %d from Python, %d from the binary" % (len(py), len(rs)))
         for p in py:
             print("   %s | %s | %s" % (p["Title"], p["Tags"], p["body"]))
@@ -169,6 +197,7 @@ def main():
                 st = json.load(fh)
             states.append(sorted((e.get("kind"), e.get("session_id"), e.get("summary"))
                                  for e in st.get("events") or []))
+        rec("events", note="(kind, session_id, summary), sorted", want=states[0])
         if states[0] != states[1]:
             failures.append(("events", "%r\n  vs %r" % tuple(states)))
         print("events: %s" % sorted({k for k, _, _ in states[0]}))
@@ -186,6 +215,8 @@ def main():
     for what, diff in failures:
         print("DIFF %s\n     %s" % (what, diff))
     print("notify_twin: %s" % ("identical" if not failures else "%d differences" % len(failures)))
+    if golden.REC is not None:
+        golden.REC.save()
     return 1 if failures else 0
 
 

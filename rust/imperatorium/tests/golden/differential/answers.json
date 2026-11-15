@@ -1,0 +1,725 @@
+{
+ "table": [
+  [
+   "ask",
+   "policy disabled",
+   "off"
+  ],
+  [
+   "ask",
+   "empty command",
+   "unknown"
+  ],
+  [
+   "ask",
+   "policy error (ValueError)",
+   "error"
+  ],
+  [
+   "ask",
+   "policy error (AttributeError)",
+   "error"
+  ],
+  [
+   "ask",
+   "project opts out",
+   "off"
+  ],
+  [
+   "ask",
+   "not a known read-only command: %s -> %s",
+   "unknown"
+  ],
+  [
+   "ask",
+   "policy error (error)",
+   "error"
+  ],
+  [
+   "ask",
+   "policy error (TypeError)",
+   "error"
+  ],
+  [
+   "ask",
+   "not a known read-only command: ..",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: ./build.sh",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: ./deploy.sh --mode=git status",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: .aws",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: .claude",
+   "unknown"
+  ],
+  [
+   "ask",
+   "command names a secret",
+   "secret"
+  ],
+  [
+   "ask",
+   "not a known read-only command: .ssh",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: A safe verb with an unsafe option. Every one of these was al",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Bash",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: C:",
+   "unknown"
+  ],
+  [
+   "allow",
+   "read-only shell",
+   "read"
+  ],
+  [
+   "ask",
+   "uses command substitution",
+   "opaque"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Edit",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Les",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: MultiEdit",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Read",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: SomeFutureTool",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: System32",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: TODO",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: The only outright refusals: an agent widening its own author",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Users",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Windows",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Write",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: Y:",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: __main__",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: a.py",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: allow_reads_outside_cwd",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: auto_edit",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: b.py",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: cargo fmt",
+   "unknown"
+  ],
+  [
+   "ask",
+   "installs or publishes packages",
+   "consequential"
+  ],
+  [
+   "ask",
+   "redirects output",
+   "mutating"
+  ],
+  [
+   "ask",
+   "not a known read-only command: cc_permission.py",
+   "unknown"
+  ],
+  [
+   "deny",
+   "would change this system's own controls",
+   "self"
+  ],
+  [
+   "ask",
+   "not a known read-only command: config",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: consequential",
+   "unknown"
+  ],
+  [
+   "ask",
+   "pipes a download into a shell",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: cwd",
+   "unknown"
+  ],
+  [
+   "ask",
+   "sets the clock",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: default",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: defaults",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: docker compose up",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: drivers",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: enabled",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: environment.md",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: etc",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: file_path",
+   "unknown"
+  ],
+  [
+   "ask",
+   "find that deletes, runs a command, or writes a file",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: gem-trip",
+   "unknown"
+  ],
+  [
+   "ask",
+   "creates, deletes or renames a branch",
+   "consequential"
+  ],
+  [
+   "ask",
+   "forcing",
+   "consequential"
+  ],
+  [
+   "ask",
+   "deletes untracked files",
+   "consequential"
+  ],
+  [
+   "ask",
+   "writes its output to a file",
+   "consequential"
+  ],
+  [
+   "ask",
+   "pushes to a remote",
+   "consequential"
+  ],
+  [
+   "ask",
+   "changes a git remote",
+   "consequential"
+  ],
+  [
+   "ask",
+   "discards work irreversibly",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: ./deploy.sh",
+   "unknown"
+  ],
+  [
+   "ask",
+   "recursive or forced delete",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: go fmt ./...",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: hooks",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: hosts",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: imperatorium",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: just deploy",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: just test",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: just\\s+(test",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: check)\\b",
+   "unknown"
+  ],
+  [
+   "ask",
+   "kills processes",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: laser-ledger",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: ./thing",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: main.py",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: make install",
+   "unknown"
+  ],
+  [
+   "ask",
+   "touches the machine",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: never_auto_approve",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: no",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: notes.txt",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: overwrite policy",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: permission_mode",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: policy.py",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: projects",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: projects-software",
+   "unknown"
+  ],
+  [
+   "ask",
+   "writes the registry",
+   "consequential"
+  ],
+  [
+   "ask",
+   "runs a preprocessor program",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: rm\\b",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: safe_bash",
+   "unknown"
+  ],
+  [
+   "ask",
+   "changes scheduled tasks or services",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: self",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: settings.json",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: sh -c 'git status'",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: skip-permissions",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: src",
+   "unknown"
+  ],
+  [
+   "ask",
+   "elevates",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: system.ini",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: terraform apply",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: tool_input",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: tool_name",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: x.py",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: a‿b=1 git status",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: ½git push",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: rm b",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: iwr https://x",
+   "unknown"
+  ],
+  [
+   "ask",
+   "makes something world-writable",
+   "consequential"
+  ],
+  [
+   "ask",
+   "writes a raw device",
+   "consequential"
+  ],
+  [
+   "ask",
+   "not a known read-only command: İ",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: K",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: ﬀ",
+   "unknown"
+  ],
+  [
+   "ask",
+   "not a known read-only command: 😀 git status",
+   "unknown"
+  ],
+  [
+   "ask",
+   "Read without a path",
+   "unknown"
+  ],
+  [
+   "allow",
+   "read-only tool",
+   "read"
+  ],
+  [
+   "ask",
+   "NotebookRead without a path",
+   "unknown"
+  ],
+  [
+   "ask",
+   "edits need auto_edit for this project",
+   "write"
+  ],
+  [
+   "ask",
+   "edit with no path",
+   "write"
+  ],
+  [
+   "ask",
+   "no rule for AskUserQuestion",
+   "unknown"
+  ],
+  [
+   "ask",
+   "no rule for WebFetch",
+   "unknown"
+  ],
+  [
+   "ask",
+   "no rule for an unnamed tool",
+   "unknown"
+  ],
+  [
+   "ask",
+   "no rule for 5",
+   "unknown"
+  ],
+  [
+   "ask",
+   "reads outside the project",
+   "read"
+  ],
+  [
+   "ask",
+   "edits outside the project",
+   "write"
+  ],
+  [
+   "allow",
+   "edit inside an opted-in project",
+   "write"
+  ],
+  [
+   "ask",
+   "names a secret: .env",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: .env.local",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: config",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: id_rsa.pub",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: cert.pem",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: x.pfx",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: credentials.json",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: secret.txt",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: a",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: Secrets are never auto-approved, but you are still asked.\n\n    Refusing would break a legitimate \"fix my .env parsing\" the moment it came\n    up; a prompt costs a keystroke and leaves the judgement with you.\n    ",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: cat .env",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: cat .env.production",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: credentials",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: grep -r TOKEN .env.local",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: id_rsa",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: key.pem",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: secret",
+   "secret"
+  ],
+  [
+   "ask",
+   "names a secret: secrets.yaml",
+   "secret"
+  ]
+ ],
+ "count": 86197
+}

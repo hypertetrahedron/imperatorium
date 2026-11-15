@@ -14,6 +14,12 @@ A session written to while it is being compared is retried once, then
 reported as LIVE rather than as a difference.
 
     python rust/conformance/sessions_compare.py [--limit N]
+
+--record DIR [--corpus ROOT [--in-place]] [--now T]: Python only, over a
+corpus (default the synthetic one in tests/fixtures/corpus; ROOT holds
+projects/) with its mtimes pinned, written as goldens (golden.py,
+tests/corpus.rs). NEVER record the real ~/.claude into the repository: the
+full check copies it outside (see tests/golden/README.md).
 """
 import json
 import os
@@ -23,6 +29,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary  # noqa: E402
+from golden import corpus_setup, record_dir, write_json, write_jsonl  # noqa: E402
 
 os.chdir(REPO)
 import claude_agent_sdk as sdk  # noqa: E402
@@ -115,7 +122,33 @@ def compare_session(sid):
     return out, len(rs_chain)
 
 
+def attempt(fn, *args):
+    try:
+        return fn(*args)
+    except Exception as exc:  # recorded: the binary's answer is not compared
+        return {"raises": type(exc).__name__}
+
+
+def record(folder):
+    _, places, _ = corpus_setup()
+    write_json(os.path.join(folder, "list.json"),
+               places([info_dict(i) for i in sdk.list_sessions()]))
+    rows = []
+    for sid, _path in session_files():
+        rows.append(places({
+            "id": sid,
+            "info": attempt(lambda: info_dict(sdk.get_session_info(sid))),
+            "chain": attempt(sdk_chain, sid),
+            "items": attempt(lambda: items(conversation._messages(sdk, sid, None)))}))
+    write_jsonl(os.path.join(folder, "sessions.jsonl"), rows)
+    print("recorded %d sessions" % len(rows))
+    return 0
+
+
 def main():
+    folder = record_dir()
+    if folder:
+        return record(folder)
     limit = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else None
     failures, live, total, entries = [], [], 0, 0
     t0 = time.time()

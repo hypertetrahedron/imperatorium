@@ -12,6 +12,12 @@ Terminal's arguments, `claude --bg`'s, and that no session variable leaked
 into them), what was typed into each console, and the events.
 
     python rust/conformance/session_twin.py      (Windows)
+    python rust/conformance/session_twin.py --record DIR
+
+--record (golden.py): both twins are Python; each request (the py side's
+body, session ids as <role>), the Python side's answer as this script
+compares it, what was launched or typed, and the events go to
+DIR/steps.jsonl.
 """
 import json
 import os
@@ -30,6 +36,8 @@ from common import RUST, stand_in_path, stop_tree, stop_under  # noqa: E402
 from inbox_twin import record, window_token  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
+import golden  # noqa: E402
+
 
 FAKE = os.path.join(RUST, "target", "release", "fakecli.exe")
 GONE = "c0c0c0c0-0000-4000-8000-000000000000"   # never ran here
@@ -70,6 +78,7 @@ def main():
     if not os.path.exists(FAKE):
         raise SystemExit("build it first: cargo build --release (fakecli)")
     root = tempfile.mkdtemp(prefix="imp-session-twin-")
+    golden.start_recording(tmp=root)
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir)
     for name in ("claude.exe", "wt.exe"):
@@ -146,6 +155,8 @@ def main():
                 code, answer = post(port, path, body(side))
                 got[side] = neutral(json.dumps([code, answer], sort_keys=True), ids)
             steps.append((label, json.loads(got["py"])[1]))
+            golden.rec("post", label=label, path=path, body=json.loads(neutral(json.dumps(body("py")), ids)),
+                want=json.loads(got["py"]))
             if got["py"] != got["rs"]:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
         # Typing: Send As Typed and slash commands, into each twin's own
@@ -204,6 +215,8 @@ def main():
                 answer = dict(answer, queued="<item>")
             steps.append((label, answer))
             a, b = (re.sub(r'"(id|at)": [^,}]+', r'"\1": 0', got[k]) for k in ("py", "rs"))
+            golden.rec("typing", label=label, note="see typing_cases; ids and clocks as 0",
+                want=json.loads(a))
             if a != b:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
 
@@ -237,6 +250,8 @@ def main():
             for side, port in (("py", PY_PORT), ("rs", RS_PORT)):
                 got[side] = neutral(json.dumps(list(post(port, "/api/dispatch", body(side))), sort_keys=True), ids)
             answer = json.loads(got["py"])[1]
+            golden.rec("post", label=label, path="/api/dispatch",
+                body=json.loads(neutral(json.dumps(body("py")), ids)), want=json.loads(got["py"]))
             steps.append((label, {k: answer.get(k) for k in ("ok", "error", "action", "confidence", "command",
                                                              "bg_id", "needs_confirmation") if k in answer}))
             if got["py"] != got["rs"]:
@@ -256,6 +271,7 @@ def main():
             got = {side: json.dumps(list(post(port, "/api/focus", body)), sort_keys=True)
                    for side, port in (("py", PY_PORT), ("rs", RS_PORT))}
             steps.append((label, json.loads(got["py"])[1]))
+            golden.rec("post", label=label, path="/api/focus", body=body, want=json.loads(got["py"]))
             if got["py"] != got["rs"]:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
 
@@ -273,6 +289,7 @@ def main():
         print("launched/typed (python): %d entries" % len(json.loads(launched["py"])))
         for e in json.loads(launched["py"]):
             print("    %s" % e)
+        golden.rec("launched", note="fakecli's log (wt.exe as its basename)", want=json.loads(launched["py"]))
         if launched["py"] != launched["rs"]:
             failures.append(("launched", "%s\n  vs %s" % (launched["py"], launched["rs"])))
         leaked = [e for side in SIDES for e in read_log(logs[side]) if e.get("session_env")]
@@ -283,6 +300,7 @@ def main():
             with open(os.path.join(root, side, "state.json"), encoding="utf-8") as fh:
                 events.append(neutral(json.dumps([(e.get("kind"), e.get("session_id"), e.get("summary"))
                                                   for e in json.load(fh).get("events") or []]), ids))
+        golden.rec("events", note="(kind, session_id, summary)", want=json.loads(events[0]))
         if events[0] != events[1]:
             failures.append(("events", "%s\n  vs %s" % tuple(events)))
         closed = [c for c in consoles if roles[c.pid] in ("leaves", "stubborn", "replaced")]
@@ -311,6 +329,8 @@ def main():
         shutil.rmtree(root, ignore_errors=True)
     for what, diff in failures:
         print("DIFF %s\n     %s" % (what, diff))
+    if golden.REC is not None:
+        golden.REC.save()
     print("session_twin: %d actions on each; %s" % (
         len(steps), "identical" if not failures else "%d differences" % len(failures)))
     return 1 if failures else 0

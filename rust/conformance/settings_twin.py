@@ -8,6 +8,12 @@ usage thresholds, the notification switches) or leaves waiting for a
 restart.
 
     python rust/conformance/settings_twin.py
+    python rust/conformance/settings_twin.py --record DIR
+
+--record (golden.py): both twins are Python; every save, file and GET with
+the Python side's value goes to DIR/steps.jsonl, compared as this script
+compares (same_text: the twin's own home is <twin-home>, its ntfy topic
+twin-<side>).
 """
 import json
 import os
@@ -23,6 +29,13 @@ from inbox_twin import post_window, window_token  # noqa: E402
 from common import stop_tree  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import get, post  # noqa: E402
+import golden  # noqa: E402
+from golden import rec  # noqa: E402
+
+
+def recorded(text):
+    """same_text()'s JSON, as a value, its home placeholder renamed."""
+    return json.loads(text.replace("<home>", "<twin-home>"))
 
 
 def same_text(a, root):
@@ -36,6 +49,7 @@ def same_text(a, root):
 
 def main():
     root = tempfile.mkdtemp(prefix="imp-settings-twin-")
+    golden.start_recording(tmp=root)
     procs = start(root)
     failures, steps = [], 0
     try:
@@ -50,6 +64,7 @@ def main():
                     got.append(post_window(port, "/api/settings", body, tokens[port]))
                 else:
                     got.append(post(port, "/api/settings", body))
+            rec("save", label=label, body=body, window=window, want=recorded(same_text(got[0], root)))
             if same_text(got[0], root) != same_text(got[1], root):
                 failures.append(("POST %s" % (label or body), "%s\n  vs %s" % (
                     same_text(got[0], root)[:600], same_text(got[1], root)[:600])))
@@ -64,16 +79,21 @@ def main():
                             texts.append(fh.read().replace(("twin-" + side).encode(), b"twin-<side>"))
                     except OSError:
                         texts.append(None)
+                rec("file", name=name, after=label,
+                    want=None if texts[0] is None else texts[0].decode("utf-8"),
+                    note="compared byte for byte")
                 if texts[0] != texts[1]:
                     failures.append(("%s after %s" % (name, label), "%r\n  vs %r" % tuple(texts)))
 
         def gets(label):
             for path in ("/api/settings", "/api/quick", "/api/notify"):
                 a, b = get(PY_PORT, path), get(RS_PORT, path)
+                rec("get", path=path, after=label, want=recorded(same_text(a, root)))
                 if same_text(a, root) != same_text(b, root):
                     failures.append(("GET %s after %s" % (path, label), "%s\n  vs %s" % (
                         same_text(a, root)[:400], same_text(b, root)[:400])))
             a, b = get(PY_PORT, "/api/usage")["thresholds"], get(RS_PORT, "/api/usage")["thresholds"]
+            rec("get", path="/api/usage", key="thresholds", after=label, want=a)
             if a != b:
                 failures.append(("thresholds after %s" % label, "%r vs %r" % (a, b)))
             for port, name in ((PY_PORT, "py"), (RS_PORT, "rs")):
@@ -81,6 +101,7 @@ def main():
                     look = json.loads(fh.read()).get("look")
                 if name == "py":
                     want = look
+                    rec("get", path="/api/health", key="look", after=label, want=look)
                 elif look != want:
                     failures.append(("look after %s" % label, "%r vs %r" % (want, look)))
 
@@ -126,6 +147,8 @@ def main():
         shutil.rmtree(root, ignore_errors=True)
     for what, diff in failures:
         print("DIFF %s\n     %s" % (what, diff))
+    if golden.REC is not None:
+        golden.REC.save()
     print("settings_twin: %d saves to each; %s" % (
         steps, "identical" if not failures else "%d differences" % len(failures)))
     return 1 if failures else 0

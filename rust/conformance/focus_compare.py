@@ -7,6 +7,8 @@ Raising itself (SetForegroundWindow and the AttachThreadInput borrow) is not
 run here: it would take the focus from whoever is at the keyboard.
 
     python rust/conformance/focus_compare.py
+    python rust/conformance/focus_compare.py --record DIR   (Python only, the
+        pure half: this machine's windows are not recorded; tests/focus_compare.rs)
 """
 import json
 import os
@@ -16,6 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import binary  # noqa: E402
+from golden import record_dir, write_jsonl  # noqa: E402
 from imperatorium import procs, winfocus  # noqa: E402
 
 GLYPHS = ["", "✳ ", "⠋ ", "* ", "... ", "·", "  ", "(1) ", "\U0001F600"]
@@ -44,6 +47,12 @@ def main():
         cases.append({"match": [summary, windows]})
         want.append(winfocus.match_title(summary, [tuple(w) for w in windows]))
     pure = len(cases)
+    folder = record_dir()
+    if folder:
+        write_jsonl(os.path.join(folder, "cases.jsonl"),
+                    [{"case": c, "want": w} for c, w in zip(cases, want)])
+        print("recorded %d pure cases" % pure)
+        return 0
 
     # The live, read-only half. Windows come and go and titles carry a
     # spinner, so it is compared as hwnd sets and normalised titles.

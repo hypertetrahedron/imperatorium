@@ -393,6 +393,12 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
             return 1;
         }
     };
+    // `--port 0`: the system picks a free port (the integration tests run
+    // many dispatchers side by side). Everything below, the Origin check
+    // included, uses the port actually bound, and the "listening" line
+    // below names it.
+    let port = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(port);
+    let addr = format!("{host}:{port}");
     let shared = Arc::new(Shared::new(home, state, live));
     let _ = shared.me.set(Arc::downgrade(&shared));
     if shared.store.is_some() {

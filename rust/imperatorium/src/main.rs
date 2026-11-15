@@ -149,6 +149,9 @@ fn policy_decide() -> i32 {
 /// `sessions ...`: JSON on stdout. Exit 1 with a message on stderr only
 /// when a transcript cannot be read at all.
 fn sessions_main(args: &[String]) -> i32 {
+    if args.get(1).map(String::as_str) == Some("batch") {
+        return sessions_batch();
+    }
     let id = args.get(2).map(String::as_str).unwrap_or("");
     let result = match args.get(1).map(String::as_str) {
         Some("chain") => sessions::chain_json(id),
@@ -185,6 +188,56 @@ fn sessions_main(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// `sessions batch`: the subcommands above over JSON lines, one process for
+/// a whole corpus (the integration tests). Each line is
+/// `{"op": "list"|"info"|"chain"|"items"|"stats", "id": ..., "merge": bool,
+/// "now": seconds}`; each answer is one line, the value or `{"error": ...}`.
+fn sessions_batch() -> i32 {
+    let stdin = std::io::stdin();
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    // The last session's chain, for its items (a transcript can be large;
+    // the cases come grouped by session).
+    let mut last: Option<(String, Result<Value, String>)> = None;
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let case: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+        let id = case.get("id").and_then(Value::as_str).unwrap_or("");
+        let op = case.get("op").and_then(Value::as_str);
+        let mut chain = || {
+            if last.as_ref().map(|(i, _)| i.as_str()) != Some(id) {
+                last = Some((id.to_string(), sessions::chain_json(id)));
+            }
+            last.as_ref().unwrap().1.clone()
+        };
+        let result = match op {
+            Some("list") => Ok(sessions::list_json()),
+            Some("info") => Ok(sessions::info_json(id)),
+            Some("chain") => chain(),
+            Some("items") => chain().map(|chain| {
+                let chain = chain.as_array().cloned().unwrap_or_default();
+                let merge = case.get("merge").and_then(Value::as_bool).unwrap_or(false);
+                Value::Array(conversation::to_items(&conversation::messages(&chain), 0, merge))
+            }),
+            Some("stats") => {
+                let now = case.get("now").and_then(Value::as_f64).unwrap_or(0.0);
+                Ok(sessionstat::summarise_file(id, now).unwrap_or(Value::Null))
+            }
+            _ => Err("unknown op".to_string()),
+        };
+        let value = result.unwrap_or_else(|e| json!({"error": e.to_string()}));
+        if serde_json::to_writer(&mut out, &value).is_err() || writeln!(out).is_err() {
+            return 1;
+        }
+    }
+    if out.flush().is_err() {
+        return 1;
+    }
+    0
 }
 
 fn main() {

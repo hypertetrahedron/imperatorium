@@ -7,3 +7,7 @@
 *.cmd text eol=crlf
 # The window's sources are compiled into the binary and hashed: bytes must not vary by checkout.
 imperatorium/web/* text eol=lf
+# Test data compared byte for byte: CRLF, lone CR and invalid UTF-8 in the
+# synthetic transcripts are the point; goldens are exact recorded bytes.
+rust/imperatorium/tests/fixtures/** -text
+rust/imperatorium/tests/golden/** -text

@@ -11,6 +11,11 @@ answer to every POST, the state files and the GET answers that read them
 must agree, timestamps masked.
 
     python rust/conformance/twin.py
+    python rust/conformance/twin.py --record DIR
+
+--record (golden.py): both twins are Python, each with an empty
+CLAUDE_CONFIG_DIR of its own (so no real session is read or recorded), and
+every step with the Python side's answer is written to DIR/steps.jsonl.
 """
 import json
 import os
@@ -25,6 +30,8 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary, require_free, stop_tree  # noqa: E402
 from sessions_compare import first_difference  # noqa: E402
+import golden  # noqa: E402
+from golden import python_dispatcher, rec, recording  # noqa: E402
 
 PY_PORT, RS_PORT = 8813, 8814
 A = "11111111-1111-4111-8111-111111111111"
@@ -42,15 +49,18 @@ def env():
 
 def start(state_dir):
     require_free(PY_PORT, RS_PORT)
+    # Recording: no real session may be read (or end up in a golden).
+    isolated = {"CLAUDE_CONFIG_DIR": os.path.join(state_dir, "claude")} if recording() else {}
     py = subprocess.Popen(
         [sys.executable, "-m", "imperatorium.dispatcher", "--port", str(PY_PORT),
          "--state", os.path.join(state_dir, "py", "state.json")],
-        cwd=REPO, env=dict(env(), LOCALAPPDATA=os.path.join(state_dir, "py-local")),
+        cwd=REPO, env=dict(env(), LOCALAPPDATA=os.path.join(state_dir, "py-local"), **isolated),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rs_state = os.path.join(state_dir, "rs", "state.json")
     rs = subprocess.Popen(
-        [binary(), "serve", "--port", str(RS_PORT), "--home", REPO,
-         "--state", os.path.join(state_dir, "rs", "state.json")],
-        cwd=REPO, env=dict(env(), LOCALAPPDATA=os.path.join(state_dir, "rs-local")),
+        python_dispatcher(RS_PORT, rs_state) if recording() else
+        [binary(), "serve", "--port", str(RS_PORT), "--home", REPO, "--state", rs_state],
+        cwd=REPO, env=dict(env(), LOCALAPPDATA=os.path.join(state_dir, "rs-local"), **isolated),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for port in (PY_PORT, RS_PORT):
         for _ in range(100):
@@ -159,11 +169,13 @@ REFUSED = [
 
 def main():
     root = tempfile.mkdtemp(prefix="imp-twin-")
+    golden.start_recording(tmp=root)
     py, rs = start(root)
     failures = []
     try:
         for i, body in enumerate(SCRIPT):
             a, b = post(PY_PORT, "/hook", body), post(RS_PORT, "/hook", body)
+            rec("hook", body=body, want=list(a))
             if a != b:
                 failures.append(("POST #%d %s" % (i, body.get("hook_event_name")), "%r vs %r" % (a, b)))
         for path, body, ctype, origin, raw in REFUSED:
@@ -171,6 +183,8 @@ def main():
             for port in (PY_PORT, RS_PORT):
                 o = origin % port if origin and "%d" in origin else origin
                 outs.append(post(port, path, body, ctype, o, raw))
+            rec("refused", path=path, body=body, ctype=ctype, origin=origin,
+                raw=raw.decode("latin-1") if raw is not None else None, want=list(outs[0]))
             if outs[0] != outs[1]:
                 failures.append(("refused %s %r" % (ctype, raw or body), "%r vs %r" % tuple(outs)))
         # The routes that change only the dispatcher's own state. A real
@@ -198,10 +212,12 @@ def main():
             api.append(("/api/dismiss", {"session_id": finished}))
         for path, body in api:
             a, b = post(PY_PORT, path, body), post(RS_PORT, path, body)
+            rec("post", path=path, body=body, want=list(a))
             if a != b:
                 failures.append(("POST %s %r" % (path, body), "%r vs %r" % (a, b)))
         ids = [sorted(r["sessionId"] for r in get(port, "/api/sessions")["sessions"] if not r.get("remote"))
                for port in (PY_PORT, RS_PORT)]
+        rec("session ids", path="/api/sessions", want=ids[0])
         if ids[0] != ids[1]:
             failures.append(("/api/sessions after dismiss", "%r vs %r" % tuple(ids)))
         print("api: %d POSTs; dismissed a finished session: %s; session lists agree: %s"
@@ -218,6 +234,7 @@ def main():
               % (len(states[0]["sessions"]), ", ".join(sorted(states[0]["sessions"]))[:60],
                  len(states[0]["tokens"]), len(states[0]["events"]),
                  states[0]["sessions"].get(C, {}).get("attention_reason")))
+        rec("state.json", want=states[0])
         diff = first_difference(states[0], states[1], "state")
         if diff:
             failures.append(("state.json", diff))
@@ -232,6 +249,7 @@ def main():
         print("usage: windows %s, plan %r, %d spend windows, %d current sessions"
               % (sorted(ua.get("limits") or {}), ua.get("plan"),
                  len(ua["spend"]["global"]["windows"]), ua["spend"]["current"]["sessions"]))
+        rec("get", path="/api/usage", want=ua)
         if diff:
             failures.append(("/api/usage", diff))
         for _ in range(3):
@@ -243,6 +261,7 @@ def main():
         print("matrix: %d tiles, %d replies, %d with a step in flight"
               % (len(ma["tiles"]), sum(len(t.get("replies") or []) for t in ma["tiles"]),
                  sum(1 for t in ma["tiles"] if t.get("current"))))
+        rec("get", path="/api/matrix", want=ma)
         if diff:
             failures.append(("/api/matrix", diff))
         for path in ("/api/events", "/api/queue", "/api/prefs",
@@ -251,6 +270,7 @@ def main():
             pa, pb = masked(get(PY_PORT, path)), masked(get(RS_PORT, path))
             if path.startswith("/api/activity"):
                 print("%s: source %s, %d calls" % (path[:40], pa.get("source"), len(pa.get("timeline") or [])))
+            rec("get", path=path, want=pa)
             diff = first_difference(pa, pb, "$")
             if diff:
                 failures.append((path, diff))
@@ -267,6 +287,8 @@ def main():
     for what, diff in failures:
         print("DIFF %s\n     %s" % (what, diff))
     print("twin: %s" % ("%d differences" % len(failures) if failures else "identical"))
+    if golden.REC is not None:
+        golden.REC.save()
     return 1 if failures else 0
 
 

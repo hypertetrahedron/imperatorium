@@ -7,6 +7,9 @@ to collide (prefixes, near-misses, camelCase, punctuation); the spoken names
 are those, misspelled, truncated and padded.
 
     python rust/conformance/projects_compare.py
+    python rust/conformance/projects_compare.py --record DIR   (Python only,
+        made-up names only: this machine's project list is never recorded;
+        tests/projects_compare.rs)
 """
 import json
 import os
@@ -16,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary  # noqa: E402
+from golden import Places, record_dir, write_jsonl  # noqa: E402
 from imperatorium import deeplink, projects  # noqa: E402
 
 MADE_UP = ["laser-ledger", "laser-ledger-app", "LaserLedger2", "blue_lamp_project", "gem-trip",
@@ -37,7 +41,10 @@ def variants(name, rng):
 def main():
     rng = random.Random(7)
     root = os.path.dirname(REPO)
-    real = projects.discover([root])
+    folder = record_dir()
+    if folder:
+        os.chdir(REPO)  # "relative\\dir" resolves against it
+    real = [] if folder else projects.discover([root])
     catalogue = [{"name": p["name"], "path": p["path"]} for p in real] + \
                 [{"name": n, "path": "C:\\made\\up\\" + n} for n in MADE_UP]
     names = [p["name"] for p in catalogue]
@@ -68,6 +75,20 @@ def main():
             want.append({"ok": deeplink.build(cwd, prompt)})
         except deeplink.DeepLinkError as exc:
             want.append({"error": str(exc)})
+    if folder:
+        places = Places()
+        # Each catalogue once, not on every case.
+        out = []
+        for c, w in zip(cases, want):
+            c = dict(c)
+            if "catalogue" in c:
+                c["catalogue"] = "full" if c["catalogue"] is catalogue else "small"
+            out.append(places({"case": c, "want": w}))
+        write_jsonl(os.path.join(folder, "cases.jsonl"), out)
+        write_jsonl(os.path.join(folder, "catalogues.jsonl"),
+                    [{"name": "full", "catalogue": catalogue}, {"name": "small", "catalogue": small}])
+        print("recorded %d cases" % len(cases))
+        return 0
     lines = "".join(json.dumps(c) + "\n" for c in cases)
     out = subprocess.run([binary(), "projects-check"], input=lines.encode("utf-8"),
                          capture_output=True, check=True).stdout.decode("utf-8").splitlines()

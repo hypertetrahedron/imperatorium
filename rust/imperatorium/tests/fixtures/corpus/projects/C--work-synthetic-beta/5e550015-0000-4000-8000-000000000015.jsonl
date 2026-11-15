@@ -1,0 +1,18 @@
+this is not json
+{"type":"user","uuid":"abc"
+[1,2,3]
+42
+"just a string"
+null
+true
+{}
+{"type":"user"}
+{"type":"user","uuid":5}
+{"type":"mystery","uuid":"x"}
+
+   
+	
+﻿{"type":"user","uuid":"bom","message":{"role":"user","content":"after a BOM"}}
+{"type":"assistant","uuid":"zz","message":{"content":[]}} trailing junk
+{"a":1}{"b":2}
+{'single':'quotes'}

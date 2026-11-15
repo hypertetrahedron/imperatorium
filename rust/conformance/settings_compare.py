@@ -2,6 +2,8 @@
 awkward values: what each would store, or the message it refuses with.
 
     python rust/conformance/settings_compare.py
+    python rust/conformance/settings_compare.py --record DIR   (Python only;
+        tests/settings_compare.rs; the temp folder and checkout as placeholders)
 """
 import json
 import os
@@ -11,6 +13,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary  # noqa: E402
+from golden import Places, record_dir, write_jsonl  # noqa: E402
 
 sys.path.insert(0, REPO)
 from imperatorium import settings  # noqa: E402
@@ -58,6 +61,13 @@ def main():
             for cur in currents:
                 cases.append({"key": f["key"], "value": v, "current": cur})
     want = [python_check(settings.BY_KEY[c["key"]], c["value"], c["current"]) for c in cases]
+    folder = record_dir()
+    if folder:
+        places = Places(tmp=HERE_DIR)
+        write_jsonl(os.path.join(folder, "cases.jsonl"),
+                    [places({"case": c, "want": w}) for c, w in zip(cases, want)])
+        print("recorded %d cases" % len(cases))
+        return 0
     lines = "".join(json.dumps(c) + "\n" for c in cases)
     out = subprocess.run([binary(), "settings-check"], input=lines.encode("utf-8"),
                          capture_output=True, check=True).stdout.decode("utf-8").splitlines()
