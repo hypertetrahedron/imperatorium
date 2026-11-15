@@ -3,14 +3,14 @@ __pycache__/
 *.pyc
 state.json
 dispatcher.log
-# This machine's settings. setup_machine.py creates them from the
+# This machine's settings. `imperatorium install` creates them from the
 # *.example.json files, which are what the repository carries.
 config.json
 policy.json
 # vendor/hidapi.dll is the official libusb/hidapi release binary.
-# setup_machine.py downloads it and checks its SHA-256.
+# `imperatorium install` downloads it and checks its SHA-256.
 vendor/
-# Backups and temporaries setup_machine.py leaves beside config.json.
+# Backups and temporaries `imperatorium install` leaves beside config.json.
 *.bak
 *.tmp
 # Claude Code's per-project runtime files.
@@ -24,7 +24,6 @@ herdr/mods/*/jsconfig.json
 /dist/
 
 # Build and test leftovers
-rust/conformance/__pycache__/
 rust/voice/target/
 build.log
 .pytest_cache/

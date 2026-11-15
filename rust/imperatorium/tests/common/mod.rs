@@ -489,7 +489,7 @@ pub fn clean_env(cmd: &mut Command, bin_dir: Option<&Path>) {
     cmd.env("PATH", stand_in_path(bin_dir));
 }
 
-/// fakecli (rust/conformance/fakecli), built beside the binary by
+/// fakecli (rust/fakecli), built beside the binary by
 /// `cargo test --workspace`, or by `cargo build [--release] -p fakecli`.
 pub fn fakecli() -> PathBuf {
     let exe = if cfg!(windows) {

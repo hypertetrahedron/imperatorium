@@ -3,14 +3,19 @@
 Everything here was recorded from the Python implementation (the reference
 the binary was ported from) by the conformance scripts in `rust/conformance/`
 run with `--record DIR`. The Rust integration tests in `rust/imperatorium/tests/`
-replay the same inputs against the binary and compare. Once Python is gone,
-these files are the spec: change one only on purpose, with the reason in the
-commit.
+replay the same inputs against the binary and compare.
 
-## Recording
+Python is gone from the repository (2026-11-15); the last commit that has it
+is tagged `last-python`. These files are now the spec: change one only on
+purpose, with the reason in the commit. The script names below (`twin.py`,
+`golden.py`, ...) are the scripts at that tag.
 
-Hold the conformance lock (one part at a time; the twins use fixed ports
-8812-8820), build fakecli first (`cargo build --release -p fakecli`), then:
+## Recording (at the `last-python` tag only)
+
+To record again, check out `last-python` in a separate worktree, with its
+venv (`requirements.txt`). Hold the conformance lock (one part at a time; the
+twins use fixed ports 8812-8820), build fakecli first
+(`cargo build --release -p fakecli`), then:
 
 ```
 python rust/conformance/<part>.py --record rust/imperatorium/tests/golden/<part>
@@ -19,6 +24,10 @@ python rust/conformance/<part>.py --record rust/imperatorium/tests/golden/<part>
 (`run_policy_tests.py` records into `policy_tests/`.) Record twice into two
 folders and `diff -r` them: every part here came out byte-identical across
 two captures (2026-11-14).
+
+Edited since: `settings_twin/steps.jsonl`'s settings help and restart texts
+(2026-11-15) name `imperatorium` subcommands in place of the deleted Python
+scripts, to match `assets/settings_fields.json`.
 
 Machine-specific strings are placeholders (`golden.py` `Places`; put back by
 `tests/common/mod.rs` `Places`): `<repo>` the checkout, `<repo-parent>`,
@@ -48,7 +57,10 @@ random part), `<pid>`, `<sid>`, `<side>` (py/rs), `<twin-home>`, `<feat>`,
 
 The local-only full corpus is not here: see "The local corpus" below.
 
-## The twins: recorded, not yet replayed
+## The twins: how they were recorded and replayed
+
+(Every twin below is now replayed by a test in `rust/imperatorium/tests/`;
+the notes are kept as the record of what each replay sets up.)
 
 Each twin's `--record` ran BOTH dispatchers as Python (the "rs" side a
 second Python dispatcher) so every comparison in the script still ran,
@@ -206,7 +218,9 @@ fakecli copied to ssh.exe (remote_cli_twin.py's sh-running ssh is its
 ## The local corpus (never committed)
 
 The synthetic corpus covers what the readers handle; the full check runs on
-a frozen copy of this machine's transcripts, outside the repository:
+a frozen copy of this machine's transcripts, outside the repository. Its
+goldens were recorded once, at `last-python`; a new machine can't record
+them without that tag's Python:
 
 ```
 copy  ~/.claude/projects  ->  %LOCALAPPDATA%\imperatorium\conformance-corpus\projects

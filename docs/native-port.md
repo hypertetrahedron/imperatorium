@@ -2,6 +2,13 @@
 
 Date: 2026-11-12. Branch `rust`. Tracked in ROADMAP.md ("Native port" rows).
 
+**Status (2026-11-15): done.** Every phase is ported and the Python is deleted
+from the repository; the last commit with it is tagged `last-python`. What
+follows is the record of how the port was done. Where it names a Python file
+or a `rust/conformance/` script, that is the file at that tag. Its answers
+live on as the goldens in `rust/imperatorium/tests/golden/`, which the
+integration tests replay.
+
 ## Why
 
 herdr installs with one command because it ships one finished file. Imperatorium
@@ -335,7 +342,7 @@ would put a console window on the desktop; a headless conhost shows none.
 The binary outlives its conhost, so stopping the task does not stop it - end
 the `imperatorium.exe` whose command line has `serve --live`.
 `%LOCALAPPDATA%\imperatorium\cutover\` holds the Python task definition, the
-state file as it was and the phase-2 binary, with `rollback-to-python.ps1`.
+state file as it was and the phase-2 binary, with `rollback-to-python.ps1` (retired 2026-11-15, with the Python).
 
 Lost at the switch until phase 4: remote hosts and their hook tunnels (both
 configured hosts had no sessions at the time).
@@ -473,7 +480,7 @@ press to focus. `elgato-streamdeck` over hidapi's `windows-native` backend
 `--preview DIR` writes one frame as PNGs: side by side with Python's
 `render_key` the keys match. Task `ImperatoriumStreamDeck` runs it under
 `conhost --headless`; its Python definition is in `cutover\`, and
-`rollback-to-python.ps1` restores it.
+`rollback-to-python.ps1` restored it (retired 2026-11-15, with the Python).
 
 ## Phase 6, in progress (2026-11-13)
 
@@ -554,9 +561,12 @@ badge and says it updates by git.
 
 ```
 cd rust
-cargo build --release
-python conformance/run_all.py --release
+cargo build --release --workspace
+cargo test --release --workspace
 ```
+
+(`--workspace` builds fakecli, the stand-in claude/wt/ssh the twins put on
+PATH. The window JavaScript tests need node; `tests/web_js.rs` runs them.)
 
 On Windows this machine uses rustup's `x86_64-pc-windows-gnu` toolchain
 (no Visual Studio Build Tools installed). Crates that need `dlltool` for
@@ -577,13 +587,16 @@ non-twin parts are `cargo test` integration tests against those goldens
 CLAUDE_CONFIG_DIR per test, a stripped environment and a PATH with no real
 claude, wt or hc. The transcript readers are checked on a synthetic corpus
 (`tests/fixtures/corpus`) and, on this machine only, on a frozen copy of the
-real transcripts outside the repository. The twins are recorded; their
-replay is the next step.
+real transcripts outside the repository. The twins are replayed too
+(2026-11-15): `twin.rs`, `inbox_twin.rs`, `notify_twin.rs`,
+`settings_twin.rs`, `worktree_twin.rs`, `bg_worktree_twin.rs`,
+`session_twin.rs`, `remote_twin.rs` and `remote_cli.rs`. The Python unit
+tests are mapped one by one in `docs/python-test-coverage.md`.
 
 ## Testing hooks by hand
 
 Always set `IMPERATORIUM_ENDPOINT` and `IMPERATORIUM_PARK_ENDPOINT` to a fake
-server and `LOCALAPPDATA` to a temp folder, as the conformance scripts do. The
+server and `LOCALAPPDATA` to a temp folder, as the integration tests do. The
 park default is the live dispatcher: a manual run with parking enabled shows up
 as an Allow/Deny banner in the real window.
 

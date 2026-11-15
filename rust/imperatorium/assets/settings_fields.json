@@ -257,7 +257,7 @@
     "from": "voice_block"
    },
    "applies": "dispatcher",
-   "help": "Local speech to text; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice)."
+   "help": "Local speech to text; nothing leaves the machine. Needs the voice worker and a model (`imperatorium voice fetch`)."
   },
   {
    "key": "voice.shortcut",
@@ -336,7 +336,7 @@
    "max": 999,
    "default": null,
    "applies": "dispatcher",
-   "help": "An index from `python -m imperatorium.voice`. Blank for the system default."
+   "help": "An input device index. Blank for the system default."
   },
   {
    "key": "voice.preload",
@@ -378,7 +378,7 @@
    "type": "bool",
    "default": true,
    "applies": "dispatcher",
-   "help": "Polled over SSH. Hosts are added and removed with `python setup_machine.py remote add|remove HOST`."
+   "help": "Polled over SSH. Hosts are added and removed with `imperatorium remote add|remove HOST`."
   },
   {
    "key": "palette.hotkey",
@@ -737,9 +737,9 @@
   ]
  ],
  "restart": {
-  "dispatcher": "python impctl.py restart dispatcher",
-  "hotkey": "restart the palette (hotkey.py)",
-  "streamdeck": "restart the Stream Deck surface (streamdeck_surface.py)"
+  "dispatcher": "imperatorium restart dispatcher",
+  "hotkey": "imperatorium restart hotkey",
+  "streamdeck": "imperatorium restart streamdeck"
  },
  "shortcuts": [
   {

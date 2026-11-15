@@ -1,8 +1,9 @@
 # Synthetic transcript corpus
 
 Every byte here is invented: no real session, path, prompt or reply is in it.
-`make_corpus.py` writes `projects/` deterministically (fixed 2026 timestamps,
-ids derived from a counter, no clock); rerun it to regenerate. Point
+`projects/` was written deterministically by `make_corpus.py` (fixed 2026 timestamps,
+ids derived from a counter, no clock), deleted with the rest of the Python on
+2026-11-15 and kept at the `last-python` tag; the files are now edited by hand. Point
 `CLAUDE_CONFIG_DIR` at this folder (copy it first and set file mtimes if a
 check depends on them: `last_modified` and "newest file wins" do).
 
