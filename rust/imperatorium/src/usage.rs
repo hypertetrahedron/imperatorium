@@ -474,3 +474,140 @@ mod tests {
         );
     }
 }
+
+/// Ported from the Python suite (test_features.py): readings, pace,
+/// threshold crossings and windows that reset.
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn obj(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    fn five_hour(used: f64, resets: f64) -> Map<String, Value> {
+        obj(json!({"rate_limits": {"five_hour": {"used_percentage": used, "resets_at": resets}}}))
+    }
+
+    fn fresh() -> Usage {
+        Usage::new(DEFAULT_THRESHOLDS.to_vec(), None, false, 0.0)
+    }
+
+    #[test]
+    fn features_reading_extracts_the_meter_fields_and_tolerates_none() {
+        let got = reading(&obj(json!({
+            "context_window": {"used_percentage": 12.5, "context_window_size": 200000},
+            "cost": {"total_cost_usd": 1.23},
+            "model": {"display_name": "Opus 5.5"},
+            "rate_limits": {"five_hour": {"used_percentage": 40, "resets_at": 999}, "junk": {}},
+        })));
+        assert_eq!(got["context_pct"], 12.5);
+        assert_eq!(got["cost_usd"], 1.23);
+        assert_eq!(got["model"], "Opus 5.5");
+        assert_eq!(got["limits"], json!({"five_hour": {"used": 40.0, "resets_at": 999.0}}));
+        let empty = reading(&Map::new());
+        assert_eq!(empty["context_pct"], Value::Null);
+        assert_eq!(empty["limits"], json!({}));
+    }
+
+    #[test]
+    fn features_pace_flat_falling_and_old_samples() {
+        let now = 10_000.0;
+        let falling = pace(&[(now - 1200.0, 50.0), (now - 600.0, 40.0), (now, 30.0)], now, None);
+        assert_eq!(falling["per_hour"], 0.0);
+        assert_eq!(falling["full_at"], Value::Null);
+        assert_eq!(falling["before_reset"], false);
+        // A sample older than the pace span (45 minutes) does not count.
+        let now = 100_000.0;
+        let old = pace(&[(now - 100_000.0, 0.0), (now - 600.0, 20.0), (now, 30.0)], now, None);
+        assert_ne!(old, Value::Null); // only the last two count
+        assert_eq!(old["per_hour"], 60.0);
+        // Rising: when it hits 100.
+        let now = 10_000.0;
+        let rising = pace(&[(now - 1200.0, 10.0), (now - 600.0, 20.0), (now, 30.0)], now, None);
+        assert!(rising["per_hour"].as_f64().unwrap() > 0.0);
+        assert!(rising["full_at"].as_f64().unwrap() > now);
+    }
+
+    #[test]
+    fn features_a_threshold_crossing_fires_once_and_the_top_one_wins() {
+        let u = Usage::new(vec![80.0, 95.0], None, false, 0.0);
+        let first = u.ingest("s1", &five_hour(85.0, 5000.0), 1.0).expect("crossed 80");
+        assert_eq!(first["threshold"], 80.0);
+        assert!(u.ingest("s1", &five_hour(85.0, 5000.0), 2.0).is_none());
+        let jump = Usage::new(vec![80.0, 95.0], None, false, 0.0);
+        let top = jump.ingest("s1", &five_hour(97.0, 5000.0), 1.0).unwrap();
+        assert_eq!(top["threshold"], 95.0);
+    }
+
+    #[test]
+    fn features_a_new_reset_time_starts_a_fresh_history() {
+        let u = fresh();
+        u.ingest("s1", &five_hour(10.0, 100.0), 1.0);
+        // A reset time that only jitters is the same window.
+        u.ingest("s1", &five_hour(15.0, 150.0), 2.0);
+        assert_eq!(u.inner.lk().history["five_hour"], vec![(1.0, 10.0), (2.0, 15.0)]);
+        // One that really moved on starts over.
+        u.ingest("s1", &five_hour(90.0, 100_000.0), 3.0);
+        assert_eq!(u.inner.lk().history["five_hour"], vec![(3.0, 90.0)]);
+    }
+
+    #[test]
+    fn features_a_window_that_reset_waits_at_zero_for_a_new_reading() {
+        let u = fresh();
+        u.ingest("s1", &five_hour(10.0, 50.0), 1.0);
+        let w = u.summary(1000.0)["limits"]["five_hour"].clone();
+        assert_eq!(
+            (w["used"].clone(), w["resets_at"].clone(), w["reset_at"].clone(), w["waiting"].clone()),
+            (json!(0.0), Value::Null, json!(50.0), json!(true))
+        );
+        assert_eq!(w["pace"], Value::Null);
+        // The new window's first reading replaces it.
+        u.ingest("s1", &five_hour(3.0, 18050.0), 1001.0);
+        let w = u.summary(1002.0)["limits"]["five_hour"].clone();
+        assert_eq!((w["used"].clone(), w["resets_at"].clone()), (json!(3.0), json!(18050.0)));
+        assert!(w.get("waiting").is_none());
+    }
+
+    #[test]
+    fn features_forget_drops_a_sessions_reading() {
+        let u = fresh();
+        u.ingest("s1", &obj(json!({"context_window": {"used_percentage": 5}})), 1.0);
+        assert!(u.session("s1").is_some());
+        u.forget("s1");
+        assert!(u.session("s1").is_none());
+    }
+
+    #[test]
+    fn features_provider_comes_from_the_script_or_the_model_id() {
+        let of = |v: Value| provider_of(&obj(v));
+        assert_eq!(of(json!({"imperatorium_provider": "vertex"})).as_deref(), Some("vertex"));
+        for mid in [
+            "us.anthropic.claude-opus-5-5-v1:0",
+            "anthropic.claude-sonnet-5-5-v1:0",
+            "arn:aws:bedrock:us-east-1:123:inference-profile/x",
+        ] {
+            assert_eq!(of(json!({"model": {"id": mid}})).as_deref(), Some("bedrock"), "{mid}");
+        }
+        assert_eq!(
+            of(json!({"model": {"id": "claude-opus-5-5@20260801"}})).as_deref(),
+            Some("vertex")
+        );
+        assert_eq!(of(json!({"model": {"id": "claude-opus-5-5"}})), None);
+        assert_eq!(of(json!({"imperatorium_provider": "nonsense"})), None);
+    }
+
+    #[test]
+    fn features_a_session_gone_quiet_stops_counting() {
+        // (The account's own plan reads the real ~/.claude.json, so only a
+        // provider name is used here; the HTTP tests cover the login.)
+        let u = fresh();
+        u.ingest("s1", &obj(json!({"imperatorium_provider": "bedrock"})), 1.0);
+        let plan = u.summary(2.0)["plan"].clone();
+        assert_eq!(plan["label"], "AWS Bedrock");
+        assert_eq!(plan["providers"], json!(["bedrock"]));
+        assert_eq!(plan["alongside"], false);
+        let quiet = u.summary(1.0 + PLAN_SPAN + 1.0)["plan"].clone();
+        assert_ne!(quiet["label"], "AWS Bedrock");
+    }
+}

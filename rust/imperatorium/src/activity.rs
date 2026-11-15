@@ -319,3 +319,99 @@ mod tests {
         assert_eq!(doing(&items[..1]), "asked: fix it");
     }
 }
+
+/// Ported from the Python suite (test_features.py): timelines, the doing
+/// line, error categories and tallies.
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn tool_item(name: &str, summary: &str, tid: &str) -> Value {
+        json!({"speaker": "claude", "blocks": [
+            {"kind": "tool", "name": name, "summary": summary, "id": tid}]})
+    }
+
+    fn result_item(tid: &str, ok: bool, text: &str) -> Value {
+        json!({"speaker": "tool", "blocks": [
+            {"kind": "result", "id": tid, "is_error": !ok, "text": text}]})
+    }
+
+    fn text_item(text: &str, speaker: &str) -> Value {
+        json!({"speaker": speaker, "blocks": [{"kind": "text", "text": text}]})
+    }
+
+    #[test]
+    fn features_timeline_pairs_calls_with_results_and_leaves_running_ones_open() {
+        let calls = timeline(&[
+            tool_item("Bash", "npm test", "t1"),
+            result_item("t1", false, "exit code 1: failed\nmore"),
+        ]);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["tool"], "Bash");
+        assert_eq!(calls[0]["ok"], false);
+        assert!(calls[0]["error"].as_str().unwrap().contains("exit code 1"));
+        // A call still running has ok None.
+        let running = timeline(&[tool_item("Read", "f.py", "t2")]);
+        assert_eq!(running[0]["ok"], Value::Null);
+    }
+
+    #[test]
+    fn features_doing_after_a_finished_turn_and_when_empty() {
+        let items = vec![
+            tool_item("Bash", "npm test", "t1"),
+            result_item("t1", true, ""),
+            text_item("all done", "claude"),
+        ];
+        assert_eq!(doing(&items), "all done");
+        assert_eq!(doing(&[]), "");
+        // A running tool call wins over earlier text.
+        let running = vec![text_item("earlier", "claude"), tool_item("Bash", "npm test", "t1")];
+        assert_eq!(doing(&running), "Bash npm test");
+        assert_eq!(doing(&[text_item("do the thing", "you")]), "asked: do the thing");
+    }
+
+    #[test]
+    fn features_categorise_known_shapes() {
+        for (text, want) in [
+            ("the user rejected this", "rejected by user"),
+            ("No such file or directory", "file not found"),
+            ("found 3 matches for old_string", "edit did not match"),
+            ("the file has not been read first", "file not read first"),
+            ("file changed on disk since last read", "file changed on disk"),
+            ("the command timed out", "timed out"),
+            ("exit code 1", "command failed"),
+            ("ECONNREFUSED talking to host", "network"),
+            ("something entirely unrecognised", "other"),
+        ] {
+            assert_eq!(categorise(text), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn features_tally_counts_calls_and_errors_and_merges() {
+        let calls = timeline(&[
+            tool_item("Bash", "a", "t1"),
+            result_item("t1", false, "exit code 1"),
+            tool_item("Read", "b", "t2"),
+            result_item("t2", true, ""),
+        ]);
+        let t = tally(&calls);
+        assert_eq!(t["calls"], 2);
+        assert_eq!(t["errors"], 1);
+        assert_eq!(t["by_tool"]["Bash"], json!([1, 1]));
+        assert_eq!(t["by_tool"]["Read"], json!([1, 0]));
+        assert_eq!(t["by_category"], json!({"command failed": 1}));
+
+        let a = tally(&timeline(&[
+            tool_item("Bash", "a", "t1"),
+            result_item("t1", false, "x"),
+        ]));
+        let b = tally(&timeline(&[
+            tool_item("Bash", "b", "t2"),
+            result_item("t2", true, ""),
+        ]));
+        let merged = merge_tallies(&[a, b]);
+        assert_eq!(merged["calls"], 2);
+        assert_eq!(merged["by_tool"]["Bash"], json!([2, 1]));
+    }
+}

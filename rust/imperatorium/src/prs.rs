@@ -195,3 +195,85 @@ mod tests {
         assert_eq!(s["url"], Value::Null);
     }
 }
+
+/// Ported from the Python suite (test_features.py): rollup shapes, the badge
+/// summary and the tracker's bookkeeping (never calling gh).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    #[test]
+    fn features_checks_state_shapes() {
+        let state = |v: Value| checks_state(Some(&v));
+        assert_eq!(
+            state(json!([{"status": "COMPLETED", "conclusion": "SUCCESS"},
+                         {"status": "COMPLETED", "conclusion": "FAILURE"}])),
+            "failing"
+        );
+        assert_eq!(
+            state(json!([{"status": "COMPLETED", "conclusion": "SUCCESS"},
+                         {"status": "COMPLETED", "conclusion": "NEUTRAL"}])),
+            "passing"
+        );
+        assert_eq!(state(json!([{"state": "SUCCESS"}])), "passing");
+        assert_eq!(state(json!([{"state": "FAILURE"}])), "failing");
+        assert_eq!(state(json!([{"state": "PENDING"}])), "pending");
+        assert_eq!(
+            state(json!([{"state": "SUCCESS"},
+                         {"status": "COMPLETED", "conclusion": "FAILURE"}])),
+            "failing"
+        );
+    }
+
+    #[test]
+    fn features_summarise_maps_the_badge_fields() {
+        let raw = json!({"number": 3, "state": "OPEN", "url": "u", "title": "t",
+                         "isDraft": true, "reviewDecision": "APPROVED",
+                         "headRefName": "feature", "statusCheckRollup": null});
+        assert_eq!(
+            summarise(&raw),
+            json!({"number": 3, "state": "open", "draft": true, "url": "u", "title": "t",
+                   "branch": "feature", "review": "approved", "checks": "none"})
+        );
+    }
+
+    fn repo(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("imp-prs-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_string_lossy().into_owned();
+        crate::changes::git(&d, &["init", "-q", "-b", "main"], true).unwrap();
+        dir
+    }
+
+    #[test]
+    fn features_get_registers_interest_and_a_fresh_cache_is_not_refetched() {
+        let dir = repo("fresh");
+        let cwd = dir.to_string_lossy().into_owned();
+        let tr = Tracker::default();
+        assert_eq!(tr.get(&cwd), None);
+        assert!(tr.inner.lk().wanted.contains_key(&cwd));
+        // What a fetch for this branch left a moment ago.
+        let key = crate::paths::abs_normcase(&cwd).unwrap_or_else(|| cwd.clone());
+        let pr = json!({"number": 1, "state": "open"});
+        tr.inner.lk().cache.insert(
+            key,
+            Entry { at: now(), pr: Some(pr.clone()), branch: "main".into() },
+        );
+        assert_eq!(tr.get(&cwd), Some(pr.clone()));
+        tr.poll_once();
+        // Still the cached answer: nothing asked gh (which would have
+        // replaced it with "no PR" or disabled the tracker).
+        assert_eq!(tr.get(&cwd), Some(pr));
+        assert!(tr.inner.lk().disabled.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn features_directories_nobody_asked_about_recently_are_dropped() {
+        let tr = Tracker::default();
+        tr.inner.lk().wanted.insert("Z:/nobody".into(), now() - 1.0e6);
+        tr.poll_once();
+        assert!(tr.inner.lk().wanted.is_empty());
+    }
+}

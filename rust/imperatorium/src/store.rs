@@ -433,3 +433,76 @@ mod tests {
         assert!(Store::open(&crate::paths::state_dir().join("state.json")).is_err());
     }
 }
+
+/// Ported from the Python suite (test_features.py `QueueStore`).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn open(label: &str) -> (Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("imp-featstore-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        (Store::open(&dir.join("state.json")).unwrap(), dir)
+    }
+
+    fn prompts(q: &[Value]) -> Vec<String> {
+        q.iter().map(|i| i["prompt"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn features_the_queue_is_fifo_and_an_empty_one_leaves_the_map() {
+        let (s, dir) = open("fifo");
+        assert!(s.take_queued("nobody").is_none());
+        s.enqueue("s1", "first", false);
+        s.enqueue("s1", "second", false);
+        assert_eq!(prompts(&s.queued("s1")), ["first", "second"]);
+        assert_eq!(s.take_queued("s1").unwrap()["prompt"], "first");
+        assert_eq!(s.queued("s1").len(), 1);
+        s.take_queued("s1");
+        assert_eq!(s.snapshot()["queue"], json!({}));
+        assert!(s.queued_keys().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn features_requeue_front_puts_it_back_first_with_the_error() {
+        let (s, dir) = open("requeue");
+        s.enqueue("s1", "first", false);
+        let item = s.take_queued("s1").unwrap();
+        s.enqueue("s1", "second", false);
+        s.requeue_front("s1", &item, Some("delivery failed"));
+        let got = s.queued("s1");
+        assert_eq!(got[0]["prompt"], "first");
+        assert_eq!(got[0]["error"], "delivery failed");
+        assert_eq!(got[1]["prompt"], "second");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn features_ids_are_unique_so_unqueue_removes_one_item_by_id() {
+        let (s, dir) = open("unqueue");
+        // Queued back to back, as in one clock tick.
+        let a = s.enqueue("s1", "x", false);
+        let b = s.enqueue("s1", "y", false);
+        assert_ne!(a["id"], b["id"]);
+        assert!(s.unqueue("s1", &a["id"]));
+        assert_eq!(prompts(&s.queued("s1")), ["y"]);
+        assert!(!s.unqueue("s1", &json!("no-such-id")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn features_the_queue_survives_a_reload_and_prefs_round_trip() {
+        let (s, dir) = open("reload");
+        s.enqueue("s1", "persisted", false);
+        let changes = |v: Value| v.as_object().unwrap().clone();
+        s.set_prefs(&changes(json!({"pinned": ["a", "b"], "group": "x"})));
+        assert_eq!(s.snapshot()["prefs"], json!({"pinned": ["a", "b"], "group": "x"}));
+        s.set_prefs(&changes(json!({"group": null})));
+        assert_eq!(s.snapshot()["prefs"], json!({"pinned": ["a", "b"]}));
+        let reloaded = Store::open(&dir.join("state.json")).unwrap();
+        assert_eq!(reloaded.queued("s1")[0]["prompt"], "persisted");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
