@@ -27,6 +27,7 @@
 mod activity;
 mod background;
 mod changes;
+mod cli;
 mod closing;
 mod conversation;
 mod costs;
@@ -55,8 +56,10 @@ mod pyish;
 mod registry;
 mod release;
 mod remote;
+mod remote_cli;
 mod server;
 mod service;
+mod service_ctl;
 mod sessions;
 mod sessionstat;
 mod settings;
@@ -84,11 +87,9 @@ const VERSION: &str = match option_env!("IMPERATORIUM_BUILD_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
+/// An unknown command: say so, point at `help`.
 fn usage() -> i32 {
-    eprintln!(
-        "imperatorium {VERSION}\n\nusage:\n  imperatorium hook\n  imperatorium statusline\n  \
-         imperatorium permission [--home DIR]\n  imperatorium policy-decide\n  imperatorium version"
-    );
+    eprintln!("imperatorium {VERSION}: unknown or incomplete command - `imperatorium help` lists them all");
     2
 }
 
@@ -190,6 +191,18 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let home = home_arg(&args);
     let code = match args.first().map(String::as_str) {
+        None => cli::main("help", &[], None),
+        // `sessions chain|info|...` read transcripts (phase 2); a bare
+        // `sessions` is impctl's list of the live ones.
+        Some("sessions")
+            if !matches!(
+                args.get(1).map(String::as_str),
+                Some("chain" | "info" | "titles" | "items" | "list" | "stats")
+            ) =>
+        {
+            cli::main("sessions", &args[1..], home.as_deref())
+        }
+        Some(name) if cli::handles(name) => cli::main(name, &args[1..], home.as_deref()),
         Some("hook") => hooks::hook_main(),
         Some("statusline") => hooks::statusline_main(),
         Some("permission") => hooks::permission_main(home.as_deref()),
@@ -208,6 +221,8 @@ fn main() {
         Some("hook-relay") => remote::hook_relay_main(&args[1..]),
         Some("remote-probe") => remote::probe_main(&args[1..], home.as_deref()),
         // Setting a machine up from the binary alone (phase 6).
+        Some("remote") => remote_cli::main(&args[1..], home.as_deref()),
+        Some("check") => install::check_main(&args[1..], home.as_deref()),
         Some("install") => install::install_main(&args[1..], home.as_deref()),
         Some("uninstall") => install::uninstall_main(&args[1..], home.as_deref()),
         Some("status") => install::status_main(&args[1..], home.as_deref()),

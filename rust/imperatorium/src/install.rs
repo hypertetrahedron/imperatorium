@@ -297,7 +297,7 @@ fn write_settings(path: &Path, settings: &Map<String, Value>, say: &mut dyn FnMu
 }
 
 /// time.strftime("%Y%m%d-%H%M%S"), local time.
-fn stamp() -> String {
+pub(crate) fn stamp() -> String {
     let s = crate::paths::local_stamp(); // "YYYY-MM-DD HH:MM:SS"
     s.replace('-', "").replace(':', "").replacen(' ', "-", 1)
 }
@@ -832,6 +832,33 @@ pub fn uninstall_main(args: &[String], home: Option<&str>) -> i32 {
     0
 }
 
+/// The hooks a remote host or container gets: the reporting ones only. Its
+/// permission prompts stay there, answered by the policy on this machine.
+pub fn apply_remote_hooks(settings: &mut Map<String, Value>, uninstall: bool, native: &str) -> Vec<String> {
+    let mut changes = apply_hooks(settings, uninstall, false, native, Path::new("."));
+    if !uninstall {
+        drop_permission_hook(settings, &mut changes);
+    }
+    changes
+}
+
+/// Take our PermissionRequest entry out again (other people's stay).
+fn drop_permission_hook(s: &mut Map<String, Value>, changes: &mut Vec<String>) {
+    if let Some(hooks) = s.get_mut("hooks").and_then(Value::as_object_mut) {
+        let kept: Vec<Value> = hooks
+            .get("PermissionRequest")
+            .and_then(Value::as_array)
+            .map(|b| b.iter().filter(|x| !is_ours(x)).cloned().collect())
+            .unwrap_or_default();
+        if kept.is_empty() {
+            hooks.shift_remove("PermissionRequest");
+        } else {
+            hooks.insert("PermissionRequest".into(), Value::Array(kept));
+        }
+        changes.retain(|c| !c.ends_with(" PermissionRequest"));
+    }
+}
+
 /// `imperatorium install-hooks --settings F --native BIN [--home H]
 /// [--tool-hooks] [--statusline] [--mod DIR] [--uninstall]`: only the
 /// settings.json edit, with `hooks/install.py`'s flags, so conformance can
@@ -865,19 +892,7 @@ pub fn install_hooks_main(args: &[String]) -> i32 {
     };
     let mut changes = apply_hooks(&mut s, uninstall, tool, &native, &home);
     if reporting_only && !uninstall {
-        if let Some(hooks) = s.get_mut("hooks").and_then(Value::as_object_mut) {
-            let kept: Vec<Value> = hooks
-                .get("PermissionRequest")
-                .and_then(Value::as_array)
-                .map(|b| b.iter().filter(|x| !is_ours(x)).cloned().collect())
-                .unwrap_or_default();
-            if kept.is_empty() {
-                hooks.shift_remove("PermissionRequest");
-            } else {
-                hooks.insert("PermissionRequest".into(), Value::Array(kept));
-            }
-            changes.retain(|c| !c.ends_with(" PermissionRequest"));
-        }
+        drop_permission_hook(&mut s, &mut changes);
     }
     if line || uninstall {
         changes.extend(apply_statusline(&mut s, uninstall, &native));
@@ -936,10 +951,138 @@ pub fn status_main(args: &[String], home: Option<&str>) -> i32 {
     }
     let port = o.port.clone().unwrap_or_else(|| "8792".into());
     match wait_for_dispatcher(&port, 2) {
-        Some(h) => println!("dispatcher    responding on 127.0.0.1:{port}, pid {}", h.get("pid").cloned().unwrap_or(Value::Null)),
-        None => println!("dispatcher    NOT responding on 127.0.0.1:{port}"),
+        Some(h) => {
+            println!("dispatcher    responding on 127.0.0.1:{port}, pid {}", h.get("pid").cloned().unwrap_or(Value::Null));
+            0
+        }
+        // As impctl's status: a dispatcher that does not answer is exit 1.
+        None => {
+            println!("dispatcher    NOT responding on 127.0.0.1:{port}");
+            1
+        }
     }
-    0
+}
+
+/// One line of `check`: `ok`, `MISSING` (required) or `--` (optional).
+fn check_row(good: bool, required: bool, name: &str, detail: &str) -> bool {
+    let mark = if good { "ok " } else if required { "MISSING" } else { "-- " };
+    println!("   {mark:<8} {name:<28} {detail}");
+    good || !required
+}
+
+/// setup_machine.edge_path.
+fn edge_path() -> Option<String> {
+    if cfg!(windows) {
+        for var in ["ProgramFiles(x86)", "ProgramFiles"] {
+            if let Some(base) = crate::paths::env_nonempty(var) {
+                let p = Path::new(&base).join("Microsoft").join("Edge").join("Application").join("msedge.exe");
+                if p.exists() {
+                    return Some(p.to_string_lossy().into_owned());
+                }
+            }
+        }
+        crate::launch::which("msedge")
+    } else {
+        crate::launch::which("microsoft-edge").or_else(|| crate::launch::which("msedge"))
+    }
+}
+
+/// `imperatorium check` (setup_machine.py check): what is present and
+/// missing on this machine. Changes nothing; exit 1 when a required piece
+/// (Claude Code, git, the hooks) is missing.
+pub fn check_main(args: &[String], home: Option<&str>) -> i32 {
+    let o = opts(args, home);
+    let exe = std::env::current_exe().unwrap_or_default();
+    heading("Prerequisites");
+    let mut ok = true;
+    let ver = claude_version();
+    let path = claude_path();
+    ok &= check_row(
+        ver.is_some_and(|x| x >= MIN_CLAUDE),
+        true,
+        &format!("Claude Code {}+", v(MIN_CLAUDE)),
+        &match (ver, &path) {
+            (Some(x), p) => format!("{} at {}", v(x), p.as_ref().map(|p| p.display().to_string()).unwrap_or_default()),
+            (None, None) => "not on PATH - install it from https://claude.com/claude-code".into(),
+            (None, Some(_)) => "could not read its version".into(),
+        },
+    );
+    let found = |tool: &str| crate::launch::which(tool);
+    let git = found("git");
+    ok &= check_row(git.is_some(), true, "git", &git.unwrap_or_else(|| "not on PATH".into()));
+    let gh = found("gh");
+    check_row(gh.is_some(), false, "gh (GitHub CLI)", &gh.unwrap_or_else(|| "optional - PR badges and 'open PR' need it".into()));
+    if cfg!(windows) {
+        let wt = found("wt");
+        check_row(wt.is_some(), false, "Windows Terminal (wt)", &wt.unwrap_or_else(|| "optional - Resume and Fork open a tab in it".into()));
+    }
+    let edge = edge_path();
+    check_row(edge.is_some(), false, "Microsoft Edge", &edge.unwrap_or_else(|| "optional - opens the window without browser chrome".into()));
+
+    heading("This installation");
+    let mark = |good: bool| if good { "ok " } else { "-- " };
+    println!("   {:<8} {}", mark(exe.exists()), exe.display());
+    for name in ["config.json", "policy.json"] {
+        let p = o.home.join(name);
+        println!("   {:<8} {}", mark(p.exists()), p.display());
+    }
+
+    heading("Claude Code hooks");
+    let settings = load_settings(&o.settings).unwrap_or_default();
+    let events: Vec<String> = settings
+        .get("hooks")
+        .and_then(Value::as_object)
+        .map(|h| {
+            h.iter()
+                .filter(|(_, b)| b.as_array().is_some_and(|b| b.iter().any(is_ours)))
+                .map(|(e, _)| e.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    println!("   {:<8} {}", if events.is_empty() { "MISSING" } else { "ok " }, o.settings.display());
+    println!(
+        "   {:<8} reporting and permission hooks: {}",
+        if events.iter().any(|e| e == "SessionStart") { "ok " } else { "MISSING" },
+        if events.is_empty() { "none".to_string() } else { events.join(", ") }
+    );
+    println!("   {:<8} statusline (usage meter)", mark(is_our_statusline(settings.get("statusLine"))));
+    let dirs = settings.get("env").and_then(|e| e.get(PLUGIN_DIRS)).map(crate::pyish::py_str).unwrap_or_default();
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    println!(
+        "   {:<8} the Imperatorium mod (Claude Code {}+)",
+        mark(dirs.split(sep).any(is_imperatorium_mod)),
+        v(MIN_CLAUDE_MOD)
+    );
+    ok &= !events.is_empty();
+
+    heading("Service");
+    let svc = service_for(&o, exe);
+    println!(
+        "   {:<8} {}",
+        mark(svc.is_installed("Dispatcher")),
+        if cfg!(windows) { "scheduled tasks" } else if cfg!(target_os = "macos") { "launchd agent" } else { "systemd user unit" }
+    );
+    let port = o.port.clone().unwrap_or_else(|| "8792".into());
+    let health = wait_for_dispatcher(&port, 3);
+    println!(
+        "   {:<8} dispatcher on 127.0.0.1:{port}{}",
+        mark(health.is_some()),
+        health.map(|h| format!(" (pid {})", h.get("pid").map(crate::pyish::py_str).unwrap_or_default())).unwrap_or_default()
+    );
+    let hosts = std::fs::read_to_string(o.home.join("config.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|c| c.get("remote").and_then(|r| r.get("hosts")).and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    if hosts > 0 {
+        heading("Other machines");
+        println!("   {hosts} configured; check them with:  imperatorium remote check");
+    }
+    if events.is_empty() {
+        println!("
+Run `imperatorium install` to install what is missing.");
+    }
+    i32::from(!ok)
 }
 
 #[cfg(test)]
