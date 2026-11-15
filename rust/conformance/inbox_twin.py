@@ -15,6 +15,12 @@ a session whose pipe is gone keeps the prompt with the error; queued from the
 window (Origin plus the page's token) is marked as the person's own.
 
     python rust/conformance/inbox_twin.py      (Windows: named pipes)
+    python rust/conformance/inbox_twin.py --record DIR
+
+--record (golden.py): both twins are Python; the policy is a fixed one
+(written beside the steps) instead of a copy of the live policy; every step
+with the Python side's answer and deliveries goes to DIR/steps.jsonl, the
+pipe names' random tag and this script's pid made neutral.
 """
 import json
 import os
@@ -33,6 +39,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary, require_free, stop_tree  # noqa: E402
 from sessions_compare import first_difference  # noqa: E402
 from twin import env, get, masked, post  # noqa: E402
+import golden  # noqa: E402
+from golden import python_dispatcher, rec, recording  # noqa: E402
+
+# The policy a recording uses (the live one is this machine's own).
+RECORD_POLICY = {"enabled": True, "decision_format": "object", "defaults": {}}
 
 PY_PORT, RS_PORT = 8815, 8816
 IDLE = "aaaaaaaa-1111-4111-8111-111111111111"
@@ -103,7 +114,7 @@ def start(root):
                  LOCALAPPDATA=os.path.join(root, side + "-local"))
         state = os.path.join(root, side, "state.json")
         cmd = ([sys.executable, "-m", "imperatorium.dispatcher", "--port", str(port), "--state", state]
-               if side == "py" else
+               if side == "py" or recording() else
                [binary(), "serve", "--port", str(port), "--home", REPO, "--state", state])
         procs.append(subprocess.Popen(cmd, cwd=REPO, env=e,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
@@ -303,6 +314,7 @@ def main():
         print("inbox_twin: named pipes only (Windows); skipped")
         return 0
     root = tempfile.mkdtemp(prefix="imp-inbox-twin-")
+    golden.start_recording(tmp=root)
     # The policy, with auto-approval on so /api/mod/check decides.
     live_policy = os.path.join(os.path.dirname(REPO), "imperatorium", "policy.json")
     try:
@@ -310,6 +322,9 @@ def main():
             policy = json.load(fh)
     except (OSError, ValueError):
         policy = {}
+    if recording():
+        policy = dict(RECORD_POLICY)
+        golden.REC.file("policy.json", policy)
     policy["decision_format"] = "object"
     with open(os.path.join(root, "policy.json"), "w", encoding="utf-8") as fh:
         json.dump(policy, fh)
@@ -323,6 +338,16 @@ def main():
     record(root, GONE, "idle", gone, "twin-gone")
     record(root, LATE, "idle", pipes[LATE].path, "twin-late")
     record(root, BG, "busy", gone, "twin-bg", kind="background")
+    if recording():
+        # The made-up records, as the replay must write them (pid: the
+        # replaying process; startedAt: any).
+        folder = os.path.join(root, "claude", "sessions")
+        records = {}
+        for name in sorted(os.listdir(folder)):
+            with open(os.path.join(folder, name), encoding="utf-8") as fh:
+                records[name] = dict(json.load(fh), startedAt="<now ms>", pid="<pid>")
+        golden.REC.file("records.json", json.loads(
+            json.dumps(records).replace(tag, "<tag>")))
     procs = start(root)
     failures, sent = [], 0
 
@@ -339,6 +364,8 @@ def main():
             out.append((code, got, {k: v for k, v in delivered.items() if v}))
         sent += 1
         (ca, a, da), (cb, b, db) = out
+        rec("post", path=path, body=body, window=window, want=[ca, scrub(a)],
+            delivered={k: [x.decode("utf-8") for x in v] for k, v in da.items()})
         if (ca, scrub(a)) != (cb, scrub(b)):
             failures.append(("POST %s %r" % (path, body), "%r vs %r" % ((ca, a), (cb, b))))
         if da != db:
@@ -356,6 +383,7 @@ def main():
                        "notification_type": "permission_prompt", "message": "Claude needs permission"})
         rows = get(PY_PORT, "/api/sessions")["sessions"]
         seen = {r["sessionId"]: (r.get("status"), r.get("dispatchable"), r.get("attention")) for r in rows}
+        rec("sessions", path="/api/sessions", want={k: list(v) for k, v in sorted(seen.items())})
         print("sessions: %r" % seen)
         if len(seen) != 6:
             failures.append(("sessions", "expected the 6 made-up sessions, got %r" % seen))
@@ -393,12 +421,14 @@ def main():
         # Straight to each, not both(): a sweep may fire at any moment now,
         # and both() would count its delivery as the hook's.
         answers = [post(port, "/hook", late) for port in (PY_PORT, RS_PORT)]
+        rec("late hook", path="/hook", body=late, want=list(answers[0]))
         if answers[0] != answers[1]:
             failures.append(("POST /hook late", "%r vs %r" % tuple(answers)))
         swept, end = [], time.time() + 40
         while len(swept) < 2 and time.time() < end:
             swept += pipes[LATE].take(wait=1.0)
         print("sweep: %d deliveries to the late session" % len(swept))
+        rec("sweep", session=LATE, want=[x.decode("utf-8") for x in swept[:1]], within=40)
         if len(swept) != 2 or swept[0] != swept[1]:
             failures.append(("sweep", "expected the same prompt from each twin, got %r" % swept))
         time.sleep(1)
@@ -417,6 +447,7 @@ def main():
                 failures.append(("parks: " + name, "%r, expected %r" % (steps[name][1], expect)))
         if got[0][5][1] != (200, {"verdict": "allow", "decided_by": "deck"}):
             failures.append(("parks: bash", repr(got[0][5])))
+        rec("parks", want=scrub(got[0]))
         diff = first_difference(scrub(got[0]), scrub(got[1]), "parks")
         if diff:
             failures.append(("parks", diff))
@@ -434,6 +465,7 @@ def main():
         print("mod: limits from its usage %r" % sorted((got[0][-1][1].get("limits") or {})))
         if given[0] != 2:
             failures.append(("mod", "expected both prompts handed to the mod, got %d" % given[0]))
+        rec("mod", want=scrub(got[0]), given=given[0])
         diff = first_difference(scrub(got[0]), scrub(got[1]), "mod")
         if diff:
             failures.append(("mod", diff))
@@ -444,6 +476,7 @@ def main():
                     lines.append([scrub(json.loads(x)) for x in fh])
             except OSError:
                 lines.append(None)
+        rec("decisions.jsonl", want=lines[0])
         if lines[0] != lines[1] or not lines[0]:
             failures.append(("decisions.jsonl", "%r vs %r" % tuple(lines)))
 
@@ -454,6 +487,7 @@ def main():
             with open(os.path.join(root, side, "state.json"), encoding="utf-8") as fh:
                 state = json.load(fh)
             states.append(scrub({k: state.get(k) for k in ("queue", "events", "sessions")}))
+        rec("state.json", keys=["queue", "events", "sessions"], want=states[0])
         diff = first_difference(states[0], states[1], "state")
         if diff:
             failures.append(("state.json", diff))
@@ -462,6 +496,7 @@ def main():
         if not any(i.get("as_user") for i in q.get(WAITS, [])):
             failures.append(("as_user", "the window's prompt was not marked as the person's own"))
         qa, qb = scrub(get(PY_PORT, "/api/queue")), scrub(get(RS_PORT, "/api/queue"))
+        rec("get", path="/api/queue", want=qa)
         diff = first_difference(qa, qb, "/api/queue")
         if diff:
             failures.append(("/api/queue", diff))
@@ -478,6 +513,8 @@ def main():
     for what, diff in failures:
         print("DIFF %s\n     %s" % (what, diff))
     print("inbox_twin: %s" % ("identical" if not failures else "%d differences" % len(failures)))
+    if golden.REC is not None:
+        golden.REC.save(subst={tag: "<tag>", str(os.getpid()): "<pid>"})
     return 1 if failures else 0
 
 

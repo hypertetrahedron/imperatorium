@@ -12,6 +12,11 @@ Python runs with PYTHONUTF8=1: without it, Python reads hook stdin as cp1252
 and garbles non-ASCII text, a known bug the port fixes (see hooks.rs).
 
     python rust/conformance/hooks_blackbox.py
+    python rust/conformance/hooks_blackbox.py --record DIR
+
+--record runs the Python hooks only and writes each case (stdin, env,
+policy, the fake dispatcher's park answer) with what they did, paths made
+neutral (golden.py; tests/hooks_blackbox.rs replays them).
 """
 import json
 import os
@@ -25,8 +30,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary  # noqa: E402
+from golden import Places, record_dir, write_jsonl  # noqa: E402
 
 PY = sys.executable
+# The cases --record collects, in the order the tests run.
+RECORDING = None
 SCRIPTS = {"hook": "cc_hook.py", "statusline": "cc_statusline.py", "permission": "cc_permission.py"}
 
 
@@ -100,7 +108,7 @@ class Blackbox(unittest.TestCase):
                         record = json.loads(line)
                         record.pop("at", None)
                         audit.append(record)
-            return {"code": proc.returncode, "stdout": proc.stdout,
+            return {"state": state, "code": proc.returncode, "stdout": proc.stdout,
                     "requests": [(p, b) for p, _, b in self.server.seen],
                     "content_types": sorted({c for _, c, _ in self.server.seen}),
                     "audit": audit, "stderr": proc.stderr}
@@ -114,6 +122,18 @@ class Blackbox(unittest.TestCase):
             stdin = stdin.encode("utf-8")
         self.server.park = park
         py = self.run_one("python", which, stdin, env, policy)
+        if RECORDING is not None:
+            self.assertEqual(py["code"], 0, "python failed: %s" % py["stderr"][-400:])
+            places = Places(state=py["state"])
+            text = lambda b: places(b.decode("utf-8"))  # noqa: E731
+            RECORDING.append({
+                "test": self.id().rsplit(".", 1)[-1], "which": which, "stdin": text(stdin),
+                "env": places(env or {}), "policy": places(policy),
+                "park": [park[0], text(park[1])],
+                "want": {"code": py["code"], "stdout": text(py["stdout"]),
+                         "requests": [[p, text(b)] for p, b in py["requests"]],
+                         "content_types": py["content_types"], "audit": places(py["audit"])}})
+            return py
         rs = self.run_one("rust", which, stdin, env, policy)
         label = "%s %r" % (which, stdin[:120])
         self.assertEqual(py["code"], 0, "python failed: %s" % py["stderr"][-400:])
@@ -238,4 +258,13 @@ class Blackbox(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    folder = record_dir()
+    if folder:
+        i = sys.argv.index("--record")
+        del sys.argv[i:i + 2]
+        RECORDING = []
+        result = unittest.main(verbosity=1, exit=False).result
+        write_jsonl(os.path.join(folder, "cases.jsonl"), RECORDING)
+        print("recorded %d cases" % len(RECORDING))
+        sys.exit(0 if result.wasSuccessful() else 1)
     unittest.main(verbosity=2)

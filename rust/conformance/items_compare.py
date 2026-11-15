@@ -9,6 +9,12 @@ A session written to while it is compared is retried once, then reported
 as LIVE rather than as a difference.
 
     python rust/conformance/items_compare.py
+
+--record DIR [--corpus ROOT [--in-place]] [--now T]: Python only, over a
+corpus (default the synthetic one in tests/fixtures/corpus; ROOT holds
+projects/) with its mtimes pinned, written as goldens (golden.py,
+tests/corpus.rs). NEVER record the real ~/.claude into the repository: the
+full check copies it outside (see tests/golden/README.md).
 """
 import json
 import os
@@ -18,7 +24,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import REPO, binary  # noqa: E402
-from sessions_compare import first_difference, session_files, stamp  # noqa: E402
+from sessions_compare import attempt, first_difference, session_files, stamp  # noqa: E402
+from golden import corpus_setup, record_dir, write_jsonl  # noqa: E402
 
 os.chdir(REPO)
 os.environ.setdefault("IMPERATORIUM_BIN", binary())
@@ -41,7 +48,25 @@ def compare(sid):
     return out
 
 
+def record(folder):
+    """Python's to_items over the Agent SDK's reading (the reference), not
+    over the binary's chain as the comparison does."""
+    import claude_agent_sdk as sdk
+    _, places, _ = corpus_setup()
+    rows = []
+    for sid, _path in session_files():
+        def read(merge):
+            return conversation.to_items(conversation._messages(sdk, sid, None), limit=0, merge=merge)
+        rows.append(places({"id": sid, "plain": attempt(read, False), "merge": attempt(read, True)}))
+    write_jsonl(os.path.join(folder, "items.jsonl"), rows)
+    print("recorded %d sessions" % len(rows))
+    return 0
+
+
 def main():
+    folder = record_dir()
+    if folder:
+        return record(folder)
     t0 = time.time()
     total = items = 0
     live, failures = [], []

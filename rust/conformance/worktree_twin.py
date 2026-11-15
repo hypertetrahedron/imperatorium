@@ -11,6 +11,11 @@ Compared: every answer (paths made neutral), the event each records, and
 what is left in each repository - worktrees, branches, the main history.
 
     python rust/conformance/worktree_twin.py
+    python rust/conformance/worktree_twin.py --record DIR
+
+--record (golden.py): both twins are Python; each action (body as sent to
+proj-py, written with proj-<side>), the Python side's answer, what is left
+in the repository and the events go to DIR/steps.jsonl.
 """
 import json
 import os
@@ -24,6 +29,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import stop_tree  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
+import golden  # noqa: E402
+from golden import rec  # noqa: E402
+
+
+def sided(value):
+    return json.loads(json.dumps(value).replace("proj-py", "proj-<side>"))
 
 GIT_ENV = dict(os.environ, GIT_AUTHOR_NAME="twin", GIT_AUTHOR_EMAIL="twin@example.invalid",
                GIT_COMMITTER_NAME="twin", GIT_COMMITTER_EMAIL="twin@example.invalid",
@@ -104,6 +115,7 @@ def state(main):
 
 def main():
     root = tempfile.mkdtemp(prefix="imp-worktree-twin-")
+    golden.start_recording(tmp=root)
     mains = {"py": project(root, "proj-py"), "rs": project(root, "proj-rs")}
     procs = start(root, extra_config={"roots": [os.path.join(root, "projects")]},
                   extra_env={"GH_CONFIG_DIR": os.path.join(root, "gh"), "GH_TOKEN": "",
@@ -139,6 +151,10 @@ def main():
                                                  "action": "discard", "force": True}),
         ]
         for label, body in cases:
+            if body in ("dirty-main", "clean-main"):
+                rec("main checkout", label=label,
+                    action="write 'being edited in main\\n' to a.txt" if body == "dirty-main"
+                    else "git checkout -- a.txt")
             if body == "dirty-main":
                 for m in mains.values():
                     write(os.path.join(m, "a.txt"), "being edited in main\n")
@@ -155,12 +171,15 @@ def main():
                     text = text.replace(name, "proj-<side>")
                 got[side] = text
             steps.append((label, json.loads(got["py"])[1]))
+            rec("worktree", label=label, path="/api/worktree", body=sided(body("py")),
+                want=json.loads(got["py"]))
             if got["py"] != got["rs"]:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
         for label, answer in steps:
             print("  %-26s %s" % (label, answer.get("error") or "ok: %s %s" % (answer.get("action"), answer.get("branch"))))
         left = {side: state(m) for side, m in mains.items()}
         print("left: %r" % left["py"])
+        rec("left", want=sided(left["py"]))
         if json.dumps(left["py"]).replace("proj-py", "x") != json.dumps(left["rs"]).replace("proj-rs", "x"):
             failures.append(("what is left", "%r\n  vs %r" % (left["py"], left["rs"])))
         if git(os.path.join(root, "origins", "proj-py.git"), "branch", "--list", "agent-pr").strip() != \
@@ -172,6 +191,9 @@ def main():
                 events.append([(e.get("kind"), e.get("summary")) for e in json.load(fh).get("events") or []
                                if str(e.get("kind")).startswith("worktree_")])
         print("events: %r" % events[0])
+        rec("pushed", note="agent-pr in the bare origin",
+            want=git(os.path.join(root, "origins", "proj-py.git"), "branch", "--list", "agent-pr").strip())
+        rec("events", note="(kind, summary) of worktree_* events", want=events[0])
         if events[0] != events[1]:
             failures.append(("events", "%r vs %r" % tuple(events)))
     finally:
@@ -185,6 +207,8 @@ def main():
         remove(root)
     for what, diff in failures:
         print("DIFF %s\n     %s" % (what, diff))
+    if golden.REC is not None:
+        golden.REC.save()
     print("worktree_twin: %d actions on each; %s" % (
         len(steps), "identical" if not failures else "%d differences" % len(failures)))
     return 1 if failures else 0

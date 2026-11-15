@@ -2,6 +2,8 @@
 binary, over a corpus of commands and awkward text.
 
     python rust/conformance/slash_compare.py
+    python rust/conformance/slash_compare.py --record DIR   (Python only;
+        tests/slash_compare.rs)
 """
 import json
 import os
@@ -10,6 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import binary  # noqa: E402
+from golden import record_dir, write_jsonl  # noqa: E402
 from imperatorium import slash  # noqa: E402
 
 COMMANDS = sorted(slash.MENU | slash.MENU_BARE | slash.EXIT) + [
@@ -37,6 +40,12 @@ def python_answer(text):
 
 def main():
     want = [python_answer(t) for t in TEXTS]
+    folder = record_dir()
+    if folder:
+        write_jsonl(os.path.join(folder, "cases.jsonl"),
+                    [{"text": t, "want": w} for t, w in zip(TEXTS, want)])
+        print("recorded %d texts" % len(TEXTS))
+        return 0
     lines = "".join(json.dumps({"text": t}) + "\n" for t in TEXTS)
     out = subprocess.run([binary(), "slash-check"], input=lines.encode("utf-8"),
                          capture_output=True, check=True).stdout.decode("utf-8").splitlines()

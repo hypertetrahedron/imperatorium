@@ -11,6 +11,11 @@ event each records, and what is left in each repository - worktrees, their
 branches, the base each noted, whether a worktree carries feat's work.
 
     python rust/conformance/bg_worktree_twin.py      (Windows)
+    python rust/conformance/bg_worktree_twin.py --record DIR
+
+--record (golden.py): both twins are Python; each dispatch (the py side's
+body, paths neutral), the Python side's answer, what claude --bg was run
+with, the events and what is left go to DIR/steps.jsonl.
 """
 import json
 import os
@@ -23,6 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import RUST, stand_in_path, stop_tree, stop_under  # noqa: E402
 from notify_twin import PY_PORT, RS_PORT, start  # noqa: E402
 from twin import post  # noqa: E402
+import golden  # noqa: E402
+from golden import rec  # noqa: E402
 
 FAKE = os.path.join(RUST, "target", "release", "fakecli.exe")
 SIDES = ("py", "rs")
@@ -77,6 +84,7 @@ def main():
     if not os.path.exists(FAKE):
         raise SystemExit("build it first: cargo build --release (fakecli)")
     root = tempfile.mkdtemp(prefix="imp-bgwt-twin-")
+    golden.start_recording(tmp=root)
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir)
     shutil.copy(FAKE, os.path.join(bin_dir, "claude.exe"))
@@ -124,6 +132,8 @@ def main():
                     else answer
                 got[side] = neutral(json.dumps([code, answer], sort_keys=True), side)
             steps.append((label, json.loads(got["py"])[1]))
+            rec("dispatch", label=label, path="/api/dispatch",
+                body=json.loads(neutral(json.dumps(body("py")), "py")), want=json.loads(got["py"]))
             if got["py"] != got["rs"]:
                 failures.append((label, "%s\n  vs %s" % (got["py"], got["rs"])))
         launched = {}
@@ -132,6 +142,8 @@ def main():
                 calls = [json.loads(x) for x in fh if x.strip()]
             launched[side] = [neutral(json.dumps({"args": c.get("args"), "cwd": c.get("cwd")}), side)
                               for c in calls if c.get("prog") == "claude"]
+        rec("launched", note="claude calls in fakecli's log: args and cwd",
+            want=[json.loads(x) for x in launched["py"]])
         if launched["py"] != launched["rs"]:
             failures.append(("claude --bg", "%s\n  vs %s" % (launched["py"], launched["rs"])))
         events = {}
@@ -141,9 +153,12 @@ def main():
                 evs = [e for e in json.load(fh).get("events", []) if e.get("kind") == "dispatch_background"]
             events[side] = [neutral(json.dumps({k: v for k, v in e.items() if k not in ("at", "bg_id")},
                                                sort_keys=True), side) for e in evs]
+        rec("events", note="dispatch_background events without at/bg_id",
+            want=[json.loads(x) for x in events["py"]])
         if events["py"] != events["rs"]:
             failures.append(("events", "%s\n  vs %s" % (events["py"], events["rs"])))
         state = {side: left(repos[side][0]) for side in SIDES}
+        rec("left", want=json.loads(neutral(json.dumps(state["py"]), "py")))
         if state["py"] != state["rs"]:
             failures.append(("left", "%s\n  vs %s" % (state["py"], state["rs"])))
     finally:
@@ -164,6 +179,8 @@ def main():
     print("bg_worktree_twin: %d dispatches on each; %s" % (
         len(cases), "%d differences" % len(failures) if failures else "identical"))
     shutil.rmtree(root, ignore_errors=True)
+    if golden.REC is not None:
+        golden.REC.save(subst={SID["py"]: "<sid>"})
     return 1 if failures else 0
 
 

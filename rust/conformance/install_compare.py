@@ -2,6 +2,11 @@
 `install-hooks` writes it, from the same starting files, compared byte for
 byte (line endings aside) - install, re-install, and uninstall, with and without the extras.
 Everything happens in a temporary folder; ~/.claude is never touched.
+
+    python rust/conformance/install_compare.py --record DIR
+
+--record runs install.py only, with the binary's path a stand-in file in the
+temporary folder, and writes each case's settings.json (tests/install_compare.rs).
 """
 import json
 import os
@@ -13,6 +18,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from twin import binary  # noqa: E402
+from golden import Places, record_dir, write_jsonl  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(HERE))
 INSTALL = os.path.join(ROOT, "hooks", "install.py")
@@ -52,12 +58,20 @@ def main():
     with open(os.path.join(home, "policy.json"), "w") as fh:
         json.dump({"park": {"enabled": True, "wait_seconds": 40, "background_wait_seconds": 300}}, fh)
     native = binary()
+    folder = record_dir()
+    recorded = []
+    if folder:
+        # install.py only checks that the binary is a file: a stand-in, so
+        # the recorded path does not depend on which build ran.
+        native = os.path.join(tmp, "bin", "imperatorium.exe")
+        os.makedirs(os.path.dirname(native))
+        open(native, "wb").close()
     failures = n = 0
     for name, start in STARTS.items():
         for variant in VARIANTS:
             for twice in (False, True):
                 files = {}
-                for who in ("python", "binary"):
+                for who in (("python",) if folder else ("python", "binary")):
                     path = os.path.join(tmp, "%s.json" % who)
                     if os.path.exists(path):
                         os.remove(path)
@@ -86,6 +100,13 @@ def main():
                     files[who] = (open(path, "rb").read().replace(b"\r\n", b"\n")
                                   if os.path.exists(path) else b"(none)")
                 n += 1
+                if folder:
+                    recorded.append(Places(tmp=tmp)({
+                        "start_name": name, "start": start, "variant": variant, "twice": twice,
+                        # The starting file's exact text (json.dump, indent=2).
+                        "start_text": None if start is None else json.dumps(start, indent=2),
+                        "want": files["python"].decode("utf-8")}))
+                    continue
                 if files["python"] != files["binary"]:
                     failures += 1
                     print("DIFFER  %-22s %-45s %s" % (name, " ".join(variant), "twice" if twice else ""))
@@ -97,6 +118,10 @@ def main():
                     else:
                         print("   lengths %d vs %d" % (len(a), len(b)))
     shutil.rmtree(tmp, ignore_errors=True)
+    if folder:
+        write_jsonl(os.path.join(folder, "cases.jsonl"), recorded)
+        print("recorded %d cases" % n)
+        return 0
     print("install_compare: %d cases, %s" % (n, "identical" if not failures else "%d differ" % failures))
     return 1 if failures else 0
 
