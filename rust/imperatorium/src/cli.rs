@@ -894,6 +894,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("Setup", "check", "", "Check prerequisites and what is installed; changes nothing"),
     ("Setup", "update", "[--check] [--channel stable|preview] [--from URL]", "Self-update from the project's releases, SHA-256 checked"),
     ("Setup", "test", "[FILTER ...]", "Run `cargo test` in a checkout (needs one: the folder holding rust/)"),
+    ("Setup", "release-package", "--version V --out DIR [--channel stable|preview] [--notes FILE] [--scripts DIR]", "Lay out a release folder: assets by target, SHA256SUMS, manifest.json"),
     ("Other machines", "remote", "add|remove|check [HOST] [--label L] [--no-tunnel] [--purge] ...", "Onboard, remove or check a machine reached over SSH"),
     ("Other machines", "remote-probe", "[HOST ...]", "Poll remote hosts once and print their sessions"),
     ("Window", "open", "", "Raise the Imperatorium window, or open it"),
