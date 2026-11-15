@@ -545,7 +545,7 @@ impl Shared {
     pub(super) fn api_sessions(&self) -> String {
         // The Stream Deck polls once a second; a snapshot STREAM_EVERY old
         // is as good for a key colour and saves a fork.
-        self.public_snap(STREAM_EVERY).data.clone()
+        self.public_snap(stream_every()).data.clone()
     }
 
     /// GET /api/stream: server-sent events, the session list whenever it
@@ -588,13 +588,13 @@ impl Shared {
         let (mut quiet, mut looked) = (Self::now(), 0.0);
         let mut last: Option<Arc<PublicSnap>> = None;
         loop {
-            let gap = STREAM_MIN_GAP - (Self::now() - looked);
+            let gap = stream_min_gap() - (Self::now() - looked);
             if gap > 0.0 {
                 std::thread::sleep(std::time::Duration::from_secs_f64(gap));
             }
             looked = Self::now();
             let seen = self.generation();
-            let snap = self.public_snap(STREAM_EVERY);
+            let snap = self.public_snap(stream_every());
             let moved = last
                 .as_ref()
                 .is_none_or(|l| !Arc::ptr_eq(l, &snap) && l.same != snap.same);
@@ -604,7 +604,7 @@ impl Shared {
                 last = Some(snap);
                 quiet = Self::now();
                 r
-            } else if Self::now() - quiet >= STREAM_KEEPALIVE {
+            } else if Self::now() - quiet >= stream_keepalive() {
                 quiet = Self::now();
                 out.write_all(b": keepalive\n\n").and_then(|_| out.flush())
             } else {
@@ -613,7 +613,7 @@ impl Shared {
             if sent.is_err() {
                 return; // the page went away
             }
-            self.wait_change(seen, STREAM_EVERY);
+            self.wait_change(seen, stream_every());
         }
     }
 
@@ -623,7 +623,6 @@ impl Shared {
     /// poll, minus the requests, the parsing and the redraws when nothing
     /// has moved.
     fn stream_matrix(&self, out: &mut dyn std::io::Write) {
-        const MATRIX_EVERY: f64 = 1.5;
         let (mut last, mut quiet) = (String::new(), Self::now());
         loop {
             let mut body = self.api_matrix();
@@ -635,7 +634,7 @@ impl Shared {
                 last = same;
                 quiet = Self::now();
                 write!(out, "event: matrix\ndata: {body}\n\n").and_then(|_| out.flush())
-            } else if Self::now() - quiet >= STREAM_KEEPALIVE {
+            } else if Self::now() - quiet >= stream_keepalive() {
                 quiet = Self::now();
                 out.write_all(b": keepalive\n\n").and_then(|_| out.flush())
             } else {
@@ -644,7 +643,7 @@ impl Shared {
             if sent.is_err() {
                 return;
             }
-            std::thread::sleep(std::time::Duration::from_secs_f64(MATRIX_EVERY));
+            std::thread::sleep(std::time::Duration::from_secs_f64(matrix_every()));
         }
     }
 
@@ -680,11 +679,12 @@ struct PublicSnap {
     same: String,
 }
 
-const STREAM_EVERY: f64 = 5.0;
+fn stream_every() -> f64 { crate::timing::t().stream_every }
 
-const STREAM_MIN_GAP: f64 = 2.0;
+fn stream_min_gap() -> f64 { crate::timing::t().stream_min_gap }
 
-const STREAM_KEEPALIVE: f64 = 15.0;
+fn stream_keepalive() -> f64 { crate::timing::t().stream_keepalive }
+fn matrix_every() -> f64 { crate::timing::t().matrix_every }
 
 /// matrix.active: whether a session gets a tile - its process is up and it
 /// has not ended.

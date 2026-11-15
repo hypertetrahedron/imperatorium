@@ -72,7 +72,7 @@ impl Pending {
         } else {
             wait.clamp(0.0, MAX_HOLD)
         };
-        let deadline = Instant::now() + Duration::from_secs_f64(hold);
+        let deadline = Instant::now() + Duration::from_secs_f64(crate::timing::secs(hold));
         loop {
             let decided = items.get(&id).is_some_and(|i| !i["verdict"].is_null());
             let left = deadline.saturating_duration_since(Instant::now());

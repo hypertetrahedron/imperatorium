@@ -148,8 +148,6 @@ pub struct Checker {
     state: std::sync::Mutex<Value>,
 }
 
-const FIRST_CHECK: Duration = Duration::from_secs(180);
-const EVERY: Duration = Duration::from_secs(24 * 3600);
 
 impl Default for Checker {
     fn default() -> Self {
@@ -212,13 +210,13 @@ impl Checker {
     pub fn start(self: &std::sync::Arc<Self>, cfg: impl Fn() -> Option<Value> + Send + 'static) {
         let me = std::sync::Arc::clone(self);
         std::thread::spawn(move || {
-            std::thread::sleep(FIRST_CHECK);
+            std::thread::sleep(Duration::from_secs_f64(crate::timing::t().update_first_check));
             loop {
                 let Some(c) = cfg() else { return };
                 if crate::pyish::truthy(Some(&crate::settings::value(&c, "updates.check"))) {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| me.check(&c)));
                 }
-                std::thread::sleep(EVERY);
+                std::thread::sleep(Duration::from_secs_f64(crate::timing::t().update_every));
             }
         });
     }

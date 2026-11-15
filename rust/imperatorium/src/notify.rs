@@ -153,7 +153,7 @@ impl Notifier {
             let (name, reason, since) = (name.clone(), reason.clone(), since.clone());
             std::thread::spawn(move || {
                 if delay > 0.0 && delay.is_finite() {
-                    std::thread::sleep(std::time::Duration::from_secs_f64(delay));
+                    std::thread::sleep(std::time::Duration::from_secs_f64(crate::timing::secs(delay)));
                 }
                 let now = owner.channels();
                 let on = channel(&now, ch).is_some_and(|c| c.2);

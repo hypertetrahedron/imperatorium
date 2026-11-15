@@ -570,3 +570,23 @@ Always set `IMPERATORIUM_ENDPOINT` and `IMPERATORIUM_PARK_ENDPOINT` to a fake
 server and `LOCALAPPDATA` to a temp folder, as the conformance scripts do. The
 park default is the live dispatcher: a manual run with parking enabled shows up
 as an Allow/Deny banner in the real window.
+
+## Testing with fast timers
+
+`IMPERATORIUM_TEST_TIME_SCALE` (rust/imperatorium/src/timing.rs) multiplies
+the dispatcher's real-time waits, so a test need not sit out production
+intervals. It is read once, at first use; unset, empty, zero, negative or
+unparsable means 1.0, and at 1.0 every wait is exactly the production value
+(`timing::tests::defaults_are_unchanged`). `0.05` turns the 15 s queue sweep
+into 0.75 s and the 60 s idle timer after a Stop into 3 s.
+
+Scaled: the queue sweep (15 s), IDLE_AFTER (60 s), the notifier's per-channel
+`delay`, a parked permission or question's hold (the `wait` that policy.json's
+`wait_seconds` / `background_wait_seconds` / `question_wait_seconds` produce;
+clamped to 600 s first, then scaled), the window streams' intervals (5 s look,
+2 s minimum gap, 15 s keepalive; the matrix's 1.5 s), the update checker's
+3-minute first delay and daily repeat, the PR tracker (5 s pass, 120 s
+refresh), and the remote fleet (20 s poll, 60 s / 5 s backoff starts, 15 min
+backoff cap, 30 s channel retry). Not scaled: timeouts that bound real work
+(SSH/HTTP calls, the voice worker's reply timeout) and the voice
+`idle_unload` setting.

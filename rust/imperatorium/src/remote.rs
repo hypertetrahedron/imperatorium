@@ -48,12 +48,12 @@ pub const DEFAULT_REMOTE_HOOK_PORT: u16 = 8792;
 pub const FIRST_TUNNEL_PORT: u16 = 8793;
 const CONNECT_TIMEOUT: u32 = 8;
 const CALL_TIMEOUT: f64 = 25.0;
-pub const POLL_EVERY: f64 = 20.0;
-const BACKOFF_START: f64 = 60.0;
-const BACKOFF_MAX: f64 = 15.0 * 60.0;
 pub const READ_TIMEOUT: f64 = 15.0;
 const STATS_TIMEOUT: f64 = 20.0;
-const CHANNEL_RETRY: f64 = 30.0;
+// The waits below are timing::t() (scaled by IMPERATORIUM_TEST_TIME_SCALE).
+pub fn poll_every() -> f64 {
+    crate::timing::t().remote_poll_every
+}
 const FILES_MARK: &str = "--- imperatorium session files ---";
 /// Where the binary lives on a host. Written in double quotes so the
 /// host's shell expands $HOME.
@@ -754,7 +754,7 @@ impl Channel {
         if st.live.is_none() {
             // A host that just failed is not re-dialled on every poll.
             if let Some(e) = &st.error {
-                if now() - st.failed_at < CHANNEL_RETRY {
+                if now() - st.failed_at < crate::timing::t().remote_channel_retry {
                     return Err(e.clone());
                 }
             }
@@ -968,7 +968,7 @@ impl Fleet {
         let mut st = self.state.lk();
         let rec = st.get(name).cloned().unwrap_or_default();
         let fails = rec.get("fails").and_then(Value::as_u64).unwrap_or(0) + 1;
-        let delay = (BACKOFF_START * 2f64.powi(fails as i32 - 1)).min(BACKOFF_MAX);
+        let delay = (crate::timing::t().remote_backoff_start * 2f64.powi(fails as i32 - 1)).min(crate::timing::t().remote_backoff_max);
         let out = json!({"fails": fails, "next_attempt": now() + delay,
                          "error": take(error, 200), "parked_for": delay,
                          "polled_at": rec.get("polled_at").cloned().unwrap_or(Value::Null)});
@@ -1047,7 +1047,7 @@ impl Fleet {
                 .get(&p.host.name)
                 .and_then(|r| r.get("next_attempt").and_then(Value::as_f64))
                 .unwrap_or(0.0);
-            let wait = if parked > 0.0 { (parked - now()).max(1.0) } else { self.every };
+            let wait = if parked > 0.0 { (parked - now()).max(crate::timing::secs(1.0)) } else { self.every };
             let (lock, cv) = &*p.wake;
             let woken = lock.lk();
             let (mut woken, _) = cv
@@ -1161,7 +1161,7 @@ impl Tunnel {
     fn down(&self, reason: &str) -> f64 {
         let mut st = self.state.lk();
         let fails = st.get("fails").and_then(Value::as_u64).unwrap_or(0) + 1;
-        let delay = (5.0 * 2f64.powi(fails as i32 - 1)).min(BACKOFF_MAX);
+        let delay = (crate::timing::t().remote_relay_backoff_start * 2f64.powi(fails as i32 - 1)).min(crate::timing::t().remote_backoff_max);
         st.insert("up".into(), json!(false));
         st.insert("since".into(), Value::Null);
         st.insert("fails".into(), json!(fails));
@@ -1198,7 +1198,7 @@ impl Tunnel {
                 Ok(c) => c,
                 Err(e) => {
                     self.down(&format!("{program} could not run: {e}"));
-                    std::thread::sleep(Duration::from_secs_f64(BACKOFF_START));
+                    std::thread::sleep(Duration::from_secs_f64(crate::timing::t().remote_backoff_start));
                     continue;
                 }
             };
@@ -1253,7 +1253,7 @@ impl Tunnel {
                 Ok(c) => c,
                 Err(e) => {
                     self.down(&format!("ssh could not run: {e}"));
-                    std::thread::sleep(Duration::from_secs_f64(BACKOFF_START));
+                    std::thread::sleep(Duration::from_secs_f64(crate::timing::t().remote_backoff_start));
                     continue;
                 }
             };
@@ -1314,7 +1314,7 @@ pub fn probe_main(args: &[String], home: Option<&str>) -> i32 {
         eprintln!("no hosts configured (see the `remote` block of config.json)");
         return 1;
     }
-    let fleet = Fleet::new(hosts, POLL_EVERY);
+    let fleet = Fleet::new(hosts, poll_every());
     let mut total = 0;
     for p in &fleet.each {
         fleet.poll_host(p);

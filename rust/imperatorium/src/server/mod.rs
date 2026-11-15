@@ -245,7 +245,7 @@ impl Shared {
             fleet: {
                 let hosts = crate::remote::load_hosts(&load_config(home));
                 (has_store && !hosts.is_empty())
-                    .then(|| crate::remote::Fleet::new(hosts, crate::remote::POLL_EVERY))
+                    .then(|| crate::remote::Fleet::new(hosts, crate::remote::poll_every()))
             },
             tunnels: Mutex::new(HashMap::new()),
         }
@@ -421,7 +421,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
             // panic is reported once, not every 15 s.
             let mut seen = std::collections::HashSet::new();
             loop {
-                std::thread::sleep(std::time::Duration::from_secs(15));
+                std::thread::sleep(std::time::Duration::from_secs_f64(crate::timing::t().queue_sweep));
                 let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     sweeper.sweep_queue()
                 }));

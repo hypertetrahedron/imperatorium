@@ -13,7 +13,6 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 const FIELDS: &str = "number,state,url,title,isDraft,reviewDecision,statusCheckRollup,headRefName";
-pub const REFRESH: f64 = 120.0;
 
 /// prs.checks_state: one word for a statusCheckRollup.
 pub fn checks_state(rollup: Option<&Value>) -> &'static str {
@@ -128,7 +127,7 @@ impl Tracker {
         let me = std::sync::Arc::clone(self);
         std::thread::spawn(move || loop {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| me.poll_once()));
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs_f64(crate::timing::t().pr_pass));
         });
     }
 
@@ -138,7 +137,7 @@ impl Tracker {
         let t = now();
         let wanted: Vec<String> = {
             let mut inner = self.inner.lk();
-            inner.wanted.retain(|_, asked| t - *asked <= 10.0 * REFRESH);
+            inner.wanted.retain(|_, asked| t - *asked <= 10.0 * crate::timing::t().pr_refresh);
             inner.wanted.keys().cloned().collect()
         };
         for cwd in wanted {
@@ -151,7 +150,7 @@ impl Tracker {
             {
                 let inner = self.inner.lk();
                 if let Some(hit) = inner.cache.get(&key) {
-                    if hit.branch == branch && t - hit.at < REFRESH {
+                    if hit.branch == branch && t - hit.at < crate::timing::t().pr_refresh {
                         continue;
                     }
                 }

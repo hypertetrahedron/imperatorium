@@ -201,7 +201,7 @@ impl Shared {
                         let (k, at) = (key.clone(), stop_at);
                         let (h, s) = (host.map(str::to_string), sid.clone());
                         self.timer.after(
-                            std::time::Duration::from_secs_f64(IDLE_AFTER),
+                            std::time::Duration::from_secs_f64(crate::timing::t().idle_after),
                             move || {
                                 me.idle_check(&k, &at, h.as_deref(), &s);
                             },
@@ -475,9 +475,6 @@ fn tail_lines(path: &std::path::Path, limit: usize) -> Option<String> {
     }
     String::from_utf8(buf).ok()
 }
-
-/// dispatcher.IDLE_AFTER: how long after Stop the idle check looks.
-const IDLE_AFTER: f64 = 60.0;
 
 /// dispatcher.start_tunnels: a hook-only listener and a reverse tunnel for
 /// each host that asks. Run after the main port is bound, so a second
