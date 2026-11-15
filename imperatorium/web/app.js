@@ -75,7 +75,7 @@ const WT_ICON = `<svg class="app" viewBox="0 0 11 13" aria-label="worktree"><tit
 // Pure: the prompt cache's countdown for a tile, "-4" minutes until it
 // expires. A closed tile shows it only in the last CACHE_SOON seconds, when
 // it is worth acting on; `all` (the open tile) shows it whenever it is warm.
-// Nothing once it has expired - the cold-cache badge says that instead.
+// Nothing once it has expired: the chat's cold-cache button says that.
 // A session that scheduled its own next turn (ScheduleWakeup, CronCreate)
 // says when, on every tile: it is idle but not waiting for you.
 const CACHE_SOON = 600;
@@ -133,8 +133,7 @@ function tileSignals(s, now, open){
   const u = s.usage || {}, out = [];
   if (isUnread(s)) out.push(`<span class="badge new" title="finished a turn since you last looked at it">new</span>`);
   out.push(workHtml(s.work, now, "badge work", open));
-  heavyWarnings(s, now).filter(h => h.kind === "cold").forEach(h =>
-    out.push(`<span class="badge heavy" title="${esc(h.text)}">${esc(h.short)}</span>`));
+  // No cold-cache badge: the chat says that, with the way out (2026-11-14).
   if (!open && u.context_pct >= CTX_HI)
     out.push(`<span class="badge ctx-hi" title="context used">ctx ${Math.round(u.context_pct)}%</span>`);
   // Queued here, and handed to the session's mod but not yet started.
@@ -2270,13 +2269,11 @@ function taskRow(t, now, sub, running){
     esc(t.label || t.id)}</span>${status}${live ? "<span class=live></span>" : ""}<span class=a>${
     esc(taskWhen(t, now))}</span></div>`;
 }
-function drawTileTasks(){
-  const box = document.querySelector("#sessions .s.on .tk");
-  if (!box) return;
-  const s = current(), now = Date.now() / 1000;
-  const l = taskList(s, procFor === selected ? procTasks : []);
-  let items = l.running.map(t => taskRow(t, now, false, true)).join("") ||
-    `<div class="tki static">nothing running</div>`;
+// Pure: the rows under the tile's Tasks header for taskList's `l`. Nothing
+// running says so in the header ("Tasks · none running"), not again in a row
+// beneath it, so with nothing else to list this is "".
+function taskItems(l, now){
+  let items = l.running.map(t => taskRow(t, now, false, true)).join("");
   if (l.idle.length)
     items += `<div class="tki grp" data-idle-toggle title="teammates waiting for a message">` +
       `<span class=ar>${idleOpen ? "&#9662;" : "&#9656;"}</span><span class=l>Idle Agents (${l.idle.length})</span></div>` +
@@ -2285,7 +2282,14 @@ function drawTileTasks(){
     items += `<div class="tki grp" data-done-toggle title="tasks that ended in the last half hour">` +
       `<span class=ar>${doneOpen ? "&#9662;" : "&#9656;"}</span><span class=l>Recently completed (${l.done.length})</span></div>` +
       (doneOpen ? l.done.map(t => taskRow(t, now, true)).join("") : "");
-  items += l.extra.map(t => taskRow(t, now)).join("");
+  return items + l.extra.map(t => taskRow(t, now)).join("");
+}
+function drawTileTasks(){
+  const box = document.querySelector("#sessions .s.on .tk");
+  if (!box) return;
+  const s = current(), now = Date.now() / 1000;
+  const l = taskList(s, procFor === selected ? procTasks : []);
+  const items = taskItems(l, now);
   const html = `<button type=button class=tkh data-tasks-toggle aria-expanded="${tasksOpen}">` +
     `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running))}${
       l.extra.some(t => t.kind === "hooks") ? ` <span class="st bad">hook errors</span>` : ""}</button><div class=tkl>${items}</div>`;
@@ -2713,7 +2717,8 @@ function openJump(show){
 
 // -- heavy sessions ------------------------------------------------------------
 // A full context, or one behind an expired prompt cache, makes the next
-// prompt expensive: said on the tile and above the prompt box. How large a
+// prompt expensive: a full context is said above the prompt box, a cold
+// cache in the chat (coldHtml), neither on the tile. How large a
 // context the cold cache is said for is a setting (chat.cold_cache_tokens),
 // carried on the row as work.cold_tokens; 0 says it for any.
 const CTX_WARN = 85;

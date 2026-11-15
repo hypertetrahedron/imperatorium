@@ -42,6 +42,8 @@ const KEEP: &[&str] = &[
     "origin",
     "attachment",
     "subtype",
+    // When each entry was written: the chat's View > Display Times.
+    "timestamp",
 ];
 
 pub fn valid_uuid(s: &str) -> bool {
@@ -714,6 +716,24 @@ mod tests {
         assert!(valid_uuid("0D4F1C2A-1B2C-4D5E-8F90-A1B2C3D4E5F6"));
         assert!(!valid_uuid("0d4f1c2a-1b2c-4d5e-8f90-a1b2c3d4e5f"));
         assert!(!valid_uuid("../../etc/passwd-0000-0000-0000-000000"));
+    }
+
+    #[test]
+    fn the_chain_keeps_when_each_entry_was_written() {
+        // 2026-11-15: Display Times showed nothing because the chain cut
+        // `timestamp` off before the conversation could read it.
+        let entries = vec![
+            e(json!({"type": "user", "uuid": "a", "timestamp": "2026-11-15T16:00:00.000Z",
+                     "message": {"role": "user", "content": "go"}})),
+            e(json!({"type": "assistant", "uuid": "b", "parentUuid": "a",
+                     "timestamp": "2026-11-15T16:10:00.000Z",
+                     "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]}})),
+        ];
+        let chain = chain_values(&entries);
+        assert_eq!(chain[1]["timestamp"], "2026-11-15T16:10:00.000Z");
+        let items = crate::conversation::to_items(&crate::conversation::messages(&chain), 0, true);
+        assert_eq!(items[0]["blocks"][0]["at"], "2026-11-15T16:00:00.000Z");
+        assert_eq!(items[1]["blocks"][0]["at"], "2026-11-15T16:10:00.000Z");
     }
 
     #[test]

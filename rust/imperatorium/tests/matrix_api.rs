@@ -135,6 +135,56 @@ fn a_window_waiting_after_its_reset_counts_from_the_reset() {
 }
 
 #[test]
+fn a_verified_ultra_account_counts_only_its_week() {
+    // 2026-11-15: no five-hour window on a verified Ultra account, so no
+    // five-hour spend line either; its readings carry only the week.
+    let (rig, _home) = rig_on(Some("claude_ultra"), json!({}));
+    let t = now();
+    history(&rig, t);
+    let (code, _) = rig.d.post(
+        "/hook",
+        &json!({"hook_event_name": "imperatorium_statusline", "session_id": SID,
+                "rate_limits": {"seven_day": {"used_percentage": 12, "resets_at": t + 86400.0}}}),
+    );
+    assert_eq!(code, 200);
+    let (_, usage) = rig.d.get("/api/usage");
+    let names: Vec<&str> = usage["spend"]["global"]["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["seven_day"], "{usage}");
+    assert!(usage["limits"].get("five_hour").is_none(), "{usage}");
+    approx(&window(&usage, "seven_day")["since"], t + 86400.0 - 7.0 * 86400.0, 1.0);
+}
+
+#[test]
+fn a_spend_limit_carries_its_dollars_to_the_meter() {
+    // An Enterprise seat behind a Claude apps gateway: $500 a month.
+    let (rig, _home) = rig_on(Some("claude_enterprise"), json!({}));
+    let t = now();
+    let (code, _) = rig.d.post(
+        "/hook",
+        &json!({"hook_event_name": "imperatorium_statusline", "session_id": SID,
+                "rate_limits": {"spend_limit": {"used_percentage": 62.8, "resets_at": t + 86400.0,
+                                                "used_usd": 314.12, "limit_usd": 500, "period": "monthly"}}}),
+    );
+    assert_eq!(code, 200);
+    let (_, usage) = rig.d.get("/api/usage");
+    let w = &usage["limits"]["spend_limit"];
+    assert_eq!((w["used_usd"].clone(), w["limit_usd"].clone(), w["period"].clone()),
+               (json!(314.12), json!(500.0), json!("monthly")), "{usage}");
+    let names: Vec<&str> = usage["spend"]["global"]["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["month"], "{usage}");
+}
+
+#[test]
 fn a_closed_session_counts_globally_but_not_as_current() {
     let (rig, _home) = rig_on(Some("claude_max"), json!({}));
     history(&rig, now());

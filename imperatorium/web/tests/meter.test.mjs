@@ -182,3 +182,48 @@ describe("SpendShown", () => {
     assert.deepEqual([...CSS].filter((c) => c.charCodeAt(0) < 32 && c !== "\n" && c !== "\t"), []);
   });
 });
+
+describe("MetersThatApply", () => {
+  /** 2026-11-15 (user request): only the windows the account has, and a
+   *  Remaining Meter for a fixed allocation such as an Enterprise seat's $500. */
+  const runJs = (u) => evalJs(SHARED + `\nprocess.stdout.write(meterHtml(${j(u)}));`);
+  const soon = () => Math.floor(Date.now() / 1000) + 86400;
+
+  it("a verified ultra account shows only its weekly meter", () => {
+    const got = runJs({ limits: { seven_day: { used: 30, resets_at: soon() } } });
+    assert.equal(count(got, 'class="row"'), 1);
+    assertIn("<span>7d</span>", got);
+    assertNotIn("<span>5h</span>", got);
+    assertNotIn('class="row remain"', got);
+  });
+
+  it("a spend limit with dollars shows what is left", () => {
+    const got = runJs({ limits: { spend_limit: { used: 62.8, resets_at: soon(),
+                                                 used_usd: 314.12, limit_usd: 500, period: "monthly" } },
+                        spend: { global: { windows: [{ name: "month", total_tokens: 2e6, cost_usd: 10 }] } } });
+    assertIn("<span>spend</span>", got);
+    assertIn('<span class="pct">63%</span>', got);
+    const left = got.slice(got.indexOf('class="row remain"'));
+    assertIn("<span>left</span>", left);
+    assertIn('style="width:37.2', left);
+    assertIn('<span class="pct">$186</span>', left);
+    assertIn("$186 of $500 left (a month)", left);
+    assertIn("$314 used (63%)", left);
+    assertIn("≈37M tokens at this machine's recent mix (200k per $)", left);
+    assertNotIn("<span>5h</span>", got);
+  });
+
+  it("before the dollars come the remaining meter says the percentage", () => {
+    const got = runJs({ limits: { spend_limit: { used: 90, resets_at: soon() } } });
+    const left = got.slice(got.indexOf('class="row remain"'));
+    assertIn('<span class="pct">10%</span>', left);
+    assertIn('class="hi"', left);
+    assertIn("10% left", left);
+    assertNotIn("tokens at this machine", left);
+  });
+
+  it("a spend limit that just reset waits without a remaining meter", () => {
+    const got = runJs({ limits: { spend_limit: { used: 0, waiting: true, reset_at: 5, resets_at: null } } });
+    assertNotIn('class="row remain"', got);
+  });
+});

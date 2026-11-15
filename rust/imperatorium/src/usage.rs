@@ -13,6 +13,14 @@ use serde_json::{json, Map, Value};
 use crate::pyish::{py_fsum_builtin, truthy};
 
 const WINDOWS: &[&str] = &["five_hour", "seven_day", "spend_limit"];
+/// The spend limit's dollars (a Claude apps gateway's, e.g. an Enterprise
+/// seat's $500 a month): kept with the window when the statusline has them.
+const SPEND_FIELDS: &[&str] = &["used_usd", "limit_usd"];
+/// How long a window may go unreported, and how long after its reset, before
+/// a login reading that lacks it is taken to mean the account has it no more
+/// (Claude Code drops a window at its reset and reports the new one with the
+/// next response; one idle session's reading can lag another's).
+const GONE_AFTER: f64 = 10.0 * 60.0;
 const PACE_SPAN: f64 = 45.0 * 60.0;
 const MIN_SPAN: f64 = 5.0 * 60.0;
 pub const DEFAULT_THRESHOLDS: &[f64] = &[80.0, 95.0];
@@ -101,10 +109,26 @@ pub fn account_plan() -> Option<&'static str> {
     }
 }
 
-/// usage.subscription: a Pro or Max login (five-hour and weekly windows).
+/// usage.subscription: a Pro, Max or Ultra login (weekly windows, and the
+/// five-hour one except on a verified Ultra account, which says so only by
+/// its readings leaving it out).
 pub fn subscription() -> bool {
     let kind = org_type();
-    kind.contains("max") || kind.contains("pro")
+    kind.contains("max") || kind.contains("pro") || kind.contains("ultra")
+}
+
+/// The spend limit's dollar fields from a statusline window (`w`), each only
+/// when it is there: `used_usd` and `limit_usd` as numbers, `period` as
+/// daily/weekly/monthly.
+fn spend_fields(w: Option<&Value>, into: &mut Map<String, Value>) {
+    for k in SPEND_FIELDS {
+        if let Some(v) = num(sub(w, k)) {
+            into.insert((*k).into(), json!(v));
+        }
+    }
+    if let Some(p) = sub(w, "period").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+        into.insert("period".into(), json!(p));
+    }
 }
 
 /// usage.reading: the fields worth keeping from one statusline payload.
@@ -117,10 +141,14 @@ pub fn reading(payload: &Map<String, Value>) -> Map<String, Value> {
         let w = sub(payload.get("rate_limits"), name);
         let (pct, resets) = (num(sub(w, "used_percentage")), num(sub(w, "resets_at")));
         if let Some(p) = pct {
-            limits.insert(
-                (*name).into(),
-                json!({"used": p, "resets_at": jnum(resets)}),
-            );
+            let mut entry = json!({"used": p, "resets_at": jnum(resets)})
+                .as_object()
+                .unwrap()
+                .clone();
+            if *name == "spend_limit" {
+                spend_fields(w, &mut entry);
+            }
+            limits.insert((*name).into(), Value::Object(entry));
         }
     }
     let model_name = [sub(model, "display_name"), sub(model, "id")]
@@ -238,7 +266,7 @@ impl Usage {
             .map(|(n, w)| {
                 (
                     n.clone(),
-                    fkey(num(w.get("used"))),
+                    fkey(num(w.get("used"))) + "/" + &fkey(num(w.get("used_usd"))),
                     fkey(num(w.get("resets_at"))),
                 )
             })
@@ -273,13 +301,14 @@ impl Usage {
                 continue;
             };
             let at = at.filter(|a| *a != 0.0).unwrap_or(now);
-            inner.limits.insert(
-                name.clone(),
-                json!({"used": used, "resets_at": jnum(resets), "at": at})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            );
+            let mut entry = json!({"used": used, "resets_at": jnum(resets), "at": at})
+                .as_object()
+                .unwrap()
+                .clone();
+            if name == "spend_limit" {
+                spend_fields(Some(w), &mut entry);
+            }
+            inner.limits.insert(name.clone(), entry);
             inner.window.insert(name.clone(), resets);
             inner.history.insert(name.clone(), vec![]);
             for t in &self.thresholds() {
@@ -318,6 +347,7 @@ impl Usage {
         let mut rec = got.clone();
         rec.insert("at".into(), json!(now));
         inner.sessions.insert(key.into(), rec);
+        Self::drop_gone(&mut inner, &got, now);
         for (name, w) in got
             .get("limits")
             .and_then(Value::as_object)
@@ -366,6 +396,37 @@ impl Usage {
                 .partial_cmp(&b["threshold"].as_f64().unwrap_or(0.0))
                 .unwrap()
         })
+    }
+
+    /// The windows the account no longer has: a login reading that reports
+    /// some windows but not one we hold drops it, once no reading has had it
+    /// for GONE_AFTER and its reset did not pass within GONE_AFTER (Claude
+    /// Code leaves it out until its next response brings the new one). So a
+    /// verified Ultra account loses its five-hour meter, kept from before in
+    /// limits.json, at its first reading.
+    /// A reading with no windows says nothing (before a session's first
+    /// response there are none), nor does a provider's (Bedrock, a key).
+    fn drop_gone(inner: &mut Inner, got: &Map<String, Value>, now: f64) {
+        let Some(seen) = got.get("limits").and_then(Value::as_object) else { return };
+        if seen.is_empty() || !got.get("provider").is_none_or(Value::is_null) {
+            return;
+        }
+        let gone: Vec<String> = inner
+            .limits
+            .iter()
+            .filter(|(name, w)| {
+                let stale = now - num(w.get("at")).unwrap_or(0.0) > GONE_AFTER;
+                let reset_lately = num(w.get("resets_at"))
+                    .is_some_and(|r| r <= now && now - r <= GONE_AFTER);
+                !seen.contains_key(name.as_str()) && stale && !reset_lately
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in gone {
+            inner.limits.shift_remove(&name);
+            inner.history.remove(&name);
+            inner.window.remove(&name);
+        }
     }
 
     pub fn forget(&self, key: &str) {
@@ -567,6 +628,79 @@ mod features_tests {
         let w = u.summary(1002.0)["limits"]["five_hour"].clone();
         assert_eq!((w["used"].clone(), w["resets_at"].clone()), (json!(3.0), json!(18050.0)));
         assert!(w.get("waiting").is_none());
+    }
+
+    fn windows(v: Value) -> Map<String, Value> {
+        obj(json!({"rate_limits": v}))
+    }
+
+    #[test]
+    fn a_window_the_account_stopped_reporting_is_dropped() {
+        // 2026-11-15: a verified Ultra account has no five-hour window; the
+        // one kept from before (limits.json, or before verification) goes at
+        // the first reading that has the weekly window but not it.
+        let u = fresh();
+        u.ingest("s1", &windows(json!({"five_hour": {"used_percentage": 30, "resets_at": 20000},
+                                       "seven_day": {"used_percentage": 10, "resets_at": 600000}})), 1.0);
+        let week = || windows(json!({"seven_day": {"used_percentage": 11, "resets_at": 600000}}));
+        // Reported within the last ten minutes (perhaps by another session): kept.
+        u.ingest("s2", &week(), 1.0 + GONE_AFTER - 1.0);
+        assert!(u.summary(700.0)["limits"].get("five_hour").is_some());
+        u.ingest("s2", &week(), 1.0 + GONE_AFTER + 1.0);
+        let got = u.summary(1000.0)["limits"].clone();
+        assert!(got.get("five_hour").is_none(), "{got}");
+        assert_eq!(got["seven_day"]["used"], 11.0);
+    }
+
+    #[test]
+    fn a_window_that_just_reset_is_not_taken_as_gone() {
+        // Claude Code drops a window at its reset until the next response.
+        let u = fresh();
+        u.ingest("s1", &windows(json!({"five_hour": {"used_percentage": 30, "resets_at": 5000},
+                                       "seven_day": {"used_percentage": 10, "resets_at": 600000}})), 1.0);
+        let week = windows(json!({"seven_day": {"used_percentage": 11, "resets_at": 600000}}));
+        u.ingest("s1", &week, 5000.0 + GONE_AFTER - 1.0);
+        assert_eq!(u.summary(5000.0 + GONE_AFTER)["limits"]["five_hour"]["waiting"], true);
+        // Long after, a reading still without it: the account has none.
+        u.ingest("s1", &week, 5000.0 + GONE_AFTER + 1.0);
+        assert!(u.summary(5000.0 + GONE_AFTER + 2.0)["limits"].get("five_hour").is_none());
+    }
+
+    #[test]
+    fn readings_without_windows_or_from_a_provider_drop_nothing() {
+        let u = fresh();
+        u.ingest("s1", &five_hour(30.0, 900000.0), 1.0);
+        let later = 1.0 + 2.0 * GONE_AFTER;
+        // A session before its first response: no rate_limits at all.
+        u.ingest("s2", &obj(json!({"context_window": {"used_percentage": 5}})), later);
+        // Bedrock (or a gateway's provider name) says nothing of the login.
+        let mut bedrock = windows(json!({"seven_day": {"used_percentage": 1, "resets_at": 900000}}));
+        bedrock.insert("imperatorium_provider".into(), json!("bedrock"));
+        u.ingest("s3", &bedrock, later);
+        assert!(u.summary(later)["limits"].get("five_hour").is_some());
+    }
+
+    #[test]
+    fn a_spend_limit_keeps_its_dollars_across_a_restart() {
+        // An Enterprise seat's $500 a month, behind a Claude apps gateway.
+        let dir = std::env::temp_dir().join(format!("imp-usage-spend-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("limits.json");
+        let u = Usage::new(vec![80.0, 95.0], Some(path.clone()), true, 1.0);
+        u.ingest("s1", &windows(json!({"spend_limit": {"used_percentage": 62.8, "resets_at": 1740787200,
+            "used_usd": 314.12, "limit_usd": 500, "period": "monthly"}})), 1.0);
+        let want = |w: &Value| {
+            assert_eq!((w["used"].clone(), w["used_usd"].clone(), w["limit_usd"].clone(), w["period"].clone()),
+                       (json!(62.8), json!(314.12), json!(500.0), json!("monthly")), "{w}");
+        };
+        want(&u.summary(2.0)["limits"]["spend_limit"]);
+        let again = Usage::new(vec![80.0, 95.0], Some(path), false, 3.0);
+        want(&again.summary(4.0)["limits"]["spend_limit"]);
+        // The percentage comes before the dollars: none yet is none shown.
+        let bare = fresh();
+        bare.ingest("s1", &windows(json!({"spend_limit": {"used_percentage": 5, "resets_at": 1740787200}})), 1.0);
+        assert!(bare.summary(2.0)["limits"]["spend_limit"].get("limit_usd").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

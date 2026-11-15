@@ -118,13 +118,11 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .tkh .ar{display:inline-block;width:.8em;transition:transform .12s}
 .s .tk.open .tkh .ar{transform:rotate(90deg)}
 .s .tkl{display:none;flex-direction:column;gap:1px;margin:2px 0 1px}
-.s .tk.open .tkl{display:flex}
+.s .tk.open .tkl:not(:empty){display:flex}
 .s .tki{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 6px;border-radius:4px;
   color:var(--ink);cursor:pointer;min-width:0}
 .s .tki:hover{background:var(--sel)}
 .s .tki.on{background:var(--sel);box-shadow:inset 2px 0 0 var(--busy)}
-.s .tki.static{cursor:default;color:var(--muted)}
-.s .tki.static:hover{background:transparent}
 .s .tki .k{font:12px var(--mono);color:var(--busy);min-width:3.4em;flex:none}
 .s .tki .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .s .tki .a{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
@@ -693,7 +691,6 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
 .badge.new{color:var(--busy);border-color:var(--busy);font-weight:600}
 .s.unread .n{color:var(--busy)}
 .fam .newn{color:var(--busy);font-weight:400;font-size:12px}
-.badge.heavy{color:var(--warn);border-color:var(--warn)}
 #heavy{font-size:12px;color:var(--warn);margin-top:6px}
 #heavy div::before{content:"⚠ "}
 #jumpbox,#quickbox{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;justify-content:center;

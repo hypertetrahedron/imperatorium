@@ -415,6 +415,30 @@ describe("WorkAtAGlance", () => {
     assertNotIn('class="since"', got);   // the open tile's idle time says it
   });
 
+  it("a cold cache is not said on the tile", () => {
+    // 2026-11-15 (user request, first asked 2026-11-14): the chat's
+    // cold-cache button says it, with the way out; the tile does not.
+    assertNotIn('class="badge heavy"', SCRIPT);
+    assertNotIn(".badge.heavy", CSS);
+    assertNotIn("cold", signals({ work: { context_tokens: 230000, cache_expires_at: 900 } }));
+  });
+
+  it("nothing running is said once, in the Tasks header", () => {
+    // 2026-11-15 (user request): no "nothing running" row under
+    // "Tasks · none running"; with nothing else to list, nothing is under it.
+    const items = (l) => evalJson(cat(
+      "let idleOpen = false, doneOpen = false;\n",
+      "const taskRow = t => '<row ' + t.id + '>';\n",
+      between(SCRIPT, "// Pure: the rows under the tile's Tasks header", "function drawTileTasks"),
+      "\nprocess.stdout.write(JSON.stringify(taskItems(", j(l), ", 1000)));"));
+    const none = { running: [], idle: [], done: [], extra: [] };
+    assert.equal(items(none), "");
+    assertNotIn("nothing running", SCRIPT);
+    assert.equal(items({ ...none, running: [{ id: "a" }] }), "<row a>");
+    assertIn("Recently completed (1)", items({ ...none, done: [{ id: "b" }] }));
+    assertIn(".s .tk.open .tkl:not(:empty){display:flex}", CSS);
+  });
+
   it("the open tile keeps context and pr for its details line", () => {
     const got = signals({ usage: { context_pct: 91 }, work: { cache_expires_at: 3000 },
                           pr: { state: "open", checks: "failing" } }, 1000, true);

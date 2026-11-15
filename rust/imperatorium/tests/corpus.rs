@@ -54,6 +54,28 @@ struct Goldens {
 
 /// The goldens as recorded: no placeholders (a transcript's own text may
 /// hold "<repo>" literally; see golden.py corpus_setup).
+/// The binary keeps when each entry was written (chain `timestamp`, a
+/// block's `at`, for View > Display Times, 2026-11-15); the Python reference
+/// the goldens came from did not, and is retired, so those are left out of
+/// the comparison and everything else still has to match.
+fn without_times(mut v: Value, key: &str) -> Value {
+    for e in v.as_array_mut().into_iter().flatten() {
+        if let Some(o) = e.as_object_mut() {
+            o.remove(key);
+        }
+    }
+    v
+}
+
+fn without_items_times(mut v: Value) -> Value {
+    for item in v.as_array_mut().into_iter().flatten() {
+        if let Some(blocks) = item.get_mut("blocks").filter(|b| b.is_array()) {
+            *blocks = without_times(blocks.take(), "at");
+        }
+    }
+    v
+}
+
 fn load(dir: &Path) -> Goldens {
     let rows = |part: &str, file: &str| -> Vec<Value> { read_jsonl(&dir.join(part).join(file)) };
     Goldens {
@@ -138,9 +160,9 @@ fn compare(root: &Path, g: &Goldens, what: &str) {
         let id = s["id"].as_str().unwrap();
         let (info, chain, plain, merged) = (
             it.next().unwrap(),
-            it.next().unwrap(),
-            it.next().unwrap(),
-            it.next().unwrap(),
+            without_times(it.next().unwrap(), "timestamp"),
+            without_items_times(it.next().unwrap()),
+            without_items_times(it.next().unwrap()),
         );
         check(
             &mut f,

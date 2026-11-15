@@ -212,6 +212,37 @@ const meterTip = (name, w, spent) => {
   return `<div class="tip">${lines.map(l => `<div>${l}</div>`).join("")}</div>`;
 };
 
+// The Remaining Meter: what is left of a fixed allocation - a spend limit
+// set behind a Claude apps gateway, e.g. an Enterprise seat's $500 a month -
+// under that limit's used bar. The fill is what is left, so it empties as the
+// allocation does. Dollars when the gateway sends them (it sends the
+// percentage first), else the percentage left. Its tip adds roughly how many
+// tokens that buys at this machine's own recent mix (`spent`: a spend window
+// with total_tokens and cost_usd), which is a guide, not a promise: the mix
+// of models and caching sets the price.
+const PERIOD_WORDS = {daily: "a day", weekly: "a week", monthly: "a month"};
+function remainingHtml(w, spent){
+  if (!w || w.waiting || typeof w.used !== "number") return "";
+  const dollars = typeof w.limit_usd === "number" && w.limit_usd > 0;
+  const usedUsd = typeof w.used_usd === "number" ? w.used_usd : (dollars ? w.limit_usd * w.used / 100 : null);
+  const leftPct = Math.max(0, Math.min(100, 100 - w.used));
+  const leftUsd = dollars ? Math.max(0, w.limit_usd - usedUsd) : null;
+  const cls = leftPct <= 5 ? "over" : leftPct <= 20 ? "hi" : "";
+  const shown = dollars ? usd(leftUsd) : Math.round(leftPct) + "%";
+  const lines = ["Remaining allocation", dollars
+    ? `${usd(leftUsd)} of ${usd(w.limit_usd)} left` + (PERIOD_WORDS[w.period] ? ` (${PERIOD_WORDS[w.period]})` : "")
+    : Math.round(leftPct) + "% left (the gateway has not sent the dollars yet)"];
+  if (dollars) lines.push(`${usd(usedUsd)} used (${Math.round(w.used)}%)`);
+  if (w.resets_at) lines.push("refills " + esc(resetLabel(w.resets_at)) + " (in " + until(w.resets_at) + ")");
+  if (dollars && spent && spent.cost_usd > 0 && spent.total_tokens > 0)
+    lines.push(`≈${tok(leftUsd * spent.total_tokens / spent.cost_usd)} tokens at this machine's ` +
+               `recent mix (${tok(spent.total_tokens / spent.cost_usd)} per $)`);
+  lines.push("the gateway's estimate from token counts, not a bill");
+  return `<div class="row remain"><span>left</span>
+      <span class="bar"><i class="${cls}" style="width:${leftPct}%"></i></span>
+      <span class="pct">${esc(shown)}</span><div class="tip">${lines.map(l => `<div>${l}</div>`).join("")}</div></div>`;
+}
+
 // Global and Open lines under the bars.
 function spendHtml(sp){
   if (!sp || !sp.global) return "";
@@ -295,7 +326,9 @@ function planHtml(plan){
     : `<div class="plan" title="no rate-limit windows on this plan">${esc(plan.label)}</div>`;
 }
 
-// The meters: a row per window, then (marked extra, so the sidebar shows
+// The meters: a row per window the account reports - a verified Ultra
+// account has no 5h one, an API key or Bedrock none, a gateway's spend limit
+// only "spend", which the Remaining Meter follows - then (marked extra, so the sidebar shows
 // them only when opened) the pace lines, the plan, the spend lines and the
 // model mix. `lines: false` leaves out the spend lines, for the matrix's
 // status tile, which spells the spend out below.
@@ -303,7 +336,8 @@ function meterHtml(u, opts){
   const lines = !opts || opts.lines !== false;
   const rows = Object.entries(u.limits || {});
   const spent = {};
-  for (const w of ((u.spend || {}).global || {}).windows || []) spent[w.name] = w;
+  const wins = ((u.spend || {}).global || {}).windows || [];
+  for (const w of wins) spent[w.name] = w;
   const bars = rows.map(([name, w]) => {
     const pct = Math.max(0, Math.min(100, w.used));
     const cls = w.used >= 95 ? "over" : w.used >= 80 ? "hi" : "";
@@ -315,7 +349,8 @@ function meterHtml(u, opts){
       pace = `<div class="pace extra">${Math.round(p.per_hour)}%/h - lasts until reset</div>`;
     return `<div class="row${w.waiting ? " waiting" : ""}"><span>${esc(LIMIT_NAMES[name] || name)}</span>
       <span class="bar"><i class="${cls}" style="width:${pct}%"></i>${timeTick(name, w.resets_at)}</span>
-      <span class="pct">${Math.round(w.used)}%</span>${meterTip(name, w, spent[name])}</div>${pace}`;
+      <span class="pct">${Math.round(w.used)}%</span>${meterTip(name, w, spent[name])}</div>${pace}` +
+      (name === "spend_limit" ? remainingHtml(w, wins[wins.length - 1]) : "");
   }).join("");
   const rest = (lines ? spendHtml(u.spend) : "") + mixHtml(u.spend);
   if (!bars && !rest) return planHtml(u.plan);

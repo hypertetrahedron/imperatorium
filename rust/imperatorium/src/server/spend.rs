@@ -24,10 +24,15 @@ impl Shared {
     /// Control._global_windows: [(name, since, resets_at)] the global
     /// spend is counted over.
     fn global_windows(&self, limits: &Value, now: f64) -> Vec<(String, f64, Value)> {
-        let spans = [("five_hour", 5.0 * 3600.0), ("seven_day", 7.0 * 86400.0)];
-        if spans.iter().any(|(n, _)| truthy(limits.get(*n))) || crate::usage::subscription() {
-            return spans
+        let all = [("five_hour", 5.0 * 3600.0), ("seven_day", 7.0 * 86400.0)];
+        let reported = all.iter().any(|(n, _)| truthy(limits.get(*n)));
+        if reported || crate::usage::subscription() {
+            // Every subscription has the week; the five hours only while a
+            // reading has them, or before any has said (a verified Ultra
+            // account has none).
+            return all
                 .iter()
+                .filter(|(n, _)| *n == "seven_day" || !reported || truthy(limits.get(*n)))
                 .map(|(name, span)| {
                     let w = limits.get(*name).cloned().unwrap_or(json!({}));
                     match w
