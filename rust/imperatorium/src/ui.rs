@@ -313,4 +313,35 @@ mod tests {
         assert!(font("next-latin.woff2").is_some_and(|b| b.starts_with(b"wOF2")));
         assert!(font("../secret").is_none());
     }
+
+    // test_ui.py LookHead (the Python look_head tests; the window JavaScript
+    // ones are in imperatorium/web/tests).
+    #[test]
+    fn look_head_defaults_turn_every_highlight_on() {
+        let head = look_head(&Value::Null);
+        assert!(head.contains("--chatz:1.0;--matrixz:1.0"), "{head}");
+        for name in ["code", "diffs", "prose", "tools", "signals", "mute", "guides", "shape"] {
+            assert!(head.contains(&format!("\"hl-{name}\"")), "{name}: {head}");
+        }
+    }
+
+    #[test]
+    fn look_head_lets_in_only_hex_colours_and_known_shapes() {
+        let head = look_head(&json!({
+            "fonts": {"chat": 21}, "hl": {"code": true, "diffs": false},
+            "colors": {"keyword": "#AABBCC", "string": "red;}</style>", "bad name": "#000000"}}));
+        assert!(head.contains("--chatz:1.5"), "{head}");
+        assert!(head.contains("--hl-keyword:#aabbcc"), "{head}");
+        assert!(!head.contains("red"), "{head}");
+        assert!(!head.contains("bad name"), "{head}");
+        assert!(head.contains("\"hl-code\""), "{head}");
+        assert!(!head.contains("\"hl-diffs\""), "{head}");
+    }
+
+    #[test]
+    fn settings_page_has_no_look_and_the_matrix_has() {
+        let page = "<html><head><meta charset=utf-8></head></html>";
+        assert!(!with_meta("t", page, "b", None).contains("<style id=lookvars"));
+        assert!(with_meta("", page, "b", Some(&Value::Null)).contains("<style id=lookvars"));
+    }
 }
