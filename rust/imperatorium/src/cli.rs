@@ -1221,3 +1221,19 @@ mod tests {
         assert_eq!(test_summary(out), ["test b ... FAILED", "failures:", "test result: FAILED. 1 passed; 1 failed;"]);
     }
 }
+
+/// What test_impctl.py pinned down for the question before a removal.
+#[cfg(test)]
+mod impctl_cov {
+    use super::*;
+
+    #[test]
+    fn yes_skips_the_question() {
+        assert!(confirmed("x", true));
+        // -y and --yes both reach it as the flag.
+        let spec = spec_of("service");
+        for flag in ["-y", "--yes"] {
+            assert!(parse(&[flag.to_string()], &spec).unwrap().flag("yes"), "{flag}");
+        }
+    }
+}

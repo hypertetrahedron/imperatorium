@@ -119,3 +119,136 @@ mod tests {
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
     }
 }
+
+/// What test_subproc.py pinned down: the whole tree goes with a timeout.
+#[cfg(all(test, windows))]
+mod subproc_cov {
+    use super::*;
+
+    /// A PowerShell parent that starts a long-lived grandchild (ping), writes
+    /// its pid to `pidfile`, then sleeps (`stay`) or exits.
+    fn parent(pidfile: &std::path::Path, stay: bool) -> Command {
+        let script = format!(
+            "$g = Start-Process -FilePath ping -ArgumentList '-n','60','127.0.0.1' -PassThru -WindowStyle Hidden; \
+             Set-Content -Path '{}' -Value $g.Id -Encoding ascii; {}",
+            pidfile.display(),
+            if stay { "Start-Sleep -Seconds 60" } else { "" }
+        );
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        c
+    }
+
+    fn pid_from(pidfile: &std::path::Path) -> Option<u32> {
+        std::fs::read_to_string(pidfile).ok()?.trim().parse().ok()
+    }
+
+    fn alive(pid: u32) -> bool {
+        let mut c = Command::new("tasklist");
+        c.args(["/FI", &format!("PID eq {pid}"), "/NH"]);
+        let out = no_window(&mut c).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    }
+
+    fn gone_within(pid: u32, secs: u64) -> bool {
+        let end = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < end {
+            if !alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        !alive(pid)
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("imp-cov-{tag}-{}.pid", std::process::id()))
+    }
+
+    fn wait_pid(pidfile: &std::path::Path) -> u32 {
+        let end = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < end {
+            if let Some(p) = pid_from(pidfile) {
+                return p;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("the child never started its grandchild");
+    }
+
+    fn cleanup(pid: Option<u32>, pidfile: &std::path::Path) {
+        if let Some(p) = pid {
+            kill_pid_tree(p);
+        }
+        let _ = std::fs::remove_file(pidfile);
+    }
+
+    #[test]
+    fn a_timeout_kills_the_grandchild_too() {
+        let pidfile = scratch("timeout");
+        let _ = std::fs::remove_file(&pidfile);
+        // Long enough for PowerShell to start the grandchild, short of its sleep.
+        let e = run_timeout(&mut parent(&pidfile, true), Duration::from_secs(12)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::TimedOut);
+        let pid = pid_from(&pidfile);
+        let ok = pid.map(|p| gone_within(p, 5));
+        cleanup(pid, &pidfile);
+        assert_eq!(ok, Some(true), "grandchild {pid:?} outlived the timeout");
+    }
+
+    #[test]
+    fn a_clean_exit_leaves_what_it_started_running() {
+        // `claude --bg` exits and its session must carry on: the binary has
+        // no sweep (see DIFFERS for Python's default).
+        let pidfile = scratch("keep");
+        let _ = std::fs::remove_file(&pidfile);
+        let done = run_timeout(&mut parent(&pidfile, false), Duration::from_secs(30)).unwrap();
+        assert!(done.status.success());
+        let pid = wait_pid(&pidfile);
+        std::thread::sleep(Duration::from_millis(500));
+        let still = alive(pid);
+        cleanup(Some(pid), &pidfile);
+        assert!(still, "a clean exit killed the grandchild");
+    }
+
+    #[test]
+    #[ignore = "DIFFERS: Python's subproc.run killed what a clean exit left behind (job object); the binary's run_timeout does not"]
+    fn a_clean_exit_kills_what_it_left() {
+        let pidfile = scratch("sweep");
+        let _ = std::fs::remove_file(&pidfile);
+        let done = run_timeout(&mut parent(&pidfile, false), Duration::from_secs(30)).unwrap();
+        assert!(done.status.success());
+        let pid = wait_pid(&pidfile);
+        let ok = gone_within(pid, 5);
+        cleanup(Some(pid), &pidfile);
+        assert!(ok, "grandchild {pid} outlived a clean exit");
+    }
+
+    #[test]
+    fn kill_tree_ends_a_long_lived_child_and_its_children_and_twice_is_harmless() {
+        let pidfile = scratch("tree");
+        let _ = std::fs::remove_file(&pidfile);
+        let mut child = parent(&pidfile, true)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = wait_pid(&pidfile);
+        kill_tree(&mut child);
+        kill_tree(&mut child);
+        assert!(child.try_wait().unwrap().is_some());
+        let ok = gone_within(pid, 5);
+        cleanup(Some(pid), &pidfile);
+        assert!(ok);
+    }
+
+    #[test]
+    fn the_exit_status_comes_back() {
+        let mut c = Command::new("cmd");
+        c.args(["/c", "echo HI& exit 3"]);
+        let o = run_timeout(&mut c, Duration::from_secs(10)).unwrap();
+        assert_eq!(o.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&o.stdout).contains("HI"));
+    }
+}

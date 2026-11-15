@@ -1020,3 +1020,5 @@ pub fn read_until(r: &mut impl BufRead, pred: impl Fn(&str) -> bool) -> Option<S
         }
     }
 }
+
+pub mod setup;

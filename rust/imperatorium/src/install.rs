@@ -1147,3 +1147,109 @@ mod tests {
         assert_eq!(s["env"][PLUGIN_DIRS], format!("/a{sep}/b"));
     }
 }
+
+/// What test_setup.py pinned down for setup_machine.py's pure pieces.
+#[cfg(test)]
+mod setup_cov {
+    use super::*;
+
+    #[test]
+    fn version_text_that_holds_no_version_is_none_and_compares_numerically() {
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("command not found"), None);
+        // 2.1.1000 is newer than 2.1.234, which a string compare gets wrong.
+        assert!(parse_version("2.1.1000") >= Some((2, 1, 234)));
+        assert!(parse_version("2.1.99") < Some((2, 1, 234)));
+    }
+
+    #[test]
+    fn config_takes_the_chosen_roots_and_voice() {
+        let cfg = build_config(&["D:/code".to_string()], true, None);
+        assert_eq!(cfg["roots"], json!(["D:/code"]));
+        assert_eq!(cfg["voice"]["enabled"], json!(true));
+        let off = build_config(&[], false, None);
+        assert_eq!(off["voice"]["enabled"], json!(false));
+        // Building one never alters the next (and not the embedded example).
+        assert_eq!(serde_json::from_str::<Value>(CONFIG_EXAMPLE).unwrap()["roots"], json!([]));
+    }
+
+    #[test]
+    fn the_examples_carry_nothing_from_the_authors_machine() {
+        let text = serde_json::to_string(&serde_json::from_str::<Value>(CONFIG_EXAMPLE).unwrap()).unwrap();
+        for personal in ["projects-software", "developmenthost", "raspberrypi", "Les"] {
+            assert!(!text.contains(personal), "{personal}");
+        }
+        assert_eq!(serde_json::from_str::<Value>(POLICY_EXAMPLE).unwrap()["projects"], json!({}));
+    }
+
+    #[test]
+    fn auto_approval_is_opt_in() {
+        assert_eq!(serde_json::from_str::<Value>(POLICY_EXAMPLE).unwrap()["enabled"], json!(false));
+        assert_eq!(build_policy(false)["enabled"], json!(false));
+        assert_eq!(build_policy(true)["enabled"], json!(true));
+    }
+
+    #[test]
+    fn answers_from_the_window_work_without_auto_approval() {
+        // The reply format and parking are independent of `enabled`: with
+        // auto-approval off every request is `ask`, which is what parks.
+        let pol = build_policy(false);
+        assert_eq!(pol["decision_format"], json!("object"));
+        assert_eq!(pol["park"]["enabled"], json!(true));
+    }
+
+    #[test]
+    fn choosing_push_switches_it_on_with_the_topic_and_it_is_off_by_default() {
+        let cfg = build_config(&["X:/".to_string()], false, Some("t-123"));
+        assert_eq!(cfg["notify"]["ntfy"]["topic"], json!("t-123"));
+        assert_eq!(cfg["notify"]["ntfy"]["enabled"], json!(true));
+        let cfg = build_config(&["X:/".to_string()], false, None);
+        assert_eq!(cfg["notify"]["ntfy"]["enabled"], json!(false));
+    }
+
+    #[test]
+    fn ntfy_topics_are_unguessable_and_distinct() {
+        let (a, b) = (ntfy_topic(), ntfy_topic());
+        assert_ne!(a, b);
+        assert!(a.starts_with("imperatorium-") && a.len() >= "imperatorium-".len() + 16, "{a}");
+    }
+
+    #[test]
+    fn yes_takes_every_default_without_reading_input() {
+        let o = opts(&["--yes".to_string()], None);
+        assert!(choose(&o, "voice", "q", true));
+        assert!(!choose(&o, "voice", "q", false));
+        // A flag still beats the default.
+        let o = opts(&["--yes".to_string(), "--no-mod".to_string(), "--voice".to_string()], None);
+        assert!(!choose(&o, "mod", "q", true));
+        assert!(choose(&o, "voice", "q", false));
+    }
+
+    /// default_roots reads the home from the environment, which a test must
+    /// not change under its neighbours: the test runs itself again as a child
+    /// process with HOME and USERPROFILE pointed at a scratch folder.
+    #[test]
+    fn a_home_with_a_code_folder_prefers_it_and_otherwise_is_the_root() {
+        const MARK: &str = "IMPERATORIUM_COV_CHILD_HOME";
+        if let Ok(home) = std::env::var(MARK) {
+            let home = PathBuf::from(home);
+            assert_eq!(default_roots(), vec![home.to_string_lossy().into_owned()]);
+            std::fs::create_dir_all(home.join("src")).unwrap();
+            assert_eq!(default_roots(), vec![home.join("src").to_string_lossy().into_owned()]);
+            return;
+        }
+        let home = std::env::temp_dir().join(format!("imp-cov-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "install::setup_cov::a_home_with_a_code_folder_prefers_it_and_otherwise_is_the_root", "--nocapture"])
+            .env(MARK, &home)
+            .env("USERPROFILE", &home)
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+        assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"), "the child ran no test");
+    }
+}
