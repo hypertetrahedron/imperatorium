@@ -4,7 +4,7 @@
 #
 # Assets: the binary per target triple, the dictation worker (Vulkan) for
 # Windows, SHA256SUMS, manifest.json, and the install scripts - the layout
-# `imperatorium update` and install.ps1 / install.sh read (rust/release/package.py).
+# `imperatorium update` and install.ps1 / install.sh read (`imperatorium release-package`).
 name: release
 
 on:
@@ -128,7 +128,9 @@ jobs:
           # the window's update panel shows.
           git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.txt
-          python3 rust/release/package.py --version "$v" --out dist --notes notes.txt "${assets[@]}"
+          chmod +x built/linux/x86_64-unknown-linux-musl/release/imperatorium
+          built/linux/x86_64-unknown-linux-musl/release/imperatorium release-package \
+            --version "$v" --out dist --notes notes.txt --scripts . "${assets[@]}"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

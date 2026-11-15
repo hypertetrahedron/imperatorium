@@ -5,7 +5,7 @@
 .DESCRIPTION
     The Windows exe (C runtime linked in), the two Linux hosts' static musl
     builds, and - when -Voice is given - the dictation worker (Vulkan), then
-    package.py. The release workflow does the same per runner; this is for
+    `imperatorium release-package` (the exe just built). The release workflow does the same per runner; this is for
     a local release folder to test the installers and `imperatorium update`
     against (serve dist\<version> over HTTP and point IMPERATORIUM_RELEASES
     or --from at it).
@@ -55,4 +55,5 @@ try {
     Remove-Item Env:\IMPERATORIUM_BUILD_VERSION -ErrorAction SilentlyContinue
 }
 $extra = @(); if ($Notes) { $extra = @('--notes', $Notes) }
-python (Join-Path $PSScriptRoot 'package.py') --version $Version --out $Out @extra @assets
+& "$rust\target\release\imperatorium.exe" release-package --version $Version --out $Out --scripts $root @extra @assets
+if ($LASTEXITCODE) { throw 'packaging failed' }

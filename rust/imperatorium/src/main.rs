@@ -53,6 +53,7 @@ mod projects;
 mod prs;
 mod pyish;
 mod registry;
+mod release;
 mod remote;
 mod server;
 mod service;
@@ -212,6 +213,7 @@ fn main() {
         Some("install-hooks") => install::install_hooks_main(&args[1..]),
         Some("hotkey") => hotkey::main(&args[1..], home.as_deref()),
         Some("update") => update::main(&args[1..]),
+        Some("release-package") => release::main(&args[1..]),
         Some("voice") => models::main(&args[1..], home.as_deref()),
         #[cfg(feature = "streamdeck")]
         Some("streamdeck") => streamdeck::main(&args[1..], home.as_deref()),
