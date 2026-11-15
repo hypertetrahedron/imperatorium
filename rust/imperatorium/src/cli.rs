@@ -645,7 +645,15 @@ fn pick_components(a: &Args) -> Result<Vec<(&'static str, &'static str)>, String
 
 fn service_for(a: &Args, home: Option<&str>) -> Service {
     let prefix = a.opt("task-prefix").unwrap_or("Imperatorium").to_string();
-    Service::new(prefix, std::env::current_exe().unwrap_or_default(), crate::paths::config_home(home), vec![])
+    // --port and --state only for a second, separate copy (a test's): without
+    // them the dispatcher unit runs `serve --live`.
+    let mut serve_args = Vec::new();
+    for key in ["port", "state"] {
+        if let Some(v) = a.opt(key) {
+            serve_args.extend([format!("--{key}"), v.to_string()]);
+        }
+    }
+    Service::new(prefix, std::env::current_exe().unwrap_or_default(), crate::paths::config_home(home), serve_args)
 }
 
 /// `--task-prefix P` as the install commands take it.
@@ -934,7 +942,7 @@ fn detail(name: &str) -> Option<&'static str> {
         "send" => "  -s, --session S   session id, id prefix, or name\n  -p, --project P   project name (launches one if none is running)\n  --mode M          how to deliver it (default: auto)\n  --dry-run         say what would happen, do nothing",
         "queue" => "  list              what is queued, per session\n  add S TEXT...    hold a prompt until S's turn ends (delivered now if it is idle)\n  remove S ITEM    drop an item (see `queue list`)",
         "start" | "stop" | "restart" => "  Units are found by what they run: this binary, with the component's subcommand.\n  --task-prefix P   only the tasks, units or agents named P*",
-        "service" => "  install     register and start every unit (the Stream Deck with --streamdeck)\n  uninstall   remove them; asks first unless --yes\n  --task-prefix P, --home DIR, --dry-run",
+        "service" => "  install     register and start every unit (the Stream Deck with --streamdeck)\n  uninstall   remove them; asks first unless --yes\n  --task-prefix P, --home DIR, --dry-run; --port N --state FILE for a separate copy (without them: serve --live)",
         "events" => "  -n N   how many (default 30, 0 = all)",
         "errors" => "  --days N   how far back (default 7)",
         "resume" | "fork" => "  --bg          in the background, not a new tab\n  --prompt T    --bg: its first message",
@@ -957,7 +965,7 @@ fn spec_of(name: &str) -> Spec {
         "run" => Spec { valued: &[("", "host"), ("", "port"), ("", "root")], flags: &[JSON] },
         "start" | "stop" | "restart" | "status" => Spec { valued: &[("", "task-prefix")], flags: &[JSON] },
         "service" => Spec {
-            valued: &[("", "task-prefix")],
+            valued: &[("", "task-prefix"), ("", "port"), ("", "state")],
             flags: &[JSON, ("", "streamdeck"), ("", "no-streamdeck"), ("", "no-hotkey"), ("", "dry-run"), ("y", "yes")],
         },
         _ => HTTP,
