@@ -1,6 +1,6 @@
 # test_policy.py
 
-Summary: 44 tests - 43 COVERED, 1 PORT
+Summary: 44 tests - 44 COVERED
 
 Also: policy.rs unit tests (disabled_asks, safe_and_unsafe_shell, self_protection_denies, errors_ask) and the 86,197-case differential (tests/differential.rs) check the same rules, with Python's recorded answers.
 
@@ -38,7 +38,7 @@ Also: policy.rs unit tests (disabled_asks, safe_and_unsafe_shell, self_protectio
 | Secrets.test_ssh_and_cloud_credential_directories | COVERED | tests/policy_tests.rs `test_policy_calls_answer_as_python_did` (golden policy_tests/calls.jsonl: every `decide` call this test made, exact verdict, reason and tier) |
 | Secrets.test_a_command_naming_a_secret_is_asked_about | COVERED | tests/policy_tests.rs `test_policy_calls_answer_as_python_did` (golden policy_tests/calls.jsonl: every `decide` call this test made, exact verdict, reason and tier) |
 | Secrets.test_a_secret_is_not_auto_approved_by_a_safe_verb | COVERED | tests/policy_tests.rs `test_policy_calls_answer_as_python_did` (golden policy_tests/calls.jsonl: every `decide` call this test made, exact verdict, reason and tier) |
-| Secrets.test_is_sensitive_handles_both_separators_and_junk | PORT | src/policy.rs `policy::py_ported::is_sensitive_handles_both_separators_and_junk` (a direct call, not a `decide` call, so the golden does not have it) |
+| Secrets.test_is_sensitive_handles_both_separators_and_junk | COVERED | src/policy.rs `policy::py_ported::is_sensitive_handles_both_separators_and_junk` (a direct call, not a `decide` call, so the golden does not have it) |
 | ReadsAndEdits.test_reads_inside_the_project_are_allowed | COVERED | tests/policy_tests.rs `test_policy_calls_answer_as_python_did` (golden policy_tests/calls.jsonl: every `decide` call this test made, exact verdict, reason and tier) |
 | ReadsAndEdits.test_reads_outside_the_project_are_asked_about | COVERED | tests/policy_tests.rs `test_policy_calls_answer_as_python_did` (golden policy_tests/calls.jsonl: every `decide` call this test made, exact verdict, reason and tier) |
 | ReadsAndEdits.test_reads_outside_can_be_opted_into | COVERED | tests/policy_tests.rs `test_policy_calls_answer_as_python_did` (golden policy_tests/calls.jsonl: every `decide` call this test made, exact verdict, reason and tier) |
