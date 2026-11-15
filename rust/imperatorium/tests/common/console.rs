@@ -135,6 +135,7 @@ impl Console {
             windows_sys::Win32::System::Threading::TerminateProcess(self.handle as _, 1);
         }
         self.wait_exit(Duration::from_secs(5));
+        super::sweep_orphaned_git(self.pid);
     }
 }
 

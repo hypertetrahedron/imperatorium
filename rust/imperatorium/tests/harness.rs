@@ -68,3 +68,40 @@ fn the_stand_in_path_finds_only_the_fakes() {
         .iter()
         .all(|r| r.get("pid").is_none()));
 }
+
+/// A git left suspended under a killed dispatcher is ended by the harness;
+/// anything else under the same parent is not.
+#[test]
+fn a_suspended_git_left_by_a_dispatcher_is_swept() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_SUSPENDED: u32 = 0x4;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let spawn = |prog: &str, args: &[&str]| {
+        std::process::Command::new(prog)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap()
+    };
+    // Stand-ins for what the dispatcher started: their parent is this test.
+    let mut git = spawn("git", &["--version"]);
+    let mut other = spawn("ping", &["-n", "30", "127.0.0.1"]);
+    let me = std::process::id();
+    assert!(orphaned_git(me).contains(&git.id()), "the git is found");
+    assert!(!orphaned_git(me).contains(&other.id()), "only git is taken");
+    sweep_orphaned_git(me);
+    let ended = git.try_wait().unwrap().is_some() || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        git.try_wait().unwrap().is_some()
+    };
+    let other_alive = other.try_wait().unwrap().is_none();
+    let _ = other.kill();
+    let _ = other.wait();
+    let _ = git.kill();
+    let _ = git.wait();
+    assert!(ended, "the suspended git outlived the sweep");
+    assert!(other_alive, "the sweep took a process that was not git");
+}

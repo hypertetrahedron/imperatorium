@@ -519,16 +519,88 @@ pub fn kill_tree(child: &mut Child) {
     if let Ok(Some(_)) = child.try_wait() {
         return;
     }
+    let pid = child.id();
     #[cfg(windows)]
     {
         let _ = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .args(["/T", "/F", "/PID", &pid.to_string()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
     }
     let _ = child.kill();
     let _ = child.wait();
+    sweep_orphaned_git(pid);
+}
+
+/// End the git processes a killed dispatcher `parent` left behind. A
+/// dispatcher killed while it was starting a git leaves that git created
+/// but never resumed - suspended for good, holding its test folder - and
+/// taskkill /T, which ran before it existed, does not see it. Only git.exe
+/// (and what it started) is taken: a reused pid's own children are not.
+/// Twice, a moment apart, for one that was still being created.
+pub fn sweep_orphaned_git(parent: u32) {
+    #[cfg(windows)]
+    for pass in 0..2 {
+        if pass > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        for pid in orphaned_git(parent) {
+            end_process(pid);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = parent;
+}
+
+/// git.exe processes whose parent is `parent`, with everything under them.
+#[cfg(windows)]
+pub fn orphaned_git(parent: u32) -> Vec<u32> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    let mut all: Vec<(u32, u32, String)> = Vec::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return Vec::new();
+        }
+        let mut e: PROCESSENTRY32W = std::mem::zeroed();
+        e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snap, &mut e) != 0;
+        while more {
+            let len = e.szExeFile.iter().position(|c| *c == 0).unwrap_or(e.szExeFile.len());
+            all.push((e.th32ProcessID, e.th32ParentProcessID, String::from_utf16_lossy(&e.szExeFile[..len])));
+            more = Process32NextW(snap, &mut e) != 0;
+        }
+        CloseHandle(snap);
+    }
+    let mut out: Vec<u32> = all
+        .iter()
+        .filter(|(_, pp, name)| *pp == parent && name.eq_ignore_ascii_case("git.exe"))
+        .map(|(p, _, _)| *p)
+        .collect();
+    let mut i = 0;
+    while i < out.len() {
+        let p = out[i];
+        out.extend(all.iter().filter(|(c, pp, _)| *pp == p && !out.contains(c)).map(|(c, _, _)| *c).collect::<Vec<_>>());
+        i += 1;
+    }
+    out
+}
+
+#[cfg(windows)]
+fn end_process(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    unsafe {
+        let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if !h.is_null() {
+            TerminateProcess(h, 1);
+            CloseHandle(h);
+        }
+    }
 }
 
 /// Stop every process whose executable lives under `folder` (a test's
