@@ -8,6 +8,8 @@
 //! (the system picks), no fixed sleeps. Safe to run in parallel.
 #![allow(dead_code)]
 
+pub mod git;
+
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
