@@ -7,11 +7,15 @@
 //!
 //! No golden: each expectation is the script's.
 //!
+//! Windows-only, as the other twins: fakecli stands in as `ssh.exe` and
+//! `claude.exe`. `remote add` from a Linux machine is not covered here.
+//!
 //! Beyond the script, for safety: `check` gets `--port` (a free port, not
 //! the live dispatcher's 8792), `--settings` (the sandbox's, not this
 //! machine's ~/.claude/settings.json) and `--task-prefix` (no such tasks);
 //! a fakecli claude.exe is first on PATH, so `claude --version` never runs
 //! the real one; `--no-restart` everywhere, stdin closed (no prompts).
+#![cfg(windows)]
 
 mod common;
 use common::fakessh::FakeSsh;

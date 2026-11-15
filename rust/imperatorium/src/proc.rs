@@ -442,8 +442,9 @@ mod subproc_cov {
     fn a_timeout_kills_the_grandchild_too() {
         let pidfile = scratch("timeout");
         let _ = std::fs::remove_file(&pidfile);
-        // Long enough for PowerShell to start the grandchild, short of its sleep.
-        let e = run_timeout(&mut parent(&pidfile, true), Duration::from_secs(12)).unwrap_err();
+        // Long enough for PowerShell to start the grandchild even on a busy
+        // CI runner (12 s was not), short of its 60 s ping and sleep.
+        let e = run_timeout(&mut parent(&pidfile, true), Duration::from_secs(40)).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
         let pid = pid_from(&pidfile);
         let ok = pid.map(|p| gone_within(p, 5));

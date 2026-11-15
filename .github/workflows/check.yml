@@ -87,10 +87,11 @@ jobs:
         working-directory: rust
         env:
           IMPERATORIUM_REQUIRE_NODE: "1"   # web_js.rs must run node, not skip
-          # gh words its "not logged in" error differently inside Actions; the
-          # worktree twin's golden has the wording everyone else sees.
-          GITHUB_ACTIONS: ""
         run: |
+          # gh words its "not logged in" error differently inside Actions (and
+          # under CI); the worktree twin's golden has the wording everyone else
+          # sees. GITHUB_* cannot be overridden in `env:`, only unset here.
+          unset GITHUB_ACTIONS CI
           if [ "$RUNNER_OS" = Linux ]; then flags=--no-default-features; fi
           cargo test --workspace --locked --no-fail-fast $flags
 
@@ -146,8 +147,8 @@ jobs:
         working-directory: rust
         env:
           IMPERATORIUM_REQUIRE_NODE: "1"
-          GITHUB_ACTIONS: ""
         run: |
+          unset GITHUB_ACTIONS CI   # as in check: gh's wording, for the worktree twin
           # fakecli (a stub, so not instrumented) goes beside the binary in
           # llvm-cov's own target folder, where the integration tests look;
           # cargo test builds only its test harness.
