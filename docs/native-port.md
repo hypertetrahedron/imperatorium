@@ -562,6 +562,22 @@ raw-dylib imports (chrono's `windows-link`) do not build there, so the crate
 avoids them; with the MSVC toolchain this does not arise. Release builds for
 distribution will use MSVC (and code signing) in phase 6.
 
+## Goldens: the Python answers, kept (2026-11-14)
+
+Before the Python goes, its answers are kept: each conformance script takes
+`--record DIR` and writes what Python answered, normalised as the script
+compares, under `rust/imperatorium/tests/golden/` (`golden.py`; layout,
+placeholders and the twins' replay notes in that folder's README). The
+non-twin parts are `cargo test` integration tests against those goldens
+(`tests/policy_tests.rs`, `differential.rs`, `hooks_blackbox.rs`,
+`corpus.rs`, `pure_checks.rs`, `install_compare.rs`), on the harness in
+`tests/common/mod.rs`: `serve --port 0`, a temp home, state and
+CLAUDE_CONFIG_DIR per test, a stripped environment and a PATH with no real
+claude, wt or hc. The transcript readers are checked on a synthetic corpus
+(`tests/fixtures/corpus`) and, on this machine only, on a frozen copy of the
+real transcripts outside the repository. The twins are recorded; their
+replay is the next step.
+
 ## Testing hooks by hand
 
 Always set `IMPERATORIUM_ENDPOINT` and `IMPERATORIUM_PARK_ENDPOINT` to a fake
