@@ -219,7 +219,7 @@ impl Shared {
                     Some(block) if has_store => {
                         let settings = crate::voice::settings_from(Some(block));
                         let dir = paths::config_home(home);
-                        if truthy(settings.get("enabled")) && crate::voice::available(&dir, &settings) {
+                        if truthy(settings.get("enabled")) {
                             Some(crate::voice::Worker::new(settings, &dir))
                         } else {
                             None
@@ -400,7 +400,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
         // failed to bind never runs a second set of gh calls or a model.
         shared.prs.start();
         if let Some(v) = &shared.voice {
-            if truthy(v.settings.get("preload")) {
+            if truthy(v.settings.get("preload")) && v.missing().is_none() {
                 v.warm();
             }
         }

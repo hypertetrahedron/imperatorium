@@ -719,6 +719,9 @@ impl Shared {
         let Some(v) = &self.voice else {
             return json!({"ok": false, "error": "dictation is not available"});
         };
+        if let Some(why) = v.missing() {
+            return json!({"ok": false, "error": why});
+        }
         match v.transcribe_bytes(audio, None) {
             Err(e) => json!({"ok": false, "error": format!("VoiceError: {e}")}),
             Ok(text) => {
@@ -736,6 +739,9 @@ impl Shared {
         let Some(v) = &self.voice else {
             return json!({"ok": false, "error": "dictation is not available"});
         };
+        if let Some(why) = v.missing() {
+            return json!({"ok": false, "error": why});
+        }
         v.warm();
         let mut out = v.where_().and_then(|w| w.as_object().cloned()).unwrap_or_default();
         out.insert("ok".into(), json!(true));

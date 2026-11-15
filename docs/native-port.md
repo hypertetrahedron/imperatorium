@@ -432,12 +432,13 @@ stopped, no imperatorium process was left in either container.
 
 **Voice.** `rust/voice` is `imperatorium-voice`, its own crate and
 workspace (whisper.cpp needs a C++ compiler, CMake and, for the GPU, CUDA,
-which the main binary must never need). It speaks the Python worker's
+which the main binary must never need). It speaks the (former Python) worker's
 protocol (`--worker SETTINGS_JSON`, `load` / `transcribe` JSON lines), so
-`voice.rs` only chooses what to spawn: the exe beside `imperatorium.exe`
-when the settings' model is in the models folder
-(`%LOCALAPPDATA%\imperatorium\models\ggml-<model>.bin`), else the venv's
-Python worker; `IMPERATORIUM_VOICE=python` forces Python.
+`voice.rs` spawns the exe beside `imperatorium.exe` and needs the
+settings' model in the models folder
+(`%LOCALAPPDATA%\imperatorium\models\ggml-<model>.bin`). There is no
+Python fallback (removed 2026-11-14): with either missing, dictation
+answers with what is missing and `imperatorium voice fetch`.
 
 The same choices as faster-whisper: large-v3-turbo on CUDA, the CPU model
 when there is no GPU, greedy at beam_size 1, Silero VAD (v6, as

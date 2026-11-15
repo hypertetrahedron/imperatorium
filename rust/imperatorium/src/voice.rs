@@ -1,10 +1,8 @@
-//! Dictation for the prompt box: the dispatcher side of `imperatorium/
-//! voice.py` (`Worker`). The model runs in a child: `imperatorium-voice
-//! --worker` (whisper.cpp, phase 5) when it sits beside this exe and the
-//! settings' model is in the models folder, else `python -m
-//! imperatorium.voice --worker` from the checkout's venv
-//! (IMPERATORIUM_VOICE=python forces that). Both speak one JSON-lines
-//! protocol -
+//! Dictation for the prompt box: the dispatcher side of the voice worker.
+//! The model runs in a child, `imperatorium-voice --worker` (whisper.cpp),
+//! which sits beside this exe, with the settings' model in the models
+//! folder; `imperatorium voice fetch` downloads both. It speaks a
+//! JSON-lines protocol -
 //!   {"op": "load"}                                -> {"ok", "device", "model"}
 //!   {"op": "transcribe", "hint", "bytes": n} + n bytes -> {"ok", "text", ...}
 //! The child exits when its stdin closes, and is ended after `idle_unload`
@@ -51,21 +49,6 @@ pub fn settings_from(block: Option<&Value>) -> Map<String, Value> {
     out
 }
 
-/// The venv interpreter the model runs under (python.exe, not pythonw: the
-/// child's stdio must be the pipes it is given).
-fn interpreter(home: &Path) -> PathBuf {
-    if cfg!(windows) {
-        home.join(".venv").join("Scripts").join("python.exe")
-    } else {
-        home.join(".venv").join("bin").join("python")
-    }
-}
-
-/// The checkout has a venv with the Python worker module in it.
-fn python_available(home: &Path) -> bool {
-    interpreter(home).is_file() && home.join("imperatorium").join("voice.py").is_file()
-}
-
 /// Where imperatorium-voice keeps its ggml models (as it computes it).
 pub fn models_dir() -> PathBuf {
     if let Some(d) = crate::paths::env_nonempty("IMPERATORIUM_MODELS") {
@@ -80,32 +63,33 @@ pub fn models_dir() -> PathBuf {
     base.join("imperatorium").join("models")
 }
 
-/// The native worker, when it can run this configuration: the exe beside
-/// this one (or IMPERATORIUM_VOICE_BIN) and the model the settings name.
-pub fn native_worker(settings: &Map<String, Value>) -> Option<PathBuf> {
-    if crate::paths::env_nonempty("IMPERATORIUM_VOICE").as_deref() == Some("python") {
-        return None;
-    }
+const FETCH_HINT: &str = "run `imperatorium voice fetch` to download it";
+
+/// The worker exe and model this configuration needs (the exe beside this
+/// one, or IMPERATORIUM_VOICE_BIN; the model the settings name), or what
+/// is missing and how to get it.
+pub fn worker_check(settings: &Map<String, Value>) -> Result<PathBuf, String> {
     let exe = match crate::paths::env_nonempty("IMPERATORIUM_VOICE_BIN") {
         Some(p) => PathBuf::from(p),
         None => {
             let name = if cfg!(windows) { "imperatorium-voice.exe" } else { "imperatorium-voice" };
-            std::env::current_exe().ok()?.parent()?.join(name)
+            let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(name)));
+            beside.ok_or_else(|| "dictation: cannot locate the voice worker".to_string())?
         }
     };
+    if !exe.is_file() {
+        return Err(format!("dictation needs the voice worker ({}), which is missing: {FETCH_HINT}", exe.display()));
+    }
     let model = settings.get("model").and_then(Value::as_str).unwrap_or("large-v3-turbo");
     let file = if model.contains(['/', '\\']) {
         PathBuf::from(model)
     } else {
         models_dir().join(format!("ggml-{model}.bin"))
     };
-    (exe.is_file() && file.is_file()).then_some(exe)
-}
-
-/// voice.available, as far as the binary can tell without importing: a
-/// native worker with its model, or the checkout's Python worker.
-pub fn available(home: &Path, settings: &Map<String, Value>) -> bool {
-    native_worker(settings).is_some() || python_available(home)
+    if !file.is_file() {
+        return Err(format!("dictation needs the model '{model}' ({}), which is missing: {FETCH_HINT}", file.display()));
+    }
+    Ok(exe)
 }
 
 /// End a child and everything under it: a venv's python.exe on Windows is
@@ -152,6 +136,11 @@ impl Worker {
         })
     }
 
+    /// What dictation lacks to run, if anything (see `worker_check`).
+    pub fn missing(&self) -> Option<String> {
+        worker_check(&self.settings).err()
+    }
+
     /// {device, model} the child last said it runs on, None before that.
     pub fn where_(&self) -> Option<Value> {
         self.where_.lk().clone()
@@ -187,18 +176,8 @@ impl Worker {
         }
         Self::stop_locked(s);
         let settings = crate::pyish::json_dumps(&Value::Object(self.settings.clone()), true);
-        let mut cmd = match native_worker(&self.settings) {
-            Some(exe) => {
-                let mut c = Command::new(exe);
-                c.args(["--worker", &settings]);
-                c
-            }
-            None => {
-                let mut c = Command::new(interpreter(&self.home));
-                c.args(["-m", "imperatorium.voice", "--worker", &settings]);
-                c
-            }
-        };
+        let mut cmd = Command::new(worker_check(&self.settings)?);
+        cmd.args(["--worker", &settings]);
         cmd.current_dir(&self.home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
