@@ -197,6 +197,14 @@ impl Store {
             .cloned()
     }
 
+    /// `add_event` for an event built with `json!({...})`.
+    pub fn add_event_json(&self, event: Value) {
+        let Value::Object(event) = event else {
+            panic!("an event is a JSON object");
+        };
+        self.add_event(event);
+    }
+
     pub fn add_event(&self, mut event: Map<String, Value>) {
         if !event.contains_key("at") {
             event.insert("at".into(), json!(now()));

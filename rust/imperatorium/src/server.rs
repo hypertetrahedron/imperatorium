@@ -564,7 +564,7 @@ impl Shared {
         let text = self.notifier.budget(&channels, crossing);
         if let Some(store) = &self.store {
             let e = json!({"kind": "budget", "summary": text, "window": window, "used": crossing["used"]});
-            store.add_event(e.as_object().unwrap().clone());
+            store.add_event_json(e);
         }
     }
 
@@ -938,7 +938,7 @@ impl Shared {
         if let Some(h) = host {
             e["host"] = json!(h);
         }
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         true
     }
 
@@ -1002,7 +1002,7 @@ impl Shared {
                     let e = json!({"kind": "dispatch_dropped", "session_id": sid,
                                    "cwd": beat.get("cwd").cloned().unwrap_or(Value::Null),
                                    "summary": crate::pyish::take(&reason, 280)});
-                    store.add_event(e.as_object().unwrap().clone());
+                    store.add_event_json(e);
                 }
             }
         }
@@ -1336,7 +1336,7 @@ impl Shared {
             };
         let e = json!({"kind": if fork { "fork" } else { "resume" }, "session_id": session_id,
                        "cwd": cwd, "summary": got["command"]});
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         self.invalidate();
         got
     }
@@ -1379,7 +1379,7 @@ impl Shared {
             Err(e) => return json!({"ok": false, "error": e}),
         };
         let e = json!({"kind": "new", "cwd": cwd, "summary": got["command"], "session_id": got["session_id"]});
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         if close {
             got["closed"] = self.close_row(store, row.as_ref().unwrap());
         }
@@ -1422,7 +1422,7 @@ impl Shared {
             .unwrap_or(Value::Null);
         let e = json!({"kind": "close", "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
                        "session_id": row.get("sessionId").cloned().unwrap_or(Value::Null), "summary": summary});
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         got
     }
 
@@ -1593,7 +1593,7 @@ impl Shared {
             let e = json!({"kind": "dispatch_mod", "session_id": sid,
                            "cwd": row.get("cwd").cloned().unwrap_or(Value::Null), "as_user": as_user,
                            "mod_prompt": id, "summary": crate::pyish::take(prompt, 280)});
-            store.add_event(e.as_object().unwrap().clone());
+            store.add_event_json(e);
             self.invalidate();
             return None;
         }
@@ -1619,7 +1619,7 @@ impl Shared {
         if let Some(h) = host.filter(|h| !h.is_empty()) {
             e["host"] = json!(h);
         }
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         None
     }
 
@@ -1811,7 +1811,7 @@ impl Shared {
                     let e = json!({"kind": "dispatch_remote", "cwd": path,
                                    "summary": crate::pyish::take(&prompt, 280),
                                    "host": name, "bg_id": started["id"]});
-                    store.add_event(e.as_object().unwrap().clone());
+                    store.add_event_json(e);
                     set(
                         &mut out,
                         json!({"ok": true, "action": "remote", "host": name, "bg_id": started["id"]}),
@@ -1871,7 +1871,7 @@ impl Shared {
                             done[k] = v;
                         }
                     }
-                    store.add_event(e.as_object().unwrap().clone());
+                    store.add_event_json(e);
                     self.invalidate();
                     set(&mut out, done);
                 }
@@ -1910,7 +1910,7 @@ impl Shared {
             Err(e) => set(&mut out, json!({"ok": false, "error": e})),
             Ok(url) => {
                 let e = json!({"kind": "dispatch_launch", "cwd": path, "summary": crate::pyish::take(&prompt, 280)});
-                store.add_event(e.as_object().unwrap().clone());
+                store.add_event_json(e);
                 set(
                     &mut out,
                     json!({"ok": true, "action": "launch", "url": url}),
@@ -2159,7 +2159,7 @@ impl Shared {
         let e = json!({"kind": "command", "session_id": sid,
                        "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
                        "summary": crate::pyish::take(t, 280)});
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         self.invalidate();
         json!({"ok": true, "action": "command", "command": t, "session": sid,
                "session_name": row.get("name").cloned().unwrap_or(Value::Null)})
@@ -2245,7 +2245,7 @@ impl Shared {
         let e = json!({"kind": "typed", "session_id": sid,
                        "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
                        "summary": crate::pyish::take(&clean, 280)});
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         self.invalidate();
         json!({"ok": true, "action": "typed", "cleaned": changed, "session": sid, "session_name": name})
     }
@@ -2280,7 +2280,7 @@ impl Shared {
         store.forget(&sid);
         let e = json!({"kind": "dismiss", "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
                        "session_id": sid, "name": row.get("name").cloned().unwrap_or(Value::Null)});
-        store.add_event(e.as_object().unwrap().clone());
+        store.add_event_json(e);
         self.invalidate();
         json!({"ok": true, "how": "dismissed"})
     }
@@ -2601,7 +2601,7 @@ impl Shared {
                 if got["ok"] == json!(true) {
                     let summary = format!("{} {}", action, crate::pyish::py_str(&got["branch"]));
                     let e = json!({"kind": format!("worktree_{action}"), "cwd": project, "summary": summary});
-                    store.add_event(e.as_object().unwrap().clone());
+                    store.add_event_json(e);
                 }
                 (200, Body::Json(got))
             }
