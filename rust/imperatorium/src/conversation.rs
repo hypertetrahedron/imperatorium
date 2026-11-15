@@ -1209,3 +1209,23 @@ mod features_tests {
         assert_eq!(summarise_input(Some(&input)), "Which colour? / Which sizes?");
     }
 }
+
+/// test_dispatcher.py::TailBlocks, ported.
+#[cfg(test)]
+mod tail_blocks_ported {
+    use super::*;
+
+    #[test]
+    fn tail_never_changes_the_cached_items() {
+        let items = vec![json!({"blocks": [1, 2]}), json!({"blocks": [3, 4, 5]})];
+        let (out, start, first) = tail_blocks(&items, 4);
+        assert_eq!((out, start, first), (vec![json!({"blocks": [2]}), json!({"blocks": [3, 4, 5]})], 0, 1));
+        assert_eq!(items[0]["blocks"], json!([1, 2]));
+    }
+
+    #[test]
+    fn more_than_there_is_returns_everything() {
+        let items = vec![json!({"blocks": [1]}), json!({"note": "x"})];
+        assert_eq!(tail_blocks(&items, 50), (items.clone(), 0, 0));
+    }
+}

@@ -27,6 +27,10 @@ pub struct Rig {
     pub cwd: String,
     pipes: std::cell::RefCell<Vec<PipeServer>>,
     consoles: std::cell::RefCell<Vec<Console>>,
+    /// The stub `ssh`'s folder and the hook-only listener's port, for a
+    /// rig made with `remote`.
+    pub ssh: Option<TempDir>,
+    pub hook_port: u16,
 }
 
 impl std::ops::Deref for Rig {
@@ -72,6 +76,8 @@ impl Rig {
             cwd,
             pipes: Default::default(),
             consoles: Default::default(),
+            ssh: None,
+            hook_port: 0,
         }
     }
 
@@ -210,6 +216,102 @@ impl Rig {
         rig
     }
 
+    /// A rig with one remote host, `pi`, reached through the stub `ssh`: its
+    /// polls answer `remote_rows`, its hooks land on the hook-only listener
+    /// (`hook_port`), a push of the binary is not needed, and what was sent
+    /// to it is in stub.log / inject.log under `ssh`.
+    pub fn remote(config: Value) -> Rig {
+        let ssh = TempDir::new("ssh");
+        let exe = ssh.join("ssh.exe");
+        std::fs::copy(agents_stub(), &exe).unwrap();
+        // A "build" for the host's architecture, which the host already has.
+        let build = ssh.join("builds").join("x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(&build).unwrap();
+        let bytes = b"not really a linux binary";
+        std::fs::write(build.join("imperatorium"), bytes).unwrap();
+        let hash = {
+            use sha2::Digest;
+            sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect::<String>()
+        };
+        std::fs::write(ssh.join("probe.out"), format!("x86_64\n{hash}  imperatorium\n")).unwrap();
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let mut cfg = json!({"remote": {"enabled": true, "hosts": [
+            {"name": "pi", "claude": "c", "label": "pi",
+             "tunnel": {"local_port": port, "remote_port": 8792}}]}});
+        merge(&mut cfg, &config);
+        let (e, b) = (exe.to_string_lossy().into_owned(), ssh.join("builds").to_string_lossy().into_owned());
+        let mut rig = Rig::with(cfg, |o| {
+            o.env.push(("IMPERATORIUM_SSH".into(), e));
+            o.env.push(("IMPERATORIUM_REMOTE_BUILDS".into(), b));
+        });
+        rig.ssh = Some(ssh);
+        rig.hook_port = port;
+        eventually("the hook-only listener is up", || {
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+        });
+        rig
+    }
+
+    /// The remote host's listing from now on: `agents` as `claude agents
+    /// --json` prints it, `files` its session records. Polled at once.
+    pub fn remote_rows(&self, agents: Value, files: &[Value]) {
+        let mut text = format!("{}\n\n--- imperatorium session files ---\n", agents);
+        for f in files {
+            text.push_str(&format!("{f}\n"));
+        }
+        std::fs::write(self.ssh.as_ref().unwrap().join("remote.out"), text).unwrap();
+        self.d.post("/api/remote/refresh", &json!({}));
+    }
+
+    /// The remote row for `sid` (key `pi/<sid>`), once the poll has found it.
+    pub fn remote_row(&self, sid: &str) -> Value {
+        let mut found = Value::Null;
+        eventually("the remote row is listed", || {
+            self.invalidate();
+            found = self
+                .rows()
+                .into_iter()
+                .find(|r| r["sessionId"] == sid && r["remote"] == json!(true))
+                .unwrap_or(Value::Null);
+            !found.is_null()
+        });
+        found
+    }
+
+    /// What the stub `ssh` was asked to do, one line per call.
+    pub fn ssh_log(&self) -> Vec<String> {
+        std::fs::read_to_string(self.ssh.as_ref().unwrap().join("stub.log"))
+            .map(|t| t.lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    /// What was injected into remote inboxes: (command line, the frames).
+    pub fn injected(&self) -> Vec<String> {
+        std::fs::read_to_string(self.ssh.as_ref().unwrap().join("inject.log"))
+            .map(|t| t.split("\n").map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+
+    /// A hook as the host's tunnel delivers it: to the hook-only listener.
+    pub fn remote_hook(&self, event: &str, sid: &str, extra: Value) -> (u16, Value) {
+        let mut body = json!({"hook_event_name": event, "session_id": sid, "cwd": "/home/les/src/die-reader"});
+        merge(&mut body, &extra);
+        self.tunnel_post("/hook", &body)
+    }
+
+    /// POST to the hook-only listener.
+    pub fn tunnel_post(&self, path: &str, body: &Value) -> (u16, Value) {
+        let url = format!("http://127.0.0.1:{}{path}", self.hook_port);
+        match ureq::post(&url).set("Content-Type", "application/json").send_string(&body.to_string()) {
+            Ok(r) => (r.status(), serde_json::from_str(&r.into_string().unwrap_or_default()).unwrap_or(Value::Null)),
+            Err(ureq::Error::Status(c, r)) => (c, serde_json::from_str(&r.into_string().unwrap_or_default()).unwrap_or(Value::Null)),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
     fn install_stub(&self) {
         let exe = agents_stub();
         std::fs::copy(&exe, self.d.bin_dir.join("claude.exe")).unwrap();
@@ -256,17 +358,36 @@ pub fn merge(into: &mut Value, from: &Value) {
 /// with the compiler that built the tests, kept in the temp folder.
 pub fn agents_stub() -> PathBuf {
     const SRC: &str = r#"
-use std::io::Write;
+use std::io::{Read, Write};
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let joined = args.join(" ");
     let here = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
-    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(here.join("stub.log")) {
-        let _ = writeln!(f, "{}", args.join(" "));
-    }
+    let append = |name: &str, text: &str| {
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(here.join(name)) {
+            let _ = writeln!(f, "{}", text);
+        }
+    };
+    append("stub.log", &joined);
+    let file = |name: &str, default: &str| std::fs::read_to_string(here.join(name)).unwrap_or_else(|_| default.to_string());
     if args.first().map(String::as_str) == Some("agents") {
-        let text = std::fs::read_to_string(here.join("agents.json"))
-            .unwrap_or_else(|_| "[]".to_string());
+        let text = file("agents.json", "[]");
         print!("{}", if text.trim().is_empty() { "[]" } else { &text });
+    } else if joined.contains("imperatorium session files") {
+        // A remote poll: `claude agents` and the session files in one call.
+        print!("{}", file("remote.out", "[]\n\n--- imperatorium session files ---\n"));
+    } else if joined.contains("uname -m") {
+        print!("{}", file("probe.out", ""));
+    } else if joined.contains("inbox-send") {
+        let mut stdin = String::new();
+        let _ = std::io::stdin().read_to_string(&mut stdin);
+        if here.join("fail.txt").exists() {
+            eprintln!("{}", file("fail.txt", "failed").trim());
+            std::process::exit(1);
+        }
+        append("inject.log", &format!("{}\n{}", joined, stdin));
+    } else if joined.contains("--bg") {
+        println!("Background session started: b1abcde1");
     }
 }
 "#;
@@ -678,4 +799,52 @@ impl Drop for Tab {
         kill_tree(&mut self.launcher);
         let _ = self.launcher.wait();
     }
+}
+
+// -------------------------------------------------------------- transcripts
+
+/// A chat as Claude Code writes it: (speaker, text) turns, "user" or
+/// "assistant", chained by uuid/parentUuid. Assistant turns have usage
+/// (`input` tokens) and a model.
+pub fn chat_lines(sid: &str, turns: &[(&str, &str)], input: u64) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut parent = Value::Null;
+    for (i, (who, text)) in turns.iter().enumerate() {
+        let uuid = format!("{sid}-{i}");
+        let at = format!("2026-01-01T00:{:02}:00.000Z", i % 60);
+        let line = if *who == "user" {
+            json!({"type": "user", "uuid": uuid, "parentUuid": parent, "sessionId": sid,
+                   "timestamp": at, "isSidechain": false,
+                   "message": {"role": "user", "content": text}})
+        } else {
+            json!({"type": "assistant", "uuid": uuid, "parentUuid": parent, "sessionId": sid,
+                   "timestamp": at, "isSidechain": false,
+                   "message": {"id": format!("msg-{i}"), "role": "assistant",
+                               "model": "claude-sonnet-4-5",
+                               "content": [{"type": "text", "text": text}],
+                               "usage": {"input_tokens": input, "output_tokens": 5}}})
+        };
+        parent = json!(uuid);
+        out.push(line);
+    }
+    out
+}
+
+/// An assistant turn that starts a background shell `id` (running `command`),
+/// and the tool result that says it is going: the two lines a transcript
+/// has for it. `parent` chains it.
+pub fn background_shell(sid: &str, n: usize, parent: &str, id: &str, command: &str, input: u64) -> Vec<Value> {
+    vec![
+        json!({"type": "assistant", "uuid": format!("{sid}-s{n}"), "parentUuid": parent, "sessionId": sid,
+               "timestamp": "2026-01-01T00:30:00.000Z", "isSidechain": false,
+               "message": {"id": format!("msg-s{n}"), "role": "assistant", "model": "claude-sonnet-4-5",
+                           "content": [{"type": "tool_use", "id": format!("tu-{id}"), "name": "Bash",
+                                        "input": {"command": command, "run_in_background": true}}],
+                           "usage": {"input_tokens": input, "output_tokens": 5}}}),
+        json!({"type": "user", "uuid": format!("{sid}-r{n}"), "parentUuid": format!("{sid}-s{n}"),
+               "sessionId": sid, "timestamp": "2026-01-01T00:30:01.000Z", "isSidechain": false,
+               "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": format!("tu-{id}"),
+                                                       "content": "started"}]},
+               "toolUseResult": {"backgroundTaskId": id}}),
+    ]
 }
