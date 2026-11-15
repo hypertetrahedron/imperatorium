@@ -58,28 +58,213 @@ fn drain<R: Read + Send + 'static>(r: Option<R>) -> std::thread::JoinHandle<Vec<
 /// and wait up to `limit`. A spawn failure comes back as it is (so callers
 /// can tell `NotFound`); on timeout the process tree is killed and the error
 /// is `ErrorKind::TimedOut`.
+///
+/// When it exits, whatever it left behind is killed too (Windows; see
+/// [`Job`]): `claude agents` runs git through git's `cmd\git.exe` wrapper,
+/// and a real git whose wrapper died mid-CreateProcess is never resumed - it
+/// stays suspended forever, one set per poll. [`run_timeout_keep`] is for a
+/// command whose point is to leave something running.
 pub fn run_timeout(cmd: &mut Command, limit: Duration) -> io::Result<Output> {
+    run_bounded(cmd, limit, false)
+}
+
+/// [`run_timeout`], except that a clean exit leaves what the command started
+/// running (a timeout still kills the whole tree).
+#[allow(dead_code)] // nothing run through here starts anything to keep yet
+pub fn run_timeout_keep(cmd: &mut Command, limit: Duration) -> io::Result<Output> {
+    run_bounded(cmd, limit, true)
+}
+
+fn run_bounded(cmd: &mut Command, limit: Duration, keep: bool) -> io::Result<Output> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    no_window(cmd);
-    let mut child = cmd.spawn()?;
+    let (mut child, job) = Job::spawn(cmd)?;
     let out = drain(child.stdout.take());
     let err = drain(child.stderr.take());
     let started = Instant::now();
     let status = loop {
-        match child.try_wait()? {
-            Some(s) => break s,
-            None if started.elapsed() < limit => std::thread::sleep(Duration::from_millis(10)),
-            None => {
-                kill_tree(&mut child);
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if started.elapsed() < limit => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                job.kill(&mut child);
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "timed out"));
+            }
+            Err(e) => {
+                job.kill(&mut child);
+                return Err(e);
             }
         }
     };
+    // Before the pipes are read to their end: a leftover that inherited them
+    // would otherwise hold the read open as long as it lives.
+    if keep {
+        job.release();
+    } else {
+        job.kill(&mut child);
+    }
     Ok(Output {
         status,
         stdout: out.join().unwrap_or_default(),
         stderr: err.join().unwrap_or_default(),
     })
+}
+
+/// What one bounded run's tree lives in, so all of it can be ended.
+///
+/// Windows: a job object of its own. The child is created suspended and
+/// assigned before it runs a single instruction, so nothing it starts can
+/// escape by being quick; KILL_ON_JOB_CLOSE while held, so a dispatcher
+/// killed mid-call takes its children with it; BREAKAWAY_OK, so a child that
+/// asks to leave may (one that asks and is refused would fail to start).
+/// Ending it seals the job first - an active-process limit of zero, which
+/// refuses and terminates any process that tries to join (the late git
+/// above can join after a plain kill) - then terminates what is in it.
+///
+/// Elsewhere: a process group of its own, killed on a timeout. No sweep
+/// after a clean exit: once the leader is reaped its group id can be reused,
+/// and killpg could reach a stranger.
+pub struct Job {
+    #[cfg(windows)]
+    handle: usize,
+}
+
+#[cfg(windows)]
+mod win {
+    pub use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
+
+    /// The job's limit flags (and an active-process limit of zero).
+    pub unsafe fn set_limits(job: usize, flags: u32) -> bool {
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = flags;
+        SetInformationJobObject(
+            job as _,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) != 0
+    }
+
+    /// Resume every thread of a process created suspended (it has one).
+    pub unsafe fn resume(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+        };
+        use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut te: THREADENTRY32 = std::mem::zeroed();
+        te.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut resumed = false;
+        let mut more = Thread32First(snap, &mut te) != 0;
+        while more {
+            if te.th32OwnerProcessID == pid {
+                let t = OpenThread(THREAD_SUSPEND_RESUME, 0, te.th32ThreadID);
+                if !t.is_null() {
+                    if ResumeThread(t) != u32::MAX {
+                        resumed = true;
+                    }
+                    CloseHandle(t);
+                }
+            }
+            more = Thread32Next(snap, &mut te) != 0;
+        }
+        CloseHandle(snap);
+        resumed
+    }
+}
+
+impl Job {
+    /// Spawn `cmd` (no console window) inside a job of its own.
+    pub fn spawn(cmd: &mut Command) -> io::Result<(Child, Job)> {
+        #[cfg(windows)]
+        unsafe {
+            use std::os::windows::io::AsRawHandle;
+            use std::os::windows::process::CommandExt;
+            use win::*;
+            cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+            let mut child = cmd.spawn()?;
+            let mut handle = CreateJobObjectW(std::ptr::null(), std::ptr::null()) as usize;
+            if handle != 0
+                && !(set_limits(handle, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+                    && AssignProcessToJobObject(handle as _, child.as_raw_handle() as _) != 0)
+            {
+                windows_sys::Win32::Foundation::CloseHandle(handle as _);
+                handle = 0;
+            }
+            // Without a job a timeout still kills the tree (taskkill /T).
+            let job = Job { handle };
+            if !resume(child.id()) {
+                // Never leave a child suspended: that is the very leak this prevents.
+                job.kill(&mut child);
+                return Err(io::Error::other("could not resume the child process"));
+            }
+            Ok((child, job))
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+            Ok((cmd.spawn()?, Job {}))
+        }
+    }
+
+    /// End the child and everything it started, and reap it.
+    pub fn kill(self, child: &mut Child) {
+        #[cfg(windows)]
+        unsafe {
+            use win::*;
+            if self.handle != 0 {
+                self.seal();
+                TerminateJobObject(self.handle as _, 1);
+                windows_sys::Win32::Foundation::CloseHandle(self.handle as _);
+            } else if let Ok(None) = child.try_wait() {
+                kill_pid_tree(child.id());
+            }
+        }
+        #[cfg(unix)]
+        if let Ok(None) = child.try_wait() {
+            // The group is ours while its leader is unreaped.
+            unsafe {
+                libc::killpg(child.id() as i32, libc::SIGKILL);
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Refuse any process that tries to join from now on: the members stay;
+    /// one being created into the job is terminated and its CreateProcess
+    /// fails. (A no-op off Windows.)
+    pub fn seal(&self) -> bool {
+        #[cfg(windows)]
+        unsafe {
+            use win::*;
+            self.handle != 0
+                && set_limits(self.handle, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS)
+        }
+        #[cfg(not(windows))]
+        false
+    }
+
+    /// Let what the child left running carry on without us.
+    pub fn release(self) {
+        #[cfg(windows)]
+        unsafe {
+            if self.handle != 0 {
+                win::set_limits(self.handle, 0);
+                windows_sys::Win32::Foundation::CloseHandle(self.handle as _);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -197,22 +382,74 @@ mod subproc_cov {
     }
 
     #[test]
-    fn a_clean_exit_leaves_what_it_started_running() {
-        // `claude --bg` exits and its session must carry on: the binary has
-        // no sweep (see DIFFERS for Python's default).
+    fn keep_leaves_what_a_clean_exit_started_running() {
+        // For a command whose point is to leave something running.
         let pidfile = scratch("keep");
         let _ = std::fs::remove_file(&pidfile);
-        let done = run_timeout(&mut parent(&pidfile, false), Duration::from_secs(30)).unwrap();
+        let done = run_timeout_keep(&mut parent(&pidfile, false), Duration::from_secs(30)).unwrap();
         assert!(done.status.success());
         let pid = wait_pid(&pidfile);
         std::thread::sleep(Duration::from_millis(500));
         let still = alive(pid);
         cleanup(Some(pid), &pidfile);
-        assert!(still, "a clean exit killed the grandchild");
+        assert!(still, "keep killed the grandchild");
     }
 
     #[test]
-    #[ignore = "DIFFERS: Python's subproc.run killed what a clean exit left behind (job object); the binary's run_timeout does not"]
+    fn a_member_left_suspended_goes_with_the_job() {
+        // The leak this exists for: a git created into the job, never
+        // resumed, its parent gone. Stood in for by a suspended ping
+        // assigned to the job by hand.
+        use std::os::windows::io::AsRawHandle;
+        use std::os::windows::process::CommandExt;
+        let mut leader = Command::new("ping");
+        leader.args(["-n", "60", "127.0.0.1"]).stdout(Stdio::null()).stderr(Stdio::null());
+        let (mut child, job) = Job::spawn(&mut leader).unwrap();
+        let mut late = Command::new("ping");
+        late.args(["-n", "60", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW | win::CREATE_SUSPENDED);
+        let mut suspended = late.spawn().unwrap();
+        let joined = unsafe { win::AssignProcessToJobObject(job.handle as _, suspended.as_raw_handle() as _) != 0 };
+        let pid = suspended.id();
+        job.kill(&mut child);
+        let ok = gone_within(pid, 5);
+        let _ = suspended.kill();
+        let _ = suspended.wait();
+        assert!(joined, "could not put the stand-in in the job");
+        assert!(ok, "suspended member {pid} outlived the job");
+    }
+
+    #[test]
+    fn a_sealed_job_refuses_a_late_child() {
+        // The late git joined ~90 ms after claude exited, after a one-shot
+        // kill would already have run: sealed first, it cannot start at all.
+        let script = "[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); \
+                      try { $p = Start-Process -FilePath cmd -ArgumentList '/c','exit' -PassThru -WindowStyle Hidden -ErrorAction Stop; 'spawned' } \
+                      catch { 'refused' }";
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let (mut child, job) = Job::spawn(&mut c).unwrap();
+        let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut out, &mut line).unwrap();
+        assert_eq!(line.trim(), "ready");
+        assert!(job.seal());
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "go").unwrap();
+        drop(stdin);
+        let mut rest = String::new();
+        let _ = std::io::Read::read_to_string(&mut out, &mut rest);
+        job.kill(&mut child);
+        assert_eq!(rest.trim(), "refused");
+    }
+
+    #[test]
     fn a_clean_exit_kills_what_it_left() {
         let pidfile = scratch("sweep");
         let _ = std::fs::remove_file(&pidfile);
