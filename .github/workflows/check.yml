@@ -11,8 +11,11 @@
 name: check
 
 on:
+  # The trunk and release branches on every push; any other branch through
+  # its pull request (one run, not one per push and one per PR). Not tags:
+  # release.yml calls this for those.
   push:
-    branches: ["**"]   # not tags: release.yml calls this for those
+    branches: ["main", "release/**"]
   pull_request:
   workflow_call:
 
