@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::install::{home_arg, home_dir};
 
 /// The three units, in the order they are listed and removed.
-const NAMES: [&str; 3] = ["Dispatcher", "StreamDeck", "Hotkey"];
+pub(crate) const NAMES: [&str; 3] = ["Dispatcher", "StreamDeck", "Hotkey"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -47,7 +47,7 @@ impl Backend {
     }
 
     /// The `--serve`-style subcommand a unit runs (what its processes are found by).
-    fn subcommand(name: &str) -> &'static str {
+    pub(crate) fn subcommand(name: &str) -> &'static str {
         match name {
             "Dispatcher" => "serve",
             "StreamDeck" => "streamdeck",
@@ -63,7 +63,7 @@ pub struct Cmd {
     pub args: Vec<String>,
 }
 
-fn cmd(prog: &str, args: &[&str]) -> Cmd {
+pub(crate) fn cmd(prog: &str, args: &[&str]) -> Cmd {
     Cmd { prog: prog.into(), args: args.iter().map(|a| a.to_string()).collect() }
 }
 
@@ -146,7 +146,7 @@ fn output_of(c: &Cmd) -> std::io::Result<std::process::Output> {
 }
 
 /// Run and wait: success, and stdout then stderr.
-fn run(c: &Cmd) -> (bool, String) {
+pub(crate) fn run(c: &Cmd) -> (bool, String) {
     match output_of(c) {
         Ok(o) => (
             o.status.success(),
@@ -193,7 +193,7 @@ fn stop_processes_cmd(exe: &Path, sub: &str, extra: &str) -> Cmd {
     cmd("powershell", &["-NoProfile", "-Command", &script])
 }
 
-fn systemctl(args: &[&str]) -> Cmd {
+pub(crate) fn systemctl(args: &[&str]) -> Cmd {
     let mut a = vec!["--user"];
     a.extend_from_slice(args);
     cmd("systemctl", &a)
@@ -288,12 +288,12 @@ impl Service {
         out
     }
 
-    fn id(&self, name: &str) -> String {
+    pub(crate) fn id(&self, name: &str) -> String {
         self.backend.unit_id(&self.prefix, name)
     }
 
     /// Where a systemd unit or launchd agent file lives (none for tasks).
-    fn unit_file(&self, name: &str) -> Option<PathBuf> {
+    pub(crate) fn unit_file(&self, name: &str) -> Option<PathBuf> {
         let id = self.id(name);
         match self.backend {
             Backend::Windows => None,
@@ -500,7 +500,7 @@ impl Service {
     // -- doing it -----------------------------------------------------------------
 
     /// Is `name` registered?
-    fn is_installed(&self, name: &str) -> bool {
+    pub(crate) fn is_installed(&self, name: &str) -> bool {
         match self.unit_file(name) {
             Some(file) => file.exists(),
             None => run(&cmd("schtasks", &["/Query", "/TN", &self.id(name)])).0,

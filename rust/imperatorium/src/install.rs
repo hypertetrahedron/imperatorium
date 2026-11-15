@@ -936,10 +936,16 @@ pub fn status_main(args: &[String], home: Option<&str>) -> i32 {
     }
     let port = o.port.clone().unwrap_or_else(|| "8792".into());
     match wait_for_dispatcher(&port, 2) {
-        Some(h) => println!("dispatcher    responding on 127.0.0.1:{port}, pid {}", h.get("pid").cloned().unwrap_or(Value::Null)),
-        None => println!("dispatcher    NOT responding on 127.0.0.1:{port}"),
+        Some(h) => {
+            println!("dispatcher    responding on 127.0.0.1:{port}, pid {}", h.get("pid").cloned().unwrap_or(Value::Null));
+            0
+        }
+        // As impctl's status: a dispatcher that does not answer is exit 1.
+        None => {
+            println!("dispatcher    NOT responding on 127.0.0.1:{port}");
+            1
+        }
     }
-    0
 }
 
 #[cfg(test)]
