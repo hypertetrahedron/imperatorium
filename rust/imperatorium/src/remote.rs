@@ -1821,7 +1821,7 @@ mod ssh_tests {
 
     #[test]
     fn an_old_claude_without_json_is_reported() {
-        // raspberrypi.local runs 2.1.49, where --json does not exist.
+        // An older host (2.1.49) has no --json.
         let fx = Fx::new();
         let e = polled(&fx, json!({"match": "agents", "code": 1, "stderr": "error: unknown option '--json'\n"})).unwrap_err();
         assert!(e.contains("--json"), "{e}");
@@ -1972,7 +1972,7 @@ mod ssh_tests {
 
     #[test]
     fn one_dead_host_does_not_hide_a_working_one() {
-        // servicehost1 being off must not cost you sight of developmenthost1.
+        // One host being off must not cost you sight of another.
         let fx = Fx::new();
         fx.rules(json!([
             {"match": "agents", "host": "bad", "code": 255, "stderr": "unreachable\n"},
