@@ -137,6 +137,8 @@ jobs:
           # llvm-cov's own target folder, where the integration tests look;
           # cargo test builds only its test harness.
           cargo build -p fakecli --locked --target-dir target/llvm-cov-target
+          # The examples (fakessh, the stand-in ssh the remote tests run) likewise.
+          cargo build -p imperatorium --examples --locked --target-dir target/llvm-cov-target
           cargo llvm-cov --workspace --locked --no-fail-fast --no-report
           cargo llvm-cov report --lcov --output-path lcov.info
           cargo llvm-cov report --html --output-dir coverage

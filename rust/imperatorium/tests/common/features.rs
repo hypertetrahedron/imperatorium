@@ -12,6 +12,7 @@ use std::time::Duration;
 
 // ----------------------------------------------------------------- pipes
 
+#[cfg(windows)]
 mod ffi {
     use std::ffi::c_void;
     #[link(name = "kernel32")]
@@ -44,6 +45,11 @@ impl Pipe {
         let path = format!("\\\\.\\pipe\\imp-feat-{}-{tag}", std::process::id());
         let got: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
         let (p, g) = (path.clone(), got.clone());
+        // A named pipe is Windows'; elsewhere nothing listens (the tests that
+        // write to one are Windows-only), and this still compiles and links.
+        #[cfg(not(windows))]
+        let _ = (p, g);
+        #[cfg(windows)]
         std::thread::spawn(move || {
             let wide: Vec<u16> = p.encode_utf16().chain(Some(0)).collect();
             loop {
