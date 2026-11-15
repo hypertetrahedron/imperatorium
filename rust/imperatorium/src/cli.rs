@@ -719,6 +719,18 @@ fn cmd_restart(a: &Args, base: &str, home: Option<&str>) -> Res<i32> {
     Ok(0)
 }
 
+/// Restart the dispatcher's unit (what `remote add` offers after a config change).
+pub fn restart_dispatcher(home: Option<&str>) -> i32 {
+    let a = Args { pos: vec!["dispatcher".into()], ..Default::default() };
+    match cmd_restart(&a, &base(), home) {
+        Ok(code) => code,
+        Err(Fail(m)) => {
+            eprintln!("{PROG}: {}", m.trim_start_matches('\u{1}'));
+            1
+        }
+    }
+}
+
 /// Run the dispatcher in this terminal, for debugging.
 fn cmd_run(a: &Args, home: Option<&str>) -> Res<i32> {
     let host = a.opt("host").unwrap_or("127.0.0.1").to_string();
@@ -908,6 +920,14 @@ pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("Monitoring", "hosts", "", "Remote hosts and their state"),
     ("Monitoring", "notify", "[CHANNEL on|off]", "Show notification channels, or turn one on/off"),
     ("Monitoring", "health", "", "Is the dispatcher up (and its pid)"),
+    ("Run by the binary itself, and for conformance", "remote-channel", "", "On a host, over SSH: the dispatcher's read/stats channel (JSON lines)"),
+    ("Run by the binary itself, and for conformance", "inbox-send", "SOCKET < frames", "On a host, over SSH: write frames into a session's inbox socket"),
+    ("Run by the binary itself, and for conformance", "hook-relay", "...", "On a host: relay a hook's event through the tunnel to the dispatcher"),
+    ("Run by the binary itself, and for conformance", "type-into", "PID ...", "Type into a session's console (how a queued prompt is delivered on Windows)"),
+    ("Run by the binary itself, and for conformance", "settings-check", "", "Conformance: settings.check over JSON lines"),
+    ("Run by the binary itself, and for conformance", "slash-check", "", "Conformance: slash-command parsing over JSON lines"),
+    ("Run by the binary itself, and for conformance", "projects-check", "", "Conformance: project discovery over JSON lines"),
+    ("Run by the binary itself, and for conformance", "focus-check", "", "Conformance: window matching over JSON lines"),
     ("Help", "version", "", "Print the version"),
     ("Help", "help", "[COMMAND]", "This list, or one command"),
 ];
@@ -1175,6 +1195,23 @@ mod tests {
         }
         assert!(help_text(Some("send")).unwrap().contains("--dry-run"));
         assert!(help_text(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn every_subcommand_of_main_is_listed() {
+        let main = include_str!("main.rs");
+        let re = regex::Regex::new(r#"Some\("([a-z][a-z-]*)"\)"#).unwrap();
+        let mut seen = 0;
+        for c in re.captures_iter(main) {
+            let name = &c[1];
+            // Not subcommands: `sessions`' own verbs and the `--version` spelling.
+            if ["chain", "info", "titles", "items", "list", "stats"].contains(&name) {
+                continue;
+            }
+            seen += 1;
+            assert!(COMMANDS.iter().any(|c| c.1 == name), "`{name}` is a subcommand of main.rs but not in the help");
+        }
+        assert!(seen > 25, "{seen}");
     }
 
     #[test]
