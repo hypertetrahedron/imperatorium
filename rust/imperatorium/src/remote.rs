@@ -43,7 +43,6 @@ use crate::pyish::{py_str, strip, take, truthy};
 type Row = Map<String, Value>;
 
 pub const DEFAULT_CLAUDE: &str = "$HOME/.local/bin/claude";
-pub const DEFAULT_PYTHON: &str = "python3";
 pub const DEFAULT_REMOTE_HOOK_PORT: u16 = 8792;
 pub const FIRST_TUNNEL_PORT: u16 = 8793;
 const CONNECT_TIMEOUT: u32 = 8;
@@ -93,21 +92,20 @@ pub struct Host {
     pub name: String,
     pub claude: String,
     pub label: String,
-    pub python: String,
-    pub reader_python: Value,
     /// (local_port, remote_port)
     pub tunnel: Option<(u16, u16)>,
 }
 
 impl Host {
-    /// As `/api/hosts` lists it: Python's `dict(h)`.
+    /// As `/api/hosts` lists it. Old configs carry `python` and
+    /// `reader_python` per host (the interpreter the Python remote ran on
+    /// the host); they are accepted and ignored - the binary runs there.
     pub fn public(&self) -> Map<String, Value> {
         let tunnel = match self.tunnel {
             Some((l, r)) => json!({"local_port": l, "remote_port": r}),
             None => Value::Null,
         };
         json!({"name": self.name, "claude": self.claude, "label": self.label,
-               "python": self.python, "reader_python": self.reader_python,
                "tunnel": tunnel})
         .as_object()
         .unwrap()
@@ -165,8 +163,6 @@ pub fn load_hosts(config: &Value) -> Vec<Host> {
         hosts.push(Host {
             claude: pick("claude", DEFAULT_CLAUDE),
             label: pick("label", &name),
-            python: pick("python", DEFAULT_PYTHON),
-            reader_python: entry.get("reader_python").cloned().unwrap_or(Value::Null),
             tunnel: None,
             name,
         });
@@ -1599,6 +1595,18 @@ mod tests {
         assert_eq!(hosts[3].label, "Dee");
         assert_eq!(hosts[1].claude, DEFAULT_CLAUDE);
         assert!(load_hosts(&json!({"remote": {"enabled": false, "hosts": ["a"]}})).is_empty());
+    }
+
+    #[test]
+    fn old_python_fields_are_accepted_and_ignored() {
+        let cfg = json!({"remote": {"hosts": [
+            {"name": "a", "python": "/usr/bin/python3.11", "reader_python": "/opt/py", "claude": "cl"}
+        ]}});
+        let hosts = load_hosts(&cfg);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].claude, "cl");
+        let shown = hosts[0].public();
+        assert!(!shown.contains_key("python") && !shown.contains_key("reader_python"));
     }
 
     #[test]
