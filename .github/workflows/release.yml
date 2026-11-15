@@ -1,34 +1,77 @@
-# Builds and publishes a release when a version tag is pushed (v0.3.1, or
-# v0.3.1-preview.1 for the preview channel). Written in phase 6 and not yet
-# run: nothing is published until the user decides to push a tag.
+# Builds and publishes a release when a version tag is pushed (v0.4.0, or
+# v0.4.0-preview.1 for the preview channel). See docs/releasing.md.
+#
+#   validate -> check -> windows / linux / macos -> package -> smoke-* -> publish
 #
 # Assets: the binary per target triple, the dictation worker (Vulkan) for
-# Windows, SHA256SUMS, manifest.json, and the install scripts - the layout
-# `imperatorium update` and install.ps1 / install.sh read (`imperatorium release-package`).
+# Windows, SHA256SUMS, manifest.json, manifest.json.sig, and the install
+# scripts - the layout `imperatorium update` and install.ps1 / install.sh read
+# (`imperatorium release-package`).
+#
+# Third-party actions are pinned by commit SHA (the comment is the tag).
 name: release
 
 on:
   push:
     tags: ["v*"]
 
+# Read-only by default; `publish` alone may write.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.100.0"   # as check.yml
 
 jobs:
+  # Is this tag a real release? Format, branch, and version all have to agree
+  # before anything is built.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Tag format, branch, and Cargo version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]+)?$ ]]; then
+            echo "::error::tag '$tag' is not vX.Y.Z or vX.Y.Z-preview.N"; exit 1
+          fi
+
+          # The tagged commit must be on main or a release/* branch.
+          ok=
+          for ref in origin/main $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*'); do
+            if git merge-base --is-ancestor "$GITHUB_SHA" "$ref" 2>/dev/null; then ok="$ref"; break; fi
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::$GITHUB_SHA is not on origin/main or any origin/release/* branch"; exit 1
+          fi
+          echo "commit is on $ok"
+
+          # The version agrees with Cargo.toml (docs/releasing.md section 2):
+          # a preview vA.B.C-preview.N needs A.B.C-dev; a stable vA.B.C needs A.B.C.
+          cargo=$(tr -d '\r' < rust/imperatorium/Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+          v="${tag#v}"
+          if [[ "$v" == *-preview.* ]]; then want="${v%%-preview.*}-dev"; else want="$v"; fi
+          if [ "$cargo" != "$want" ]; then
+            echo "::error::tag $tag needs rust/imperatorium/Cargo.toml version \"$want\", found \"$cargo\""; exit 1
+          fi
+          echo "tag $tag, Cargo $cargo: consistent"
+
   # The same tests as every push (check.yml): a tag whose commit fails them
   # builds and publishes nothing.
   check:
+    needs: validate
     uses: ./.github/workflows/check.yml
 
   windows:
-    needs: check
+    needs: [validate, check]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust ${{ env.RUST_TOOLCHAIN }}
         shell: bash
         run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
@@ -39,7 +82,7 @@ jobs:
         working-directory: rust
         run: cargo build --release --locked -p imperatorium
       - name: Vulkan SDK for the dictation worker
-        uses: humbletim/install-vulkan-sdk@v1.2
+        uses: humbletim/install-vulkan-sdk@30ba978f977e81b72d091fc8888feb1fb26f9aff # v1.2
         with:
           version: 1.4.309.0
           cache: true
@@ -56,16 +99,16 @@ jobs:
         run: |
           mkdir -p win
           cp rust/target/release/imperatorium.exe /c/vk/release/imperatorium-voice.exe win/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows
           path: win/
 
   linux:
-    needs: check
+    needs: [validate, check]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust ${{ env.RUST_TOOLCHAIN }}
         shell: bash
         run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
@@ -78,7 +121,7 @@ jobs:
           for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             cargo build --release --locked -p imperatorium --no-default-features --target "$t"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux
           path: |
@@ -86,13 +129,13 @@ jobs:
             rust/target/aarch64-unknown-linux-musl/release/imperatorium
 
   macos:
-    needs: check
+    needs: [validate, check]
     runs-on: macos-latest
     # Built but never run on a Mac yet: a failure here does not hold back
     # the Windows and Linux assets.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust ${{ env.RUST_TOOLCHAIN }}
         shell: bash
         run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
@@ -105,24 +148,37 @@ jobs:
           for t in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build --release --locked -p imperatorium --target "$t"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos
           path: |
             rust/target/aarch64-apple-darwin/release/imperatorium
             rust/target/x86_64-apple-darwin/release/imperatorium
 
-  publish:
-    needs: [windows, linux, macos]
+  # Builds the release folder (manifest.json, manifest.json.sig, SHA256SUMS,
+  # install scripts), attests its provenance, and hands it on as an artifact.
+  # Nothing is published from here.
+  package:
+    needs: [validate, windows, linux, macos]
     if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # attest-build-provenance
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: built
-      - name: Package (manifest.json, SHA256SUMS, install scripts)
+      - name: Package and sign (manifest.json, manifest.json.sig, SHA256SUMS, install scripts)
+        env:
+          IMPERATORIUM_SIGNING_KEY: ${{ secrets.IMPERATORIUM_SIGNING_KEY }}
         run: |
+          if [ -z "$IMPERATORIUM_SIGNING_KEY" ]; then
+            echo "::error::the IMPERATORIUM_SIGNING_KEY secret is empty or missing; refusing to publish an unsigned release"
+            exit 1
+          fi
           v="${GITHUB_REF_NAME#v}"
           assets=(
             "x86_64-pc-windows-msvc=built/windows/imperatorium.exe"
@@ -140,18 +196,145 @@ jobs:
           git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.txt
           chmod +x built/linux/x86_64-unknown-linux-musl/release/imperatorium
           built/linux/x86_64-unknown-linux-musl/release/imperatorium release-package \
-            --version "$v" --out dist --notes notes.txt --scripts . "${assets[@]}"
-      - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
+            --version "$v" --out dist --notes notes.txt --scripts . \
+            --sign-key-env IMPERATORIUM_SIGNING_KEY "${assets[@]}"
+          test -s dist/manifest.json.sig
+          mkdir -p meta && cp notes.txt meta/notes.txt
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: meta
+          path: meta/
+
+  # The release folder, served on localhost, installed with the script users
+  # will run. --dry-run: imperatorium itself changes nothing on the runner
+  # (the binary is downloaded and checksum-verified, then `install --dry-run`
+  # only reports). `update --check` verifies manifest.json.sig against the
+  # key embedded in the binary.
+  smoke-linux:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Install script, dry run, and signed update check
+        shell: bash
         run: |
+          set -euo pipefail
+          port=18765
+          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          (cd dist && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
+          server=$!
+          for _ in $(seq 1 50); do
+            curl -fs "http://127.0.0.1:$port/manifest.json" >/dev/null && break
+            sleep 0.2
+          done
+          curl -fs "http://127.0.0.1:$port/manifest.json.sig" >/dev/null
+          IMPERATORIUM_RELEASES="http://127.0.0.1:$port" sh dist/install.sh --dry-run
+          bin="$HOME/.local/bin/imperatorium"
+          want="${GITHUB_REF_NAME#v}"
+          got=$("$bin" version)
+          echo "imperatorium version: $got"
+          case "$got" in *"$want"*) ;; *) echo "::error::expected version $want, got: $got"; exit 1 ;; esac
+          "$bin" update --check --from "http://127.0.0.1:$port"
+          kill "$server" 2>/dev/null || true
+
+  smoke-windows:
+    needs: package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Install script, dry run, and signed update check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $port = 18765
+          $base = "http://127.0.0.1:$port"
+          # Keep everything the script writes inside the runner's temp folder.
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'localappdata'
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+          $server = Start-Process python -ArgumentList '-m', 'http.server', "$port", '--bind', '127.0.0.1', '--directory', 'dist' -PassThru -WindowStyle Hidden
+          try {
+            $up = $false
+            foreach ($i in 1..50) {
+              try { Invoke-WebRequest "$base/manifest.json" -UseBasicParsing | Out-Null; $up = $true; break } catch { Start-Sleep -Milliseconds 200 }
+            }
+            if (-not $up) { throw 'the local release server did not start' }
+            Invoke-WebRequest "$base/manifest.json.sig" -UseBasicParsing | Out-Null
+            # As a file, with parameters; --dry-run goes on to `imperatorium install`.
+            powershell -NoProfile -ExecutionPolicy Bypass -File dist\install.ps1 -From $base --dry-run
+            if ($LASTEXITCODE) { throw "install.ps1 exited $LASTEXITCODE" }
+            $exe = Join-Path $env:LOCALAPPDATA 'Programs\imperatorium\imperatorium.exe'
+            $want = $env:GITHUB_REF_NAME.TrimStart('v')
+            $got = (& $exe version) -join "`n"
+            Write-Host "imperatorium version: $got"
+            if ($got -notlike "*$want*") { throw "expected version $want, got: $got" }
+            & $exe update --check --from $base
+            if ($LASTEXITCODE) { throw "update --check exited $LASTEXITCODE" }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }
+
+  publish:
+    needs: [package, smoke-linux, smoke-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: meta
+          path: meta
+      - name: Publish
+        run: |
+          set -euo pipefail
           tag="$GITHUB_REF_NAME"
+          {
+            cat meta/notes.txt
+            printf '\nmacOS builds are experimental: they are built but have not been tested on a Mac.\n'
+          } > notes.md
           if [[ "$tag" == *-* ]]; then
-            gh release create "$tag" dist/* --prerelease --title "Imperatorium ${tag#v}" --generate-notes
-            # The preview channel reads a rolling `preview` release.
-            gh release delete preview --yes --cleanup-tag || true
-            gh release create preview dist/* --prerelease --title "Imperatorium preview (${tag#v})" \
-              --notes "The newest preview build: ${tag}."
+            gh release create "$tag" dist/* --verify-tag --prerelease \
+              --title "Imperatorium ${tag#v}" --notes-file notes.md --generate-notes
+
+            # The preview channel reads the rolling `preview` release. It is
+            # never deleted and recreated (that would leave a window where its
+            # download URLs 404): created once, then updated in place.
+            # `gh release edit --target` does not move an existing tag (the
+            # API ignores target_commitish once the tag exists), so the tag is
+            # moved explicitly through the refs API. `preview` is not a v*
+            # tag, so the tag ruleset does not block it, and a ref update by
+            # GITHUB_TOKEN does not start another workflow run.
+            title="Imperatorium preview (${tag#v})"
+            { printf 'The newest preview build: %s.\n\n' "$tag"; cat notes.md; } > preview-notes.md
+            if gh release view preview >/dev/null 2>&1; then
+              gh release upload preview dist/* --clobber
+              gh api -X PATCH "repos/$GH_REPO/git/refs/tags/preview" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+              gh release edit preview --prerelease --title "$title" --notes-file preview-notes.md
+            else
+              gh release create preview dist/* --prerelease --target "$GITHUB_SHA" \
+                --title "$title" --notes-file preview-notes.md
+            fi
           else
-            gh release create "$tag" dist/* --latest --title "Imperatorium ${tag#v}" --generate-notes
+            gh release create "$tag" dist/* --verify-tag --latest \
+              --title "Imperatorium ${tag#v}" --notes-file notes.md --generate-notes
           fi

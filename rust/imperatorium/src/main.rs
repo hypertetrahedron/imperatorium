@@ -62,6 +62,8 @@ mod service;
 mod service_ctl;
 mod sessions;
 mod sessionstat;
+mod signing;
+mod statever;
 mod settings;
 mod slash;
 mod store;
@@ -285,6 +287,7 @@ fn main() {
         Some("hotkey") => hotkey::main(&args[1..], home.as_deref()),
         Some("update") => update::main(&args[1..]),
         Some("release-package") => release::main(&args[1..]),
+        Some("release-keygen") => signing::keygen_main(),
         Some("voice") => models::main(&args[1..], home.as_deref()),
         #[cfg(feature = "streamdeck")]
         Some("streamdeck") => streamdeck::main(&args[1..], home.as_deref()),
@@ -301,6 +304,14 @@ fn main() {
                 live.then(|| paths::state_dir().join("state.json").to_string_lossy().into_owned())
             });
             let port = if live && flag(&args, "--port").is_none() { 8792 } else { port };
+            // The live state folder's format, before anything reads it: a
+            // folder a newer version wrote stops an older one here.
+            if live {
+                if let Err(e) = statever::ensure(&paths::state_dir()) {
+                    eprintln!("imperatorium: {e}");
+                    std::process::exit(1);
+                }
+            }
             server::serve(&host, port, home.as_deref(), state.as_deref(), live)
         }
         Some("version") | Some("--version") => {

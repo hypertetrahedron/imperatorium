@@ -47,6 +47,28 @@ curl -fsSL https://github.com/hypertetrahedron/imperatorium/releases/latest/down
 ```
 
 `IMPERATORIUM_CHANNEL=preview` takes the preview channel instead of stable.
+`IMPERATORIUM_VERSION=0.4.0` (or `-Version 0.4.0` to `install.ps1`) installs
+that release exactly, for reproducible installs or to go back to one that
+worked.
+
+**Read it first** - each script is short. Download it, read it, then run it;
+add `--dry-run` to see what `imperatorium install` would do without changing
+anything:
+
+```
+# Windows (PowerShell)
+irm https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.ps1 -OutFile install.ps1
+notepad install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1 --dry-run
+
+# Linux / macOS
+curl -fsSLO https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.sh
+less install.sh
+sh install.sh --dry-run
+```
+
+macOS builds are experimental: CI builds them, but they have not been tested
+on a Mac. The Windows and Linux builds are the supported ones.
 
 `imperatorium install` asks where your projects live and which extras you
 want (dictation, Stream Deck, auto-approval, the mod, statusline, tool hooks,
@@ -65,11 +87,19 @@ imperatorium check                  # what is present and missing; changes nothi
 imperatorium install --dry-run      # what install would do
 imperatorium install --yes          # all defaults, no questions
 imperatorium uninstall              # hooks, mod and service; config and state stay
+imperatorium uninstall --purge      # ...and the config and state folders too
 imperatorium service status         # install | uninstall | restart | status
 imperatorium remote add HOST        # onboard another machine (see "Other machines")
 imperatorium remote check           # every configured host, piece by piece
-imperatorium update                 # self-update from the releases, SHA-256 checked
+imperatorium update                 # self-update from the releases; the manifest's signature
+                                    # and the binary's SHA-256 are checked
+imperatorium update --version 0.4.0 # a specific release, newer or older
+imperatorium update --rollback      # back to the binary before the last update
 ```
+
+How releases are made, versioned and checked is in
+[docs/releasing.md](docs/releasing.md); what changed in each is in
+[CHANGELOG.md](CHANGELOG.md).
 
 Hook entries in `~/.claude/settings.json` point at the installed binary, so if
 you move it, run `imperatorium install` again.

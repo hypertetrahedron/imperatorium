@@ -1,5 +1,9 @@
-//! `imperatorium update [--check] [--channel stable|preview] [--from URL]`:
-//! self-update from the project's releases (phase 6), SHA-256 verified.
+//! `imperatorium update [--check] [--channel stable|preview] [--version V]
+//! [--from URL] [--rollback]`: self-update from the project's releases
+//! (phase 6). The manifest's signature is checked (signing.rs), then each
+//! download's SHA-256 against it. `--version` installs one release, newer
+//! or older; the binary an update replaces is kept beside it
+//! (`imperatorium.previous[.exe]`) for `--rollback`.
 //!
 //! A release is a folder of assets: one binary per target triple
 //! (`imperatorium-<triple>[.exe]`, `imperatorium-voice-<triple>.exe`),
@@ -76,9 +80,14 @@ pub fn newer(candidate: &str, current: &str) -> bool {
     }
 }
 
-fn base(from: Option<&str>, channel: &str) -> String {
+/// Where a release is read from: `--from` (or IMPERATORIUM_RELEASES), else
+/// one version's release (`--version`), else the channel's.
+fn base(from: Option<&str>, channel: &str, pinned: Option<&str>) -> String {
     if let Some(f) = from.map(str::to_string).or_else(|| crate::paths::env_nonempty("IMPERATORIUM_RELEASES")) {
         return f.trim_end_matches('/').to_string();
+    }
+    if let Some(v) = pinned {
+        return format!("{RELEASES}/download/v{}", v.trim().trim_start_matches('v'));
     }
     if channel == "preview" {
         format!("{RELEASES}/download/preview")
@@ -100,9 +109,14 @@ fn get(url: &str, limit: u64) -> Result<Vec<u8>, String> {
     Ok(body)
 }
 
-/// The release's manifest.
+/// The release's manifest, once its signature is checked (signing.rs): an
+/// unsigned or wrongly signed manifest is an error, so nothing it lists is
+/// downloaded.
 pub fn manifest(base: &str) -> Result<Value, String> {
     let body = get(&format!("{base}/manifest.json"), 1 << 20)?;
+    let sig = get(&format!("{base}/manifest.json.sig"), 4 << 10)
+        .map_err(|e| format!("the release has no signature ({e}) - nothing installed"))?;
+    crate::signing::verify(&body, &String::from_utf8_lossy(&sig))?;
     serde_json::from_slice(&body).map_err(|e| format!("manifest.json: {e}"))
 }
 
@@ -130,6 +144,62 @@ fn write_beside_and_swap(body: &[u8], dst: &Path) -> Result<(), String> {
     let r = crate::install::place_binary(&tmp, dst);
     let _ = std::fs::remove_file(&tmp);
     r
+}
+
+/// Where the binary an update replaced is kept: `imperatorium.previous.exe`
+/// (`imperatorium.previous` elsewhere), beside it.
+pub fn previous_of(exe: &Path) -> PathBuf {
+    let stem = exe.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "imperatorium".into());
+    let ext = exe.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    exe.with_file_name(format!("{stem}.previous{ext}"))
+}
+
+/// The renamed-aside copies a swap leaves (`imperatorium.old-<stamp>`):
+/// removed when nothing runs them any more; one still running stays until
+/// the next update. The `.previous` copy is what --rollback uses instead.
+fn prune_old(exe: &Path) {
+    let (Some(dir), Some(stem)) = (exe.parent(), exe.file_stem()) else { return };
+    let prefix = format!("{}.old-", stem.to_string_lossy());
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if e.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// `imperatorium update --rollback`: put back the binary the last update
+/// replaced, and keep this one in its place, so a second --rollback undoes
+/// the first. The services are restarted onto it. An older binary that
+/// finds state written by a newer one refuses to start and says which
+/// version to install (statever.rs).
+fn rollback(prefix: &str) -> i32 {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let prev = previous_of(&exe);
+    if !prev.is_file() {
+        eprintln!("update: no {} - nothing to roll back to", prev.display());
+        return 1;
+    }
+    let was = std::process::Command::new(&prev)
+        .arg("version")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().trim_start_matches("imperatorium ").to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "the previous version".into());
+    let hold = exe.with_file_name(format!("{}.rollback", prev.file_name().unwrap_or_default().to_string_lossy()));
+    let swapped = std::fs::copy(&exe, &hold)
+        .map_err(|e| format!("{}: {e}", hold.display()))
+        .and_then(|_| crate::install::place_binary(&prev, &exe))
+        .and_then(|_| std::fs::rename(&hold, &prev).map_err(|e| format!("{}: {e}", prev.display())));
+    if let Err(e) = swapped {
+        let _ = std::fs::remove_file(&hold);
+        eprintln!("update: {e}");
+        return 1;
+    }
+    prune_old(&exe);
+    println!("rolled back: imperatorium {} -> {was} ({})", version(), exe.display());
+    restart_services(prefix);
+    0
 }
 
 /// Restart what runs from this binary, so the new one takes over.
@@ -183,7 +253,7 @@ impl Checker {
     /// Ask the release now; the answer replaces the last one.
     pub fn check(&self, cfg: &Value) -> Value {
         let channel = channel_of(cfg);
-        let base = base(None, &channel);
+        let base = base(None, &channel, None);
         let mut next = serde_json::json!({"checked_at": epoch(), "checked_channel": channel});
         match manifest(&base) {
             Ok(m) => {
@@ -269,6 +339,8 @@ pub fn main(args: &[String]) -> i32 {
     let mut from = None;
     let mut prefix = "Imperatorium".to_string();
     let mut force = false;
+    let mut pinned: Option<String> = None;
+    let mut roll = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -277,10 +349,19 @@ pub fn main(args: &[String]) -> i32 {
             "--from" => from = it.next().cloned(),
             "--task-prefix" => prefix = it.next().cloned().unwrap_or(prefix),
             "--force" => force = true,
+            "--version" => pinned = it.next().map(|v| v.trim().trim_start_matches('v').to_string()),
+            "--rollback" => roll = true,
             _ => {}
         }
     }
-    let base = base(from.as_deref(), &channel);
+    if roll {
+        return rollback(&prefix);
+    }
+    if pinned.as_deref().is_some_and(|v| parse(v).is_none()) {
+        eprintln!("update: --version needs a version, like 0.4.0 or 0.4.0-preview.2");
+        return 1;
+    }
+    let base = base(from.as_deref(), &channel, pinned.as_deref());
     let m = match manifest(&base) {
         Ok(m) => m,
         Err(e) => {
@@ -292,10 +373,24 @@ pub fn main(args: &[String]) -> i32 {
     let mine = version();
     let source = if from.is_some() || crate::paths::env_nonempty("IMPERATORIUM_RELEASES").is_some() {
         base.clone()
+    } else if let Some(v) = &pinned {
+        format!("v{v}")
     } else {
         channel.clone()
     };
-    if !force && !newer(&latest, mine) {
+    // --version installs that release whether it is newer or older; it is
+    // only "up to date" when it is this one.
+    let wanted = match &pinned {
+        Some(v) => {
+            if parse(&latest) != parse(v) {
+                eprintln!("update: the release at {base} says it is {latest}, not {v} - nothing installed");
+                return 1;
+            }
+            latest != mine
+        }
+        None => newer(&latest, mine),
+    };
+    if !force && !wanted {
         println!("imperatorium {mine} is up to date ({source}: {latest})");
         return 0;
     }
@@ -316,10 +411,18 @@ pub fn main(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // The binary being replaced is kept for `--rollback` (a running exe can
+    // be copied, just not overwritten).
+    if exe.is_file() {
+        if let Err(e) = std::fs::copy(&exe, previous_of(&exe)) {
+            eprintln!("   (the current binary was not kept for --rollback: {e})");
+        }
+    }
     if let Err(e) = write_beside_and_swap(&body, &exe) {
         eprintln!("update: {e}");
         return 1;
     }
+    prune_old(&exe);
     println!("   {} ({} bytes, SHA-256 checked)", exe.display(), body.len());
     // The voice worker, when one is installed beside us.
     let vname = if cfg!(windows) { "imperatorium-voice.exe" } else { "imperatorium-voice" };
@@ -395,5 +498,46 @@ mod tests {
     #[test]
     fn triple_is_known() {
         assert_ne!(this_triple(), "unknown");
+    }
+
+    #[test]
+    fn dev_builds_sort_below_previews() {
+        // main carries X.Y.Z-dev (docs/releasing.md); a dev build is never
+        // offered as newer than the preview it leads to, and vice versa.
+        assert!(newer("0.4.0-preview.1", "0.4.0-dev"));
+        assert!(!newer("0.4.0-dev", "0.4.0-preview.1"));
+        assert!(newer("0.4.0", "0.4.0-preview.9"));
+    }
+
+    #[test]
+    fn where_a_release_is_read() {
+        std::env::remove_var("IMPERATORIUM_RELEASES");
+        assert_eq!(base(None, "stable", None), format!("{RELEASES}/latest/download"));
+        assert_eq!(base(None, "preview", None), format!("{RELEASES}/download/preview"));
+        assert_eq!(base(None, "preview", Some("v0.4.0")), format!("{RELEASES}/download/v0.4.0"));
+        assert_eq!(base(Some("http://127.0.0.1:9/r/"), "stable", Some("0.4.0")), "http://127.0.0.1:9/r");
+    }
+
+    #[test]
+    fn previous_and_pruning() {
+        let d = std::env::temp_dir().join(format!("imp-update-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let exe = d.join(if cfg!(windows) { "imperatorium.exe" } else { "imperatorium" });
+        let prev = previous_of(&exe);
+        assert_eq!(prev.file_name().unwrap(), if cfg!(windows) { "imperatorium.previous.exe" } else { "imperatorium.previous" });
+        for f in ["imperatorium.old-20261115120000", "imperatorium.old-20261116120000", "imperatorium-voice.old-1", "other.txt"] {
+            std::fs::write(d.join(f), b"x").unwrap();
+        }
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::write(&prev, b"x").unwrap();
+        prune_old(&exe);
+        let mut left: Vec<String> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        let mut want = vec!["imperatorium-voice.old-1".to_string(), "other.txt".into(),
+                            exe.file_name().unwrap().to_string_lossy().into_owned(), prev.file_name().unwrap().to_string_lossy().into_owned()];
+        want.sort();
+        assert_eq!(left, want);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
