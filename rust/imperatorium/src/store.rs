@@ -81,8 +81,8 @@ impl Store {
         self.data.lk().clone()
     }
 
-    /// Store._flush_locked: a temporary file beside it, then an atomic
-    /// replace, retried; written in place rather than lose the state.
+    /// Store._flush_locked: an atomic replace (`paths::write_atomic`); written
+    /// in place rather than lose the state.
     fn flush(&self, data: &Map<String, Value>) {
         let dir = self
             .path
@@ -93,15 +93,8 @@ impl Store {
         let Ok(text) = serde_json::to_vec_pretty(data) else {
             return;
         };
-        let tmp = dir.join(format!(".state-{}.tmp", std::process::id()));
-        if std::fs::write(&tmp, &text).is_ok() {
-            for attempt in 0..5 {
-                if std::fs::rename(&tmp, &self.path).is_ok() {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
-            }
-            let _ = std::fs::remove_file(&tmp);
+        if crate::paths::write_atomic(&self.path, &text).is_ok() {
+            return;
         }
         let _ = std::fs::write(&self.path, &text);
     }

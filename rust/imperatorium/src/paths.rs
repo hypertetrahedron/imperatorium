@@ -1,7 +1,8 @@
 //! Where things live, and Python's `os.path` where the policy depends on it.
 
 use std::env;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// The value of an environment variable, treating an empty one as unset
 /// (Python's `os.environ.get(X) or ...`).
@@ -32,6 +33,39 @@ pub fn projects_dir() -> PathBuf {
     use unicode_normalization::UnicodeNormalization;
     let base: String = claude_home().to_string_lossy().nfc().collect();
     PathBuf::from(base).join("projects")
+}
+
+/// Write `bytes` to `path` through a temporary file beside it and a rename,
+/// so a reader never sees half a file. The rename is retried (Windows
+/// refuses while a reader has the target open); the temporary file is
+/// removed on any failure and the last error is returned.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = dir.join(format!(
+        ".{name}.{}-{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(e) = std::fs::write(&tmp, bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    let mut last = None;
+    for attempt in 0..5 {
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
+    }
+    let _ = std::fs::remove_file(&tmp);
+    Err(last.expect("five failed renames"))
 }
 
 fn home_dir() -> PathBuf {
@@ -550,5 +584,32 @@ pub fn local_hm(t: f64) -> String {
         let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
         unsafe { libc::localtime_r(&secs, &mut tm) };
         format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+    }
+}
+
+#[cfg(test)]
+mod atomic_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_and_leaves_no_temp() {
+        let d = std::env::temp_dir().join(format!("imp-wa-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("x.json");
+        write_atomic(&f, b"one").unwrap();
+        write_atomic(&f, b"two").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"two");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn failure_leaves_no_temp() {
+        let d = std::env::temp_dir().join(format!("imp-wb-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("target")).unwrap();
+        // The target is a directory: the rename fails.
+        assert!(write_atomic(&d.join("target"), b"x").is_err());
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

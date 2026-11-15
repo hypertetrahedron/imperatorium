@@ -305,8 +305,7 @@ impl Usage {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, body.to_string()).is_ok() && std::fs::rename(&tmp, path).is_ok() {
+        if crate::paths::write_atomic(path, body.to_string().as_bytes()).is_ok() {
             inner.saved = Some(sig);
         }
     }

@@ -530,20 +530,8 @@ pub fn save(path: &std::path::Path, config: &Value) -> Result<(), String> {
         bak.push(".bak");
         std::fs::copy(path, bak).map_err(|e| e.to_string())?;
     }
-    let dir = path
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .unwrap_or(std::path::Path::new("."));
-    let mut raw = [0u8; 6];
-    getrandom::getrandom(&mut raw).map_err(|e| e.to_string())?;
-    let name: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-    let tmp = dir.join(format!(".config-{name}.json"));
     let text = format!("{}\n", crate::pyish::json_dumps_indent(config, 2));
-    if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.to_string());
-    }
-    Ok(())
+    crate::paths::write_atomic(path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// settings.restarts: which processes must restart for `keys` to show.

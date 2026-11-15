@@ -292,10 +292,8 @@ fn write_settings(path: &Path, settings: &Map<String, Value>, say: &mut dyn FnMu
         std::fs::copy(path, &backup).map_err(|e| e.to_string())?;
         say(format!("backup   : {backup}"));
     }
-    let tmp = path.with_extension("json.imperatorium.tmp");
     let body = json_dumps_indent(&Value::Object(settings.clone()), 2) + "\n";
-    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    crate::paths::write_atomic(path, body.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// time.strftime("%Y%m%d-%H%M%S"), local time.
