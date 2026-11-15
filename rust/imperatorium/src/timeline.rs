@@ -241,13 +241,7 @@ struct Turn {
 
 fn entries(path: &Path) -> Vec<Map<String, Value>> {
     let Ok(raw) = std::fs::read(path) else { return vec![] };
-    String::from_utf8_lossy(&raw)
-        .lines()
-        .filter_map(|l| match serde_json::from_str::<Value>(l.trim()) {
-            Ok(Value::Object(o)) => Some(o),
-            _ => None,
-        })
-        .collect()
+    crate::transcript::objects(&String::from_utf8_lossy(&raw), crate::transcript::Split::Lines)
 }
 
 /// The timeline of the session whose transcript is `path`.

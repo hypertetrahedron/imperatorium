@@ -366,38 +366,12 @@ impl History {
 
     /// (path, session, mtime, size) of transcripts touched since `since`.
     fn candidates(&self, since: f64) -> Vec<(String, String, f64, u64)> {
-        let mut found: Vec<(String, String)> = Vec::new();
-        let Ok(rd) = std::fs::read_dir(&self.root) else {
-            return vec![];
-        };
-        for folder in rd.flatten().filter(|e| e.path().is_dir()) {
-            let Ok(entries) = std::fs::read_dir(folder.path()) else {
-                continue;
-            };
-            for e in entries.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let p = e.path();
-                if p.is_file() && name.ends_with(".jsonl") {
-                    found.push((
-                        p.to_string_lossy().into_owned(),
-                        name[..name.len() - 6].to_string(),
-                    ));
-                } else if p.is_dir() {
-                    if let Ok(subs) = std::fs::read_dir(p.join("subagents")) {
-                        for s in subs.flatten() {
-                            let sname = s.file_name().to_string_lossy().into_owned();
-                            if s.path().is_file() && sname.ends_with(".jsonl") {
-                                found.push((s.path().to_string_lossy().into_owned(), name.clone()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let found = crate::transcript::list_files(&self.root);
         found
             .into_iter()
             .filter_map(|(path, session)| {
                 let meta = std::fs::metadata(&path).ok()?;
+                let path = path.to_string_lossy().into_owned();
                 let m = mtime_of(&meta);
                 (m >= since).then_some((path, session, m, meta.len()))
             })
@@ -416,22 +390,19 @@ impl History {
         // Only what was appended is read: the head (to tell a file that was
         // replaced) and the bytes past the offset - the same bytes, and the
         // same verdicts, as reading the whole file and slicing it.
-        use std::io::{Read, Seek, SeekFrom};
         let Ok(mut f) = std::fs::File::open(path) else {
             return false;
         };
-        let mut head_now = Vec::with_capacity(HEAD);
-        if (&mut f).take(HEAD as u64).read_to_end(&mut head_now).is_err() {
+        let Ok(head_now) = crate::transcript::read_head(&mut f, HEAD) else {
             return false;
-        }
+        };
         let reset = size < state.size
             || (state.offset > 0 && head_now[..] != state.head[..state.head.len().min(HEAD)]);
         let from = if reset { 0 } else { state.offset };
-        let mut data = Vec::new();
         // Past the end (the file shrank since it was looked at) reads nothing.
-        if f.seek(SeekFrom::Start(from)).is_err() || f.read_to_end(&mut data).is_err() {
+        let Ok(data) = crate::transcript::read_from(&mut f, from) else {
             return false;
-        }
+        };
         if reset {
             state.reset();
         }

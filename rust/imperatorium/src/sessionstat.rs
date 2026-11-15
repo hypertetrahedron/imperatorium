@@ -10,7 +10,6 @@
 
 use crate::locks::LockExt;
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -625,15 +624,7 @@ fn texts(entry: &Map<String, Value>) -> Vec<String> {
 
 /// sessionstat.parse: every JSON object, one per "\n"-ended line.
 pub fn parse(text: &str) -> Vec<Map<String, Value>> {
-    text.split('\n')
-        .map(strip)
-        .filter(|l| !l.is_empty())
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter_map(|v| match v {
-            Value::Object(o) => Some(o),
-            _ => None,
-        })
-        .collect()
+    crate::transcript::objects(text, crate::transcript::Split::Newline)
 }
 
 /// How long a found transcript path is trusted (while it still exists)
@@ -663,27 +654,13 @@ pub fn transcript_path(sid: &str) -> Option<PathBuf> {
             _ => {}
         }
     }
-    let found = look_for_transcript(&key.0, sid);
+    let found = crate::transcript::locate_newest(&key.0, sid);
     let mut m = memo.lk();
     if m.len() >= 1024 {
         m.retain(|_, (at, _)| at.elapsed() < PATH_TRUSTED);
     }
     m.insert(key, (Instant::now(), found.clone()));
     found
-}
-
-fn look_for_transcript(root: &std::path::Path, sid: &str) -> Option<PathBuf> {
-    let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
-    for dir in std::fs::read_dir(root).ok()?.flatten() {
-        let p = dir.path().join(format!("{sid}.jsonl"));
-        let Ok(m) = std::fs::metadata(&p).and_then(|m| m.modified()) else {
-            continue;
-        };
-        if best.as_ref().is_none_or(|b| m > b.1) {
-            best = Some((p, m));
-        }
-    }
-    best.map(|b| b.0)
 }
 
 /// sessionstat.Reader: a Fold per session, fed only what was appended.
@@ -718,23 +695,8 @@ impl Reader {
                 hit.2 = Fold::new();
             }
             if size > hit.1 {
-                let mut f = std::fs::File::open(&path).ok()?;
-                f.seek(SeekFrom::Start(hit.1)).ok()?;
-                let mut chunk = vec![0u8; (size - hit.1) as usize];
-                let mut got = 0;
-                while got < chunk.len() {
-                    match f.read(&mut chunk[got..]) {
-                        Ok(0) => break,
-                        Ok(n) => got += n,
-                        Err(_) => return None,
-                    }
-                }
-                chunk.truncate(got);
-                let end = chunk
-                    .iter()
-                    .rposition(|b| *b == b'\n')
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
+                let chunk = crate::transcript::read_delta(&path, hit.1)?;
+                let end = crate::transcript::whole_lines(&chunk);
                 hit.2.feed(&parse(&String::from_utf8_lossy(&chunk[..end])));
                 hit.1 += end as u64;
             }
@@ -751,11 +713,7 @@ impl Reader {
 /// Every session's summary straight from its file, for the conformance test.
 pub fn summarise_file(sid: &str, now: f64) -> Option<Value> {
     let text = std::fs::read(transcript_path(sid)?).ok()?;
-    let end = text
-        .iter()
-        .rposition(|b| *b == b'\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    let end = crate::transcript::whole_lines(&text);
     let mut fold = Fold::new();
     fold.feed(&parse(&String::from_utf8_lossy(&text[..end])));
     Some(fold.summary(now))

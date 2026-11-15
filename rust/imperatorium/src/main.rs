@@ -66,6 +66,7 @@ mod streamdeck;
 mod taskout;
 mod timeline;
 mod timer;
+mod transcript;
 mod ui;
 mod update;
 mod usage;

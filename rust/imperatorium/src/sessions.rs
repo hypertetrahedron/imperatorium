@@ -55,56 +55,35 @@ pub fn valid_uuid(s: &str) -> bool {
     })
 }
 
-fn dirents(dir: &Path) -> Vec<PathBuf> {
-    match fs::read_dir(dir) {
-        Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
-        Err(_) => vec![],
-    }
-}
+use crate::transcript::folders as dirents;
 
 // -- chain --------------------------------------------------------------------
 
 /// `_read_session_file(id, None)`: the first non-empty file of that name in
 /// any project folder. Err for a file that is not UTF-8 (Python raises).
 fn read_session_file(session_id: &str) -> Result<Option<String>, String> {
-    let name = format!("{session_id}.jsonl");
-    for dir in dirents(&crate::paths::projects_dir()) {
-        let Ok(bytes) = fs::read(dir.join(&name)) else {
-            continue;
-        };
-        if bytes.is_empty() {
-            continue;
-        }
-        return String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|e| format!("{}: not UTF-8: {e}", dir.join(&name).display()));
-    }
-    Ok(None)
+    let Some((path, bytes)) = crate::transcript::read_first(&crate::paths::projects_dir(), session_id) else {
+        return Ok(None);
+    };
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|e| format!("{}: not UTF-8: {e}", path.display()))
 }
 
 /// `_parse_transcript_entries`: transcript-type records with a string uuid.
 pub fn parse_entries(content: &str) -> Vec<Map<String, Value>> {
-    let mut out = Vec::new();
-    // Python's read_text turns "\r\n" and a lone "\r" into "\n". Neither can
-    // occur raw inside a JSON string, so this only ever splits records.
-    let content = content.replace("\r\n", "\n").replace('\r', "\n");
-    for line in content.split('\n') {
-        let line = strip(line);
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(Value::Object(entry)) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let typed = entry
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|t| ENTRY_TYPES.contains(&t));
-        if typed && entry.get("uuid").is_some_and(Value::is_string) {
-            out.push(entry);
-        }
-    }
-    out
+    // Python's read_text translates newlines; records are then objects with
+    // a transcript type and a string uuid.
+    crate::transcript::objects(&crate::transcript::normalise_newlines(content), crate::transcript::Split::Newline)
+        .into_iter()
+        .filter(|entry| {
+            let typed = entry
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| ENTRY_TYPES.contains(&t));
+            typed && entry.get("uuid").is_some_and(Value::is_string)
+        })
+        .collect()
 }
 
 fn uuid_of(e: &Map<String, Value>) -> &str {
