@@ -292,3 +292,92 @@ mod tests {
         assert!(ntfy_request(none.as_object().unwrap(), "T", "m", &[]).is_err());
     }
 }
+
+/// Ported from the Python suite (test_features.py `NotifierTests`): the
+/// ntfy channel against a throwaway local server. The speak channel is never
+/// switched on here (it would run PowerShell speech).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    struct Owner {
+        cfg: Map<String, Value>,
+        waiting: bool,
+    }
+
+    impl Waiting for Owner {
+        fn channels(&self) -> Channels {
+            vec![("ntfy", self.cfg.clone(), true)]
+        }
+        fn still_waiting(&self, _key: &str, _since: &Value) -> bool {
+            self.waiting
+        }
+    }
+
+    fn owner(server: &str, waiting: bool) -> Arc<dyn Waiting> {
+        let cfg = json!({"enabled": true, "topic": "t", "server": server, "delay": 0.4});
+        Arc::new(Owner { cfg: cfg.as_object().unwrap().clone(), waiting })
+    }
+
+    /// A server that answers 200 to everything and counts the requests.
+    fn counting_server() -> (String, Arc<AtomicU64>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let seen = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                counter.fetch_add(1, Ordering::SeqCst);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            }
+        });
+        (url, seen)
+    }
+
+    fn until(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
+        let end = Instant::now() + limit;
+        while Instant::now() < end {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        f()
+    }
+
+    #[test]
+    fn features_attention_schedules_a_channel_once_per_raise() {
+        let (url, seen) = counting_server();
+        let n = Arc::new(Notifier::default());
+        let o = owner(&url, true);
+        n.attention(Arc::clone(&o), "k1", Some("proj".into()), Some("needs input".into()), json!(100.0));
+        // The same (key, since) while the first is still waiting out its delay.
+        n.attention(Arc::clone(&o), "k1", Some("proj".into()), Some("needs input".into()), json!(100.0));
+        assert!(until(Duration::from_secs(10), || n.sent() >= 1));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+        assert_eq!(n.sent(), 1);
+        assert!(n.last_error().is_none());
+    }
+
+    #[test]
+    fn features_a_send_failure_is_recorded_not_raised() {
+        // A port nothing listens on.
+        let dead = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}/", l.local_addr().unwrap())
+        };
+        let n = Arc::new(Notifier::default());
+        n.attention(owner(&dead, true), "k1", Some("proj".into()), Some("reason".into()), json!(1.0));
+        assert!(until(Duration::from_secs(15), || n.last_error().is_some()));
+        assert!(n.last_error().unwrap().starts_with("ntfy:"));
+        assert_eq!(n.sent(), 0);
+    }
+}

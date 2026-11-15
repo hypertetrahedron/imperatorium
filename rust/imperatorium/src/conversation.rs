@@ -1193,3 +1193,19 @@ mod core_tests {
         assert!(!to_items(&msgs, 0, false).is_empty());
     }
 }
+
+/// Ported from the Python suite (test_features.py `ParkedQuestions`).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    #[test]
+    fn features_the_chat_line_shows_the_question() {
+        let input = json!({"questions": [
+            {"question": "Which colour?", "header": "Colour", "multiSelect": false,
+             "options": [{"label": "Red"}, {"label": "Green"}]},
+            {"question": "Which sizes?", "header": "Size", "multiSelect": true,
+             "options": [{"label": "S"}, {"label": "M"}]}]});
+        assert_eq!(summarise_input(Some(&input)), "Which colour? / Which sizes?");
+    }
+}
