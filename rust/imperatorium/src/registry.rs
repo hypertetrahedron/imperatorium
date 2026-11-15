@@ -856,3 +856,44 @@ mod core_tests {
         );
     }
 }
+
+/// test_finished.py::Finished and test_dispatcher.py::IdleWhileRunning's
+/// background-shell case, ported.
+#[cfg(test)]
+mod finished_tests {
+    use super::*;
+
+    fn job(extra: Value) -> Row {
+        let mut r = json!({"sessionId": "04f327fc-a375-48b3-b69b-3142826d07c4", "id": "04f327fc",
+                           "kind": "background", "state": "done", "name": "reply-with-the-single",
+                           "cwd": "C:/w/imperatorium"})
+        .as_object()
+        .unwrap()
+        .clone();
+        r.extend(extra.as_object().unwrap().clone());
+        r
+    }
+
+    #[test]
+    fn only_a_completed_background_job_without_a_process() {
+        assert!(finished(&job(json!({}))));
+        assert!(!finished(&job(json!({"state": "working"}))));
+        assert!(!finished(&job(json!({"state": "blocked"})))); // waits on you
+        assert!(!finished(&job(json!({"state": "failed"})))); // needs you too
+        assert!(!finished(&job(json!({"pid": 4242})))); // resumed
+        assert!(!finished(&job(json!({"kind": "interactive"}))));
+    }
+
+    #[test]
+    fn an_idle_prompt_is_contradicted_by_a_background_shell() {
+        let idle = json!({"status": "idle"}).as_object().unwrap().clone();
+        let with_shell = json!({"status": "idle", "background_tasks": 1}).as_object().unwrap().clone();
+        let busy = json!({"status": "busy"}).as_object().unwrap().clone();
+        let prompt = json!("idle_prompt");
+        assert!(!still_running(&idle, Some(&prompt)));
+        assert!(still_running(&with_shell, Some(&prompt)));
+        assert!(still_running(&busy, Some(&prompt)));
+        // Only an idle_prompt is contradicted.
+        assert!(!still_running(&busy, Some(&json!("permission_prompt"))));
+    }
+}

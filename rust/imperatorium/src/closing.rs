@@ -233,3 +233,19 @@ mod tests {
         assert_eq!(tab_shell(30, &direct), None);
     }
 }
+
+/// test_closing.py::TabShell's last case, ported.
+#[cfg(test)]
+mod tab_shell_more_tests {
+    use super::*;
+
+    #[test]
+    fn not_a_shell_parent() {
+        let t = |rows: &[(u32, u32, &str)]| -> Vec<crate::procs::Proc> {
+            rows.iter().map(|(p, pp, e)| (*p, *pp, e.to_string(), None)).collect()
+        };
+        // claude under node under the terminal: node is not a shell.
+        let tab = t(&[(30, 20, "claude"), (20, 10, "node"), (10, 1, "windowsterminal")]);
+        assert_eq!(tab_shell(30, &tab), None);
+    }
+}

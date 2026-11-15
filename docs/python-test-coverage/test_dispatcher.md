@@ -1,27 +1,27 @@
 # test_dispatcher.py
 
-127 tests (by name): PORT 127.
+127 tests (by name): PORT 101, PORT-now-COVERED 26.
 
 | Test | Verdict | Rust test or reason |
 |---|---|---|
-| `HookIngest.test_session_start_records_the_token` | PORT | planned: dispatch_hooks.rs::session_start_records_the_token |
-| `HookIngest.test_a_session_is_dispatchable_only_with_socket_and_token` | PORT | planned: dispatch_hooks.rs::a_session_is_dispatchable_only_with_socket_and_token |
-| `HookIngest.test_a_rebound_socket_invalidates_the_stored_token` | PORT | planned: dispatch_hooks.rs::a_rebound_socket_invalidates_the_stored_token |
-| `HookIngest.test_the_next_session_start_repairs_a_stale_credential` | PORT | planned: dispatch_hooks.rs::the_next_session_start_repairs_a_stale_credential |
-| `HookIngest.test_a_stop_event_can_register_a_session_start_never_saw` | PORT | planned: dispatch_hooks.rs::a_stop_event_can_register_a_session_start_never_saw |
-| `HookIngest.test_a_notification_also_carries_the_credential` | PORT | planned: dispatch_hooks.rs::a_notification_also_carries_the_credential |
-| `HookIngest.test_permission_prompt_raises_attention` | PORT | planned: dispatch_hooks.rs::permission_prompt_raises_attention |
-| `HookIngest.test_stop_clears_attention` | PORT | planned: dispatch_hooks.rs::stop_clears_attention |
-| `HookIngest.test_session_end_forgets_the_token` | PORT | planned: dispatch_hooks.rs::session_end_forgets_the_token |
-| `HookIngest.test_uninteresting_events_are_dropped` | PORT | planned: dispatch_hooks.rs::uninteresting_events_are_dropped |
-| `HookIngest.test_tool_events_go_to_memory_not_the_store` | PORT | planned: dispatch_hooks.rs::tool_events_go_to_memory_not_the_store |
-| `HookIngest.test_an_event_without_a_session_id_is_dropped` | PORT | planned: dispatch_hooks.rs::an_event_without_a_session_id_is_dropped |
-| `HookIngest.test_stop_failure_keeps_its_error` | PORT | planned: dispatch_hooks.rs::stop_failure_keeps_its_error |
-| `IdleWhileRunning.test_idle_prompt_while_running_a_command_is_not_attention` | PORT | planned: dispatch_hooks.rs::idle_prompt_while_running_a_command_is_not_attention |
-| `IdleWhileRunning.test_idle_prompt_with_a_background_shell_is_not_attention` | PORT | planned: dispatch_hooks.rs::idle_prompt_with_a_background_shell_is_not_attention |
-| `IdleWhileRunning.test_truly_idle_still_waits_for_you` | PORT | planned: dispatch_hooks.rs::truly_idle_still_waits_for_you |
-| `IdleWhileRunning.test_it_comes_back_once_the_command_is_done` | PORT | planned: dispatch_hooks.rs::it_comes_back_once_the_command_is_done |
-| `IdleWhileRunning.test_a_permission_prompt_still_raises_it` | PORT | planned: dispatch_hooks.rs::a_permission_prompt_still_raises_it |
+| `HookIngest.test_session_start_records_the_token` | COVERED | new: dispatch_hooks.rs::session_start_records_the_token |
+| `HookIngest.test_a_session_is_dispatchable_only_with_socket_and_token` | COVERED | new: dispatch_hooks.rs::a_session_is_dispatchable_only_with_socket_and_token |
+| `HookIngest.test_a_rebound_socket_invalidates_the_stored_token` | COVERED | new: dispatch_hooks.rs::a_rebound_socket_invalidates_the_stored_token |
+| `HookIngest.test_the_next_session_start_repairs_a_stale_credential` | COVERED | new: dispatch_hooks.rs::the_next_session_start_repairs_a_stale_credential |
+| `HookIngest.test_a_stop_event_can_register_a_session_start_never_saw` | COVERED | new: dispatch_hooks.rs::a_stop_event_can_register_a_session_start_never_saw |
+| `HookIngest.test_a_notification_also_carries_the_credential` | COVERED | new: dispatch_hooks.rs::a_notification_also_carries_the_credential |
+| `HookIngest.test_permission_prompt_raises_attention` | COVERED | new: dispatch_hooks.rs::permission_prompt_raises_attention |
+| `HookIngest.test_stop_clears_attention` | COVERED | new: dispatch_hooks.rs::stop_clears_attention |
+| `HookIngest.test_session_end_forgets_the_token` | COVERED | new: dispatch_hooks.rs::session_end_forgets_the_token |
+| `HookIngest.test_uninteresting_events_are_dropped` | COVERED | new: dispatch_hooks.rs::uninteresting_events_are_dropped |
+| `HookIngest.test_tool_events_go_to_memory_not_the_store` | COVERED | new: dispatch_hooks.rs::tool_events_go_to_memory_not_the_store |
+| `HookIngest.test_an_event_without_a_session_id_is_dropped` | COVERED | new: dispatch_hooks.rs::an_event_without_a_session_id_is_dropped |
+| `HookIngest.test_stop_failure_keeps_its_error` | COVERED | new: dispatch_hooks.rs::stop_failure_keeps_its_error |
+| `IdleWhileRunning.test_idle_prompt_while_running_a_command_is_not_attention` | COVERED | new: dispatch_hooks.rs::idle_prompt_while_running_a_command_is_not_attention |
+| `IdleWhileRunning.test_idle_prompt_with_a_background_shell_is_not_attention` | COVERED | new: registry.rs::finished_tests::an_idle_prompt_is_contradicted_by_a_background_shell (unit: still_running with background_tasks; the HTTP row cannot be given background_tasks, which comes from the process table) |
+| `IdleWhileRunning.test_truly_idle_still_waits_for_you` | COVERED | new: dispatch_hooks.rs::truly_idle_still_waits_for_you |
+| `IdleWhileRunning.test_it_comes_back_once_the_command_is_done` | COVERED | new: dispatch_hooks.rs::it_comes_back_once_the_command_is_done |
+| `IdleWhileRunning.test_a_permission_prompt_still_raises_it` | COVERED | new: dispatch_hooks.rs::a_permission_prompt_still_raises_it |
 | `RowLookup.test_a_few_seconds_old_snapshot_is_good_enough` | PORT | planned: dispatch_views.rs::a_few_seconds_old_snapshot_is_good_enough |
 | `RowLookup.test_an_unknown_session_looks_in_a_fresh_snapshot` | PORT | planned: dispatch_views.rs::an_unknown_session_looks_in_a_fresh_snapshot |
 | `RowLookup.test_an_old_snapshot_is_rebuilt` | PORT | planned: dispatch_views.rs::an_old_snapshot_is_rebuilt |
@@ -37,14 +37,14 @@
 | `SessionStatus.test_an_ended_session_has_nothing_running` | PORT | planned: dispatch_views.rs::an_ended_session_has_nothing_running |
 | `SessionStatus.test_every_local_row_carries_its_work_at_a_glance` | PORT | planned: dispatch_views.rs::every_local_row_carries_its_work_at_a_glance |
 | `SessionStatus.test_an_ended_rows_work_has_no_counts` | PORT | planned: dispatch_views.rs::an_ended_rows_work_has_no_counts |
-| `FailedTurns.test_an_overload_raises_attention_instead_of_clearing_it` | PORT | planned: dispatch_hooks.rs::an_overload_raises_attention_instead_of_clearing_it |
-| `FailedTurns.test_the_retry_does_not_wipe_the_flag` | PORT | planned: dispatch_hooks.rs::the_retry_does_not_wipe_the_flag |
-| `FailedTurns.test_a_permission_prompt_is_still_settled_by_working_again` | PORT | planned: dispatch_hooks.rs::a_permission_prompt_is_still_settled_by_working_again |
-| `FailedTurns.test_finishing_cleanly_clears_a_failure` | PORT | planned: dispatch_hooks.rs::finishing_cleanly_clears_a_failure |
-| `FailedTurns.test_the_quiet_failure_raises_nothing` | PORT | planned: dispatch_hooks.rs::the_quiet_failure_raises_nothing |
-| `FailedTurns.test_the_reason_and_detail_are_kept_for_the_window` | PORT | planned: dispatch_hooks.rs::the_reason_and_detail_are_kept_for_the_window |
-| `FailedTurns.test_a_failure_still_records_the_credential` | PORT | planned: dispatch_hooks.rs::a_failure_still_records_the_credential |
-| `FailedTurns.test_an_unknown_error_code_still_raises_something` | PORT | planned: dispatch_hooks.rs::an_unknown_error_code_still_raises_something |
+| `FailedTurns.test_an_overload_raises_attention_instead_of_clearing_it` | COVERED | new: dispatch_hooks.rs::an_overload_raises_attention_instead_of_clearing_it |
+| `FailedTurns.test_the_retry_does_not_wipe_the_flag` | COVERED | new: dispatch_hooks.rs::the_retry_does_not_wipe_the_flag |
+| `FailedTurns.test_a_permission_prompt_is_still_settled_by_working_again` | COVERED | new: dispatch_hooks.rs::a_permission_prompt_is_still_settled_by_working_again |
+| `FailedTurns.test_finishing_cleanly_clears_a_failure` | COVERED | new: dispatch_hooks.rs::finishing_cleanly_clears_a_failure |
+| `FailedTurns.test_the_quiet_failure_raises_nothing` | COVERED | new: dispatch_hooks.rs::the_quiet_failure_raises_nothing |
+| `FailedTurns.test_the_reason_and_detail_are_kept_for_the_window` | COVERED | new: dispatch_hooks.rs::the_reason_and_detail_are_kept_for_the_window |
+| `FailedTurns.test_a_failure_still_records_the_credential` | COVERED | new: dispatch_hooks.rs::a_failure_still_records_the_credential |
+| `FailedTurns.test_an_unknown_error_code_still_raises_something` | COVERED | new: dispatch_hooks.rs::an_unknown_error_code_still_raises_something |
 | `FocusRouting.test_the_window_with_this_session_title_is_the_one_raised` | PORT | planned: dispatch_send.rs::the_window_with_this_session_title_is_the_one_raised |
 | `FocusRouting.test_the_window_is_remembered_for_when_the_tab_is_behind` | PORT | planned: dispatch_send.rs::the_window_is_remembered_for_when_the_tab_is_behind |
 | `FocusRouting.test_a_backgrounded_tab_falls_back_to_where_it_was_last_seen` | PORT | planned: dispatch_send.rs::a_backgrounded_tab_falls_back_to_where_it_was_last_seen |
