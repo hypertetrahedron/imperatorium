@@ -268,10 +268,25 @@ impl Shared {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
+        // _undismissed: a dismissed session that has a process again was
+        // resumed, so it comes back - and stays back once that process ends.
+        let mut resumed = Vec::new();
         rows.retain(|r| {
             let key = r.get("key").and_then(Value::as_str).unwrap_or("");
-            !(dismissed.contains_key(key) && !truthy(r.get("pid")))
+            if !dismissed.contains_key(key) {
+                return true;
+            }
+            if truthy(r.get("pid")) {
+                resumed.push(key.to_string());
+                return true;
+            }
+            false
         });
+        if let Some(store) = &self.store {
+            for key in &resumed {
+                store.undismiss(key);
+            }
+        }
         let hours = get(&self.config(), "list.hide_finished_hours")
             .filter(|v| v.is_number())
             .and_then(Value::as_f64)

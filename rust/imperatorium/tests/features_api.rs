@@ -471,8 +471,14 @@ fn features_close_and_dismiss_refuse_what_has_no_process_or_still_runs() {
     assert!(fx.row(&later).is_none());
     fx.record(&later, json!({"status": "idle"})); // with a process again
     wait_until(Duration::from_secs(15), || fx.row(&later)).expect("listed again once it has a process");
-    // The dismissal is cleared by the session's next hook (Python also
-    // cleared it when the row reappeared; the row itself reappears at once).
+    // Listing it again clears the dismissal, with no hook needed, so it
+    // stays listed after its process ends (as Python's _undismissed did).
+    wait_until(Duration::from_secs(10), || fx.d.state_json()["dismissed"].get(&later).is_none().then_some(()))
+        .expect("the dismissal is cleared when the row comes back");
+    fx.record(&later, json!({"pid": null}));
+    wait_until(Duration::from_secs(15), || fx.row(&later).filter(|r| r["pid"].is_null()))
+        .expect("still listed once its process has ended");
+    // A hook clears it too (the other session's here).
     fx.session_start(&later, None, None);
     wait_until(Duration::from_secs(10), || {
         let s = fx.d.state_json();
