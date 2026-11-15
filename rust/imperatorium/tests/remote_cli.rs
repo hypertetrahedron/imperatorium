@@ -203,8 +203,12 @@ fn remote_add_remove_check_against_a_sandbox_host() {
         || stop.to_string(),
     );
     c.check(
-        "no permission hook, no tool hooks on the host",
-        h["hooks"].get("PermissionRequest").is_none() && h["hooks"].get("PreToolUse").is_none(),
+        // Since c61634d a host has a permission hook again, but only the
+        // park-only one: its requests are answered here, never by policy there.
+        "only the park-only permission hook, no tool hooks on the host",
+        h["hooks"]["PermissionRequest"].as_array().is_some_and(|b| {
+            b.len() == 1 && b[0]["hooks"][0]["args"] == json!(["permission", "--park-only"])
+        }) && h["hooks"].get("PreToolUse").is_none(),
         || {
             format!(
                 "{:?}",
