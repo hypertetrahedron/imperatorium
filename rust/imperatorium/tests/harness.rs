@@ -1,8 +1,6 @@
 //! The harness itself (tests/common): dispatchers on free ports side by
-//! side, the stand-in PATH, the fake CLI, cleanup on drop. Plus the first
-//! use of a twin golden: twin.py's hook events, each answered as Python
-//! answered (the rest of the twins are replayed elsewhere; see
-//! tests/golden/README.md).
+//! side, the stand-in PATH, the fake CLI, cleanup on drop. (twin.py's
+//! goldens are replayed in tests/twin.rs.)
 #![cfg(windows)]
 
 mod common;
@@ -69,23 +67,4 @@ fn the_stand_in_path_finds_only_the_fakes() {
         .unwrap()
         .iter()
         .all(|r| r.get("pid").is_none()));
-}
-
-#[test]
-fn twin_hook_events_answer_as_python_did() {
-    let d = Dispatcher::start(Options {
-        home: Some(repo()),
-        ..Options::new()
-    });
-    let steps = read_jsonl(&golden_dir("twin").join("steps.jsonl"));
-    let mut f = Failures::default();
-    for s in steps.iter().filter(|s| s["step"] == "hook") {
-        let (code, answer) = d.post("/hook", &s["body"]);
-        f.check(
-            || format!("POST /hook {}", s["body"]["hook_event_name"]),
-            first_difference(&s["want"], &json!([code, answer]), "$", false),
-        );
-    }
-    assert!(f.checked >= 30);
-    f.finish("twin hooks");
 }
