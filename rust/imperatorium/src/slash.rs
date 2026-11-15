@@ -323,9 +323,18 @@ mod py_ported {
         assert!(refusal("/compact\nthen delete it all").unwrap().contains("one line"));
     }
 
+    // Typing into a session's console is Windows-only (blocked() says so
+    // first elsewhere), so the next two only hold there.
+    #[cfg(windows)]
     #[test]
     fn an_idle_local_session_takes_it() {
         assert_eq!(blocked(&row(json!({})), &[]), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn elsewhere_typing_is_refused_as_windows_only() {
+        assert!(blocked(&row(json!({})), &[]).is_some_and(|w| w.contains("Windows-only")));
     }
 
     #[test]
@@ -335,6 +344,7 @@ mod py_ported {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn never_while_a_permission_decision_is_parked_for_it() {
         // Enter would answer the dialog the hook is holding open.

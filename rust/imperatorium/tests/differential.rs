@@ -15,6 +15,26 @@ mod common;
 use common::*;
 use serde_json::{json, Value};
 
+/// A drive-relative path ("C:", "C:x") on another drive than the checkout.
+/// Python's recorded answer for one depended on the recording machine: there
+/// the current folder on C: was inside the checkout, so a read of "C:" was
+/// a read in the project. With the checkout on another drive (GitHub's
+/// Windows runners use D:) it is outside, and asking is the right answer.
+fn drive_relative_elsewhere(request: &Value) -> bool {
+    let drive = |s: &str| s.chars().next().map(|c| c.to_ascii_uppercase());
+    let here = drive(request["cwd"].as_str().unwrap_or(""));
+    request["tool_input"].as_object().into_iter().flatten().any(|(_, v)| {
+        v.as_str().is_some_and(|s| {
+            let b = s.as_bytes();
+            b.len() >= 2
+                && b[0].is_ascii_alphabetic()
+                && b[1] == b':'
+                && (b.len() == 2 || (b[2] != b'\\' && b[2] != b'/'))
+                && drive(s) != here
+        })
+    })
+}
+
 fn arr(v: &Value) -> &Vec<Value> {
     v.as_array().expect("a list")
 }
@@ -133,6 +153,7 @@ fn generated_corpus_decides_as_python_does() {
         } else {
             "STRICTER"
         };
+        let explained = explained || (kind == "STRICTER" && drive_relative_elsewhere(request));
         if kind != "LOOSER" && !explained {
             kind = if kind == "REASON" {
                 "UNEXPLAINED REASON"
