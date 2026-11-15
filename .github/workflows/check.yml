@@ -46,10 +46,18 @@ jobs:
       - name: pip install -r requirements.txt
         run: python -m pip install -r requirements.txt
 
+      # The window's JavaScript tests (imperatorium/web/tests) need node; the
+      # runners have it, and setup-node pins the version the tests are run with.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       # Linux builds are without the Stream Deck surface, as release.yml's are
       # (hidapi's Windows backend is the only one used).
       - name: cargo test
         working-directory: rust
+        env:
+          IMPERATORIUM_REQUIRE_NODE: "1"   # web_js.rs must run node, not skip
         run: |
           if [ "$RUNNER_OS" = Linux ]; then flags=--no-default-features; fi
           cargo test --workspace $flags
@@ -59,6 +67,11 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = Linux ]; then flags=--no-default-features; fi
           cargo build --workspace $flags
+
+      # The window's JavaScript, directly (cargo test above also runs it, via
+      # rust/imperatorium/tests/web_js.rs; this shows its output on its own).
+      - name: node --test (window JavaScript)
+        run: node --test imperatorium/web/tests/*.test.mjs
 
       # session_twin.py and bg_worktree_twin.py copy this as claude.exe / wt.exe.
       - name: cargo build --release -p fakecli
