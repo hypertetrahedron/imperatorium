@@ -39,6 +39,17 @@
    "help": "The chat matrix keeps a cell for the cost and usage tile even when the sessions fill the grid. Off, it shows only in cells the grid leaves empty."
   },
   {
+   "key": "chat.conversation_cache_mb",
+   "section": "chat",
+   "label": "Conversation cache (MB)",
+   "type": "int",
+   "min": 0,
+   "max": 4096,
+   "default": 32,
+   "applies": "live",
+   "help": "How much of the conversations it has read the dispatcher keeps in memory, so showing one again costs nothing until its transcript changes. Past this, the least recently viewed are dropped first; the newest is always kept, however large. At most 32 are kept whatever their size."
+  },
+  {
    "key": "chat.font_size",
    "section": "chat",
    "label": "Chat text size (px)",

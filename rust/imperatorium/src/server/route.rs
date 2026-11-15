@@ -584,7 +584,8 @@ impl Shared {
                 200,
                 Body::Json(
                     json!({"ok": true, "pid": std::process::id(), "boot": self.boot,
-                                  "look": look(&self.config())}),
+                                  "look": look(&self.config()),
+                                  "conversation_parses": self.parses.load(std::sync::atomic::Ordering::Relaxed)}),
                 ),
             ),
             ("GET", "/api/conversation") => self.api_conversation(&q),

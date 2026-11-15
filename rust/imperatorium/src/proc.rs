@@ -36,14 +36,6 @@ pub fn kill_pid_tree(pid: u32) {
     }
 }
 
-/// Kill `child` and, on Windows, everything it started, then reap it.
-pub fn kill_tree(child: &mut Child) {
-    #[cfg(windows)]
-    kill_pid_tree(child.id());
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 fn drain<R: Read + Send + 'static>(r: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut b = Vec::new();
@@ -462,18 +454,14 @@ mod subproc_cov {
     }
 
     #[test]
-    fn kill_tree_ends_a_long_lived_child_and_its_children_and_twice_is_harmless() {
+    fn killing_the_job_ends_a_long_lived_child_and_its_children() {
         let pidfile = scratch("tree");
         let _ = std::fs::remove_file(&pidfile);
-        let mut child = parent(&pidfile, true)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut cmd = parent(&pidfile, true);
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        let (mut child, job) = Job::spawn(&mut cmd).unwrap();
         let pid = wait_pid(&pidfile);
-        kill_tree(&mut child);
-        kill_tree(&mut child);
+        job.kill(&mut child);
         assert!(child.try_wait().unwrap().is_some());
         let ok = gone_within(pid, 5);
         cleanup(Some(pid), &pidfile);

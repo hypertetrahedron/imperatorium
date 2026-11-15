@@ -27,7 +27,9 @@ two captures (2026-11-14).
 
 Edited since: `settings_twin/steps.jsonl`'s settings help and restart texts
 (2026-11-15) name `imperatorium` subcommands in place of the deleted Python
-scripts, to match `assets/settings_fields.json`.
+scripts, to match `assets/settings_fields.json`. Also there: the new
+`chat.conversation_cache_mb` field (2026-11-15), inserted after
+`chat.matrix_status` in every settings answer, as the schema has it.
 
 Machine-specific strings are placeholders (`golden.py` `Places`; put back by
 `tests/common/mod.rs` `Places`): `<repo>` the checkout, `<repo-parent>`,

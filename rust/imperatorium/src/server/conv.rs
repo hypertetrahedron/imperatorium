@@ -29,17 +29,55 @@ impl Shared {
     /// parsed again only when the transcript's size or mtime moves.
     pub(super) fn conversation(&self, sid: &str) -> Result<Arc<Cached>, String> {
         let stamp = self.stamp(sid);
-        if let Some(st) = &stamp {
-            let mut convs = self.convs.lk();
-            if let Some(i) = convs.get_index_of(sid) {
-                if &convs[i].stamp == st {
-                    // Used now: to the back of the eviction order.
-                    let last = convs.len() - 1;
-                    convs.move_index(i, last);
-                    return Ok(Arc::clone(&convs[last]));
-                }
+        if let Some(hit) = self.cached(sid, stamp.as_ref()) {
+            return Ok(hit);
+        }
+        // One parse per session at a time: the window, the matrix and a
+        // stream polling a just-changed transcript together wait for the
+        // first and take what it parsed (convcache._filling).
+        let fill = Arc::clone(self.filling.lk().entry(sid.to_string()).or_default());
+        let _filling = fill.lk();
+        let stamp = self.stamp(sid);
+        if let Some(hit) = self.cached(sid, stamp.as_ref()) {
+            return Ok(hit);
+        }
+        let result = self.parse_and_keep(sid, stamp);
+        // The last one out takes the lock away (the map holds one, each
+        // waiter one, this guard's Arc one).
+        {
+            let mut filling = self.filling.lk();
+            if filling.get(sid).is_some_and(|f| Arc::strong_count(f) <= 2) {
+                filling.remove(sid);
             }
         }
+        result
+    }
+
+    /// The cached conversation, when it is of this transcript as it is now.
+    fn cached(&self, sid: &str, stamp: Option<&(PathBuf, u64, u128)>) -> Option<Arc<Cached>> {
+        let st = stamp?;
+        let mut convs = self.convs.lk();
+        let i = convs.get_index_of(sid)?;
+        if &convs[i].stamp != st {
+            return None;
+        }
+        // Used now: to the back of the eviction order.
+        let last = convs.len() - 1;
+        convs.move_index(i, last);
+        Some(Arc::clone(&convs[last]))
+    }
+
+    /// The budget, in bytes of merged-conversation JSON (chat.conversation_cache_mb).
+    fn conv_budget(&self) -> usize {
+        let mb = get(&self.config(), "chat.conversation_cache_mb")
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .unwrap_or(CONVS_BUDGET_MB as f64);
+        (mb * 1024.0 * 1024.0) as usize
+    }
+
+    fn parse_and_keep(&self, sid: &str, stamp: Option<(PathBuf, u64, u128)>) -> Result<Arc<Cached>, String> {
+        self.parses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let raw = Self::read_items(sid)?;
         let merged = conversation::merge_turns_ref(&raw);
         let sig = signature(&merged);
@@ -52,12 +90,11 @@ impl Shared {
             sig,
         });
         if stamp.is_some() {
+            let budget = self.conv_budget();
             let mut convs = self.convs.lk();
             convs.shift_remove(sid);
-            while convs.len() >= CONVS_KEPT {
-                convs.shift_remove_index(0); // the least recently used
-            }
             convs.insert(sid.to_string(), Arc::clone(&entry));
+            evict(&mut convs, CONVS_KEPT, budget);
         }
         Ok(entry)
     }
@@ -340,12 +377,59 @@ fn transcript_stamp(sid: &str) -> Option<(PathBuf, u64, u128)> {
     Some((p, meta.len(), mtime))
 }
 
-/// Parsed conversations kept (convcache's budget, by count).
+/// Parsed conversations kept, at most (convcache.KEEP).
 const CONVS_KEPT: usize = 32;
+/// chat.conversation_cache_mb's default (convcache.BUDGET: 32 MiB).
+const CONVS_BUDGET_MB: u64 = 32;
+
+/// Drop the least recently used until at most `keep` remain and their
+/// weight (merged JSON bytes) is within `budget` - but never the newest,
+/// however big it is.
+fn evict(convs: &mut indexmap::IndexMap<String, Arc<Cached>>, keep: usize, budget: usize) {
+    let mut total: usize = convs.values().map(|c| c.merged_json.len()).sum();
+    while convs.len() > 1 && (convs.len() > keep || total > budget) {
+        if let Some((_, gone)) = convs.shift_remove_index(0) {
+            total -= gone.merged_json.len();
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn kept(weights: &[usize], keep: usize, budget: usize) -> Vec<String> {
+        let mut convs = indexmap::IndexMap::new();
+        for (i, w) in weights.iter().enumerate() {
+            let c = Cached {
+                stamp: Default::default(),
+                raw: vec![],
+                merged: vec![],
+                merged_json: "x".repeat(*w),
+                sig: String::new(),
+            };
+            convs.insert(format!("s{i}"), Arc::new(c));
+        }
+        evict(&mut convs, keep, budget);
+        convs.keys().cloned().collect()
+    }
+
+    #[test]
+    fn a_weight_budget_keeps_at_least_the_newest() {
+        assert_eq!(kept(&[10, 5000], 32, 100), ["s1"]);
+        assert_eq!(kept(&[5000], 32, 0), ["s0"]);
+    }
+
+    #[test]
+    fn the_least_recently_used_go_first_until_within_budget() {
+        assert_eq!(kept(&[40, 40, 40, 40], 32, 100), ["s2", "s3"]);
+        assert_eq!(kept(&[40, 40, 40, 40], 32, 160), ["s0", "s1", "s2", "s3"]);
+    }
+
+    #[test]
+    fn the_count_still_bounds_it() {
+        assert_eq!(kept(&[1, 1, 1, 1], 2, usize::MAX), ["s2", "s3"]);
+    }
 
     #[test]
     fn signature_matches_python() {

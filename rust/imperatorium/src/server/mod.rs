@@ -72,7 +72,9 @@ use self::snapshot::{matrix_active, remote_key, Snap};
 /// `convs`, `paths`, `cost_history`, `errors_cache`, `tallies` and `doing`
 /// are leaf locks: no other lock of this struct is taken while one is held
 /// (`paths` and `convs` are taken one after the other, never nested), and
-/// none is held across a call to `conversation()`. `changes` is paired with
+/// none is held across a call to `conversation()`. `filling` is a leaf too;
+/// the per-session lock it hands out is held across one transcript parse
+/// and taken before `convs`, never while any other lock is held. `changes` is paired with
 /// the condvar `changed`, which waits on that mutex alone.
 pub struct Shared {
     /// Pushes and speech: counters, and what is scheduled.
@@ -130,6 +132,11 @@ pub struct Shared {
     doing: Mutex<HashMap<String, (f64, String)>>,
     /// convcache: the parsed conversations, least recently used first.
     convs: Mutex<indexmap::IndexMap<String, Arc<Cached>>>,
+    /// convcache._filling: one lock per session being parsed, so polls that
+    /// arrive together wait for one parse and share it.
+    filling: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Transcripts parsed into `convs` since start (/api/health).
+    parses: std::sync::atomic::AtomicU64,
     /// convcache._paths: each session's transcript, found once.
     paths: Mutex<HashMap<String, PathBuf>>,
     /// Sessions on other machines (remote.Fleet): only for a dispatcher with
@@ -241,6 +248,8 @@ impl Shared {
             stats: sessionstat::Reader::new(),
             doing: Mutex::new(HashMap::new()),
             convs: Mutex::new(indexmap::IndexMap::new()),
+            filling: Mutex::new(HashMap::new()),
+            parses: std::sync::atomic::AtomicU64::new(0),
             paths: Mutex::new(HashMap::new()),
             fleet: {
                 let hosts = crate::remote::load_hosts(&load_config(home));
