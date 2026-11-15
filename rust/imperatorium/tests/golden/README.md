@@ -62,6 +62,22 @@ FakeServer's port).
 
 `tests/harness.rs` already replays twin.py's `hook` steps (32 answers).
 
+Two rules for every replay (from `rust`, after python-out/runtime):
+
+- **Time:** start the binary with `IMPERATORIUM_TEST_TIME_SCALE` (e.g.
+  `0.05`; see `timing.rs` on `rust`). It scales the queue sweep, the idle
+  timer, the notify delay, park/question holds, stream and matrix intervals,
+  update checks and remote polls, so inbox_twin's 15 s sweep, notify_twin's
+  60 s idle check and the parks' waits take a fraction of their recorded
+  time. Scale the test's own waits (the `sleep` steps, the 1.5 s and 1 s
+  waits inside `parks()`, the `wait` values in park bodies) by the same
+  factor, and still poll with deadlines rather than sleep.
+- **/api/hosts:** the binary deliberately has no `python` or
+  `reader_python` keys there (it runs on the hosts itself). Python's
+  answer is recorded as it is; drop those two keys from the golden before
+  comparing. (No golden in this folder records /api/hosts yet; a recording
+  that adds one keeps them.)
+
 ### twin.py -> `twin/steps.jsonl`
 
 - Setup: no config.json, `--home <repo>`, CLAUDE_CONFIG_DIR an EMPTY folder
