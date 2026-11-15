@@ -57,6 +57,24 @@ fn impctl_service_uninstall_without_yes_or_a_terminal_removes_nothing() {
 }
 
 #[test]
+fn uninstall_without_yes_or_a_terminal_removes_nothing() {
+    let tmp = TempDir::new("setup-uninstall");
+    let settings = tmp.path.join("settings.json");
+    let before = r#"{"statusLine": {"type": "command", "command": "imperatorium statusline"}}"#;
+    std::fs::write(&settings, before).unwrap();
+    // A settings file and a task prefix of its own, whatever happened next.
+    let r = cli(
+        &["uninstall", "--settings", &settings.to_string_lossy(), "--task-prefix", "ImpCovNever", "--home", &tmp.path.to_string_lossy()],
+        None,
+        &tmp.path,
+    );
+    assert_eq!(r.code, 1, "{}{}", r.out, r.err);
+    assert!(r.err.contains("needs --yes"), "{}", r.err);
+    assert!(!r.out.contains("== "), "{}", r.out);
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), before);
+}
+
+#[test]
 fn impctl_service_install_does_not_ask() {
     let tmp = TempDir::new("impctl-install");
     let r = cli(

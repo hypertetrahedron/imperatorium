@@ -799,6 +799,10 @@ pub fn place_binary(src: &Path, dst: &Path) -> Result<(), String> {
 /// policy and state are left.
 pub fn uninstall_main(args: &[String], home: Option<&str>) -> i32 {
     let o = opts(args, home);
+    // As setup_machine.py did: ask first (and with no terminal, only on --yes).
+    if !o.dry && !crate::cli::confirmed("Remove Imperatorium's hooks, mod and service from this machine", o.yes) {
+        return 1;
+    }
     let mut say = |s: String| println!("{s}");
     println!("== Claude Code hooks");
     let mut settings = match load_settings(&o.settings) {
