@@ -86,6 +86,11 @@ class Blackbox(unittest.TestCase):
                 "IMPERATORIUM_ENDPOINT": self.base + "/hook",
                 "IMPERATORIUM_PARK_ENDPOINT": self.base + "/permission/park",
                 "LOCALAPPDATA": state, "XDG_STATE_HOME": state, "PYTHONUTF8": "1",
+                # Without IMPERATORIUM_POLICY the binary looks in
+                # %APPDATA%\imperatorium (or XDG_CONFIG_HOME): this
+                # machine's own policy, which Python never reads.
+                "APPDATA": os.path.join(state, "roaming"),
+                "XDG_CONFIG_HOME": os.path.join(state, "config"),
             })
             if policy is not None:
                 path = os.path.join(state, "policy.json")
