@@ -71,8 +71,22 @@ pub fn permission_timeout(home: &Path) -> i64 {
     if !truthy(park.get("enabled")) {
         return 8;
     }
-    let n = |k: &str| park.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-    n("wait_seconds").max(n("background_wait_seconds")) as i64 + 20
+    // An unset wait is no limit (the hook holds the request until answered).
+    let n = |k: &str| match park.get(k) {
+        None | Some(Value::Null) => crate::pending::FOREVER,
+        Some(v) => v.as_f64().unwrap_or(0.0),
+    };
+    let wait = n("wait_seconds");
+    let bg = match park.get("background_wait_seconds") {
+        None | Some(Value::Null) => wait,
+        Some(v) => v.as_f64().unwrap_or(0.0),
+    };
+    wait.max(bg) as i64 + 20
+}
+
+/// The hook timeout of a remote host's park-only permission hook.
+pub fn remote_permission_timeout() -> i64 {
+    crate::pending::FOREVER as i64 + 20
 }
 
 fn entry(matcher: Option<&str>, sub: &str, is_async: bool, native: &str, home: &Path) -> Value {
@@ -839,15 +853,17 @@ pub fn uninstall_main(args: &[String], home: Option<&str>) -> i32 {
 /// The hooks a remote host or container gets: the reporting ones only. Its
 /// permission prompts stay there, answered by the policy on this machine.
 pub fn apply_remote_hooks(settings: &mut Map<String, Value>, uninstall: bool, native: &str) -> Vec<String> {
-    let mut changes = apply_hooks(settings, uninstall, false, native, Path::new("."));
+    let changes = apply_hooks(settings, uninstall, false, native, Path::new("."));
     if !uninstall {
-        drop_permission_hook(settings, &mut changes);
+        park_only_permission_hook(settings);
     }
     changes
 }
 
-/// Take our PermissionRequest entry out again (other people's stay).
-fn drop_permission_hook(s: &mut Map<String, Value>, changes: &mut Vec<String>) {
+/// Take our PermissionRequest entry out again (other people's stay): a
+/// container's hooks come back through a one-way relay, which cannot carry
+/// an answer back.
+pub fn drop_permission_hook(s: &mut Map<String, Value>, changes: &mut Vec<String>) {
     if let Some(hooks) = s.get_mut("hooks").and_then(Value::as_object_mut) {
         let kept: Vec<Value> = hooks
             .get("PermissionRequest")
@@ -860,6 +876,28 @@ fn drop_permission_hook(s: &mut Map<String, Value>, changes: &mut Vec<String>) {
             hooks.insert("PermissionRequest".into(), Value::Array(kept));
         }
         changes.retain(|c| !c.ends_with(" PermissionRequest"));
+    }
+}
+
+/// A remote host's permission hook only offers the request to the window
+/// on this machine (through the tunnel): no policy file there, so
+/// `permission --park-only`, held until answered.
+fn park_only_permission_hook(s: &mut Map<String, Value>) {
+    let Some(blocks) = s
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .and_then(|h| h.get_mut("PermissionRequest"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for block in blocks.iter_mut().filter(|b| is_ours(b)) {
+        for hook in block.get_mut("hooks").and_then(Value::as_array_mut).into_iter().flatten() {
+            if let Some(h) = hook.as_object_mut() {
+                h.insert("args".into(), json!(["permission", "--park-only"]));
+                h.insert("timeout".into(), json!(remote_permission_timeout()));
+            }
+        }
     }
 }
 
@@ -1092,6 +1130,23 @@ Run `imperatorium install` to install what is missing.");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_permission_hook_outlasts_a_request_held_until_answered() {
+        let dir = std::env::temp_dir().join(format!("imp-ptimeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let with = |park: Value| {
+            std::fs::write(dir.join("policy.json"), json!({"park": park}).to_string()).unwrap();
+            permission_timeout(&dir)
+        };
+        let forever = crate::pending::FOREVER as i64 + 20;
+        assert_eq!(with(json!({"enabled": true})), forever);
+        assert_eq!(with(json!({"enabled": true, "wait_seconds": 20})), 40);
+        assert_eq!(with(json!({"enabled": true, "wait_seconds": 20, "background_wait_seconds": 300})), 320);
+        assert_eq!(with(json!({"enabled": true, "background_wait_seconds": 300})), forever);
+        assert_eq!(with(json!({"enabled": false})), 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn home_from_a_command_line() {

@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  SCRIPT, CSS, ESC, between, tail, find, evalJs, evalJson, j, cat, renderShell, renderMatrix,
+  SCRIPT, CSS, ESC, between, tail, find, evalJs, evalJsLater, evalJson, j, cat, renderShell, renderMatrix,
   runRenderer as run, assertIn, assertNotIn, assertLess,
 } from "./load.mjs";
 
@@ -250,6 +250,32 @@ describe("ReviewedTests", () => {
                         'pendingNow = [{session_id: "a"}]']) {
       assert.deepEqual(reviewedRun(busy + "; touched();"), [], busy);
     }
+  });
+});
+
+describe("PermissionCards", () => {
+  /** drawPending with /api/pending answering `items`: the banner's HTML. */
+  const banner = (items) => evalJsLater(cat(ESC, "\n",
+    "const els = {};\n",
+    "const $ = s => (els[s] = els[s] || {hidden: false, innerHTML: '', textContent: ''});\n",
+    "const document = {querySelectorAll: () => []};\n",
+    "const folder = c => String(c).split(/[\\\\/]/).pop();\n",
+    "let pendingNow = []; const wireQuestion = () => {};\n",
+    "const get = async () => ({pending: ", j(items), "});\n",
+    between(SCRIPT, "let pendingSig = \"\";", "// An AskUserQuestion parked"),
+    "\ndrawPending().then(() => process.stdout.write($('#decide').innerHTML));"));
+
+  it("a remote host's request names the host first", async () => {
+    const html = await banner([{ id: "a", cwd: "/home/les/src/die-reader", tool: "Bash",
+                                 input: "rm -rf build", host: "developmenthost1" }]);
+    assertIn('<span class="dqhost" title="a session on developmenthost1">developmenthost1</span><b>die-reader</b> wants Bash', html);
+  });
+
+  it("a local one has no host, and every card can go to the console", async () => {
+    const html = await banner([{ id: "b", cwd: "C:\\w\\proj", tool: "Edit", input: "a.rs" }]);
+    assertNotIn("dqhost", html);
+    assertIn('data-dv="pass" data-di="b"', html);
+    assertIn(">Console</button>", html);
   });
 });
 

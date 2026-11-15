@@ -529,6 +529,8 @@ const MAX_STREAMS: usize = 32;
 const MAX_PARKED: usize = 64;
 /// In-flight `/hook` requests on one host's tunnel listener.
 const MAX_TUNNEL_HOOKS: usize = 16;
+/// Permission requests one host may have waiting in the window at once.
+const MAX_TUNNEL_PARKS: usize = 32;
 
 /// A place in one of the capped counts, given back when dropped.
 struct Slot(Arc<AtomicUsize>);

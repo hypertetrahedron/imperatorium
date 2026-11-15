@@ -30,6 +30,11 @@ Edited since: `settings_twin/steps.jsonl`'s settings help and restart texts
 scripts, to match `assets/settings_fields.json`. Also there: the new
 `chat.conversation_cache_mb` field (2026-11-15), inserted after
 `chat.matrix_status` in every settings answer, as the schema has it.
+`hooks_blackbox/cases.jsonl` (2026-11-15, user decision): a policy whose
+`park` sets no `wait_seconds` now holds the request until it is answered,
+so the `background_wait_seconds`-only case parks with `wait` 604800 (and
+`wait_question` 120) where Python sent 0. Parks also carry the hook's pid
+(`_hook_pid`), which hooks_blackbox.rs checks and leaves out of the compare.
 
 Machine-specific strings are placeholders (`golden.py` `Places`; put back by
 `tests/common/mod.rs` `Places`): `<repo>` the checkout, `<repo-parent>`,

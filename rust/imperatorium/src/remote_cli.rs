@@ -685,16 +685,21 @@ mod tests {
     }
 
     #[test]
-    fn the_hooks_on_a_host_are_reporting_only() {
+    fn the_hooks_on_a_host_report_and_only_ask() {
         let bin = "/home/me/.claude/imperatorium/bin/imperatorium";
         let mut s: Map<String, Value> = serde_json::from_value(json!({"theme": "dark", "hooks": {
             "Stop": [{"hooks": [{"type": "command", "command": "python3", "args": ["/home/me/.claude/imperatorium/cc_hook.py"]}]},
                      {"hooks": [{"type": "command", "command": "someone-else"}]}]}})).unwrap();
         let changes = crate::install::apply_remote_hooks(&mut s, false, bin);
         assert!(changes.contains(&"replace Stop".to_string()) && changes.contains(&"add SessionStart".to_string()), "{changes:?}");
-        assert!(!changes.iter().any(|c| c.ends_with("PermissionRequest")));
         let hooks = s["hooks"].as_object().unwrap();
-        assert!(!hooks.contains_key("PermissionRequest") && !hooks.contains_key("PreToolUse"));
+        assert!(!hooks.contains_key("PreToolUse"));
+        // Its permission requests come to the window here, through the
+        // tunnel: no policy there, held until answered.
+        let perm = &hooks["PermissionRequest"][0]["hooks"][0];
+        assert_eq!(perm["command"], json!(bin));
+        assert_eq!(perm["args"], json!(["permission", "--park-only"]));
+        assert!(perm["timeout"].as_i64().unwrap() > 86400, "{perm}");
         let stop = hooks["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 2, "the stranger's hook stays");
         assert_eq!(stop[1]["hooks"][0]["command"], json!(bin));
@@ -703,7 +708,7 @@ mod tests {
         // Taking them away leaves the stranger's.
         crate::install::apply_remote_hooks(&mut s, true, bin);
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
-        assert_eq!(s["hooks"].as_object().unwrap().len(), 1);
+        assert_eq!(s["hooks"].as_object().unwrap().len(), 1, "{:?}", s["hooks"]);
     }
 
     #[test]

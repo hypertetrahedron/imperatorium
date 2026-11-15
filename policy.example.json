@@ -10,10 +10,8 @@
   "decision_format": "object",
   "_decision_format": "`object` is the reply Claude Code actually acts on, so verdicts here take effect. Remove the key (legacy reply) to make every verdict advisory again - logged, never applied.",
   "park": {
-    "_comment": "Offer an `ask` to the Imperatorium window and Stream Deck before the terminal prompts. While a request waits, the terminal's own prompt is held back, so an interactive session (you may be at its terminal) waits only wait_seconds; a background session has no terminal and waits background_wait_seconds. Nobody answering falls straight through to the normal prompt. Set enabled=false to go back to terminal-only, then rerun hooks/install.py so the hook timeout shrinks too.",
-    "enabled": true,
-    "wait_seconds": 20,
-    "background_wait_seconds": 300
+    "_comment": "Offer an `ask` to the Imperatorium window and Stream Deck instead of the terminal: it stays there until it is answered, sent to the console (the card's Console button), or the session stops waiting for it. While it waits the terminal's own prompt is held back. A remote host's requests show here too, under the host's name. Optional limits: wait_seconds (then it falls through to the terminal) and background_wait_seconds for background sessions. Set enabled=false to go back to terminal-only, then rerun `imperatorium install` so the hook timeout shrinks too.",
+    "enabled": true
   },
   "defaults": {
     "auto_edit": false,

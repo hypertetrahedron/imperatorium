@@ -296,9 +296,124 @@ fn dispatch_is_not_reachable_from_the_host() {
 #[test]
 fn nothing_else_is_either() {
     let rig = Rig::remote(json!({}));
-    for path in ["/api/focus", "/api/decide", "/permission/park"] {
+    for path in ["/api/focus", "/api/decide", "/api/pending", "/permission/decide"] {
         assert_eq!(rig.tunnel_post(path, &json!({})).0, 404, "{path}");
     }
+}
+
+// ------------------------------------------------------ remote permission requests
+
+/// POST `body` as JSON; the answer, parsed.
+fn post_json(url: &str, body: Value) -> Option<Value> {
+    let r = ureq::post(url).set("Content-Type", "application/json").send_string(&body.to_string()).ok()?;
+    serde_json::from_str(&r.into_string().ok()?).ok()
+}
+
+/// Park through the tunnel on a thread; the request as /api/pending lists it.
+fn park_remote(rig: &Rig, body: Value) -> (std::thread::JoinHandle<(u16, Value)>, Value) {
+    let url = format!("http://127.0.0.1:{}/permission/park", rig.hook_port);
+    let send = body.to_string();
+    let parked = std::thread::spawn(move || {
+        match ureq::post(&url).set("Content-Type", "application/json").send_string(&send) {
+            Ok(r) => (r.status(), serde_json::from_str(&r.into_string().unwrap_or_default()).unwrap_or(Value::Null)),
+            Err(ureq::Error::Status(c, _)) => (c, Value::Null),
+            Err(e) => panic!("{e}"),
+        }
+    });
+    let mut item = Value::Null;
+    eventually("the remote request is in the window", || {
+        item = rig.get("/api/pending").1["pending"].as_array().and_then(|a| a.first().cloned()).unwrap_or(Value::Null);
+        !item.is_null()
+    });
+    (parked, item)
+}
+
+#[test]
+fn a_hosts_permission_request_shows_here_under_its_name_and_the_answer_goes_back() {
+    let rig = Rig::remote(json!({}));
+    let (parked, item) = park_remote(&rig, json!({
+        "session_id": RSID, "cwd": "/home/les/src/die-reader", "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf build"}, "wait": 604800.0,
+        // What a host says about itself does not count: the listener names it.
+        "_host": "somewhere-else", "_hook_pid": 1}));
+    assert_eq!(item["host"], "pi", "{item}");
+    assert_eq!(item["input"], "rm -rf build");
+    assert!(item.get("hook_pid").is_none(), "a pid over there means nothing here: {item}");
+    let (code, _) = rig.post("/api/decide", &json!({"id": item["id"], "verdict": "allow"}));
+    assert_eq!(code, 200);
+    let (code, answer) = parked.join().unwrap();
+    assert_eq!((code, answer["verdict"].clone()), (200, json!("allow")), "{answer}");
+}
+
+#[test]
+fn a_hosts_request_left_to_the_console_falls_through_there() {
+    let rig = Rig::remote(json!({}));
+    let (parked, item) = park_remote(&rig, json!({
+        "session_id": RSID, "cwd": "/home/les/src/die-reader", "tool_name": "Edit",
+        "tool_input": {"file_path": "/home/les/src/die-reader/a.rs"}, "wait": 604800.0}));
+    rig.post("/api/decide", &json!({"id": item["id"], "verdict": "pass"}));
+    let (_, answer) = parked.join().unwrap();
+    assert!(answer["verdict"].is_null(), "{answer}");
+    assert!(rig.get("/api/pending").1["pending"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_request_whose_hook_has_gone_leaves_the_window() {
+    // Claude Code ends the hook when the person interrupts: the card must
+    // not stay up for the week it would otherwise wait.
+    let rig = Rig::remote(json!({}));
+    let mut gone = std::process::Command::new("cmd").args(["/c", "exit"]).spawn().unwrap();
+    let pid = gone.id();
+    gone.wait().unwrap();
+    let url = rig.url("/permission/park");
+    let started = std::time::Instant::now();
+    let parked = std::thread::spawn(move || {
+        post_json(&url, json!({"session_id": SID, "cwd": "C:\\w", "tool_name": "Bash",
+            "tool_input": {"command": "ls"}, "wait": 604800.0, "_hook_pid": pid}))
+    });
+    let answer = parked.join().unwrap().expect("an answer");
+    assert!(answer["verdict"].is_null(), "{answer}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    assert!(rig.get("/api/pending").1["pending"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_request_whose_hook_still_runs_stays() {
+    let rig = Rig::remote(json!({}));
+    let url = rig.url("/permission/park");
+    let me = std::process::id();
+    let parked = std::thread::spawn(move || {
+        post_json(&url, json!({"session_id": SID, "cwd": "C:\\w", "tool_name": "Bash",
+            "tool_input": {"command": "ls"}, "wait": 604800.0, "_hook_pid": me}))
+    });
+    let mut item = Value::Null;
+    eventually("the request is in the window", || {
+        item = rig.get("/api/pending").1["pending"].as_array().and_then(|a| a.first().cloned()).unwrap_or(Value::Null);
+        !item.is_null()
+    });
+    // Several of the two-second checks later, still there.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    assert_eq!(rig.get("/api/pending").1["pending"].as_array().unwrap().len(), 1);
+    rig.post("/api/decide", &json!({"id": item["id"], "verdict": "allow"}));
+    assert_eq!(parked.join().unwrap().unwrap()["verdict"], "allow");
+}
+
+#[test]
+fn a_local_park_cannot_claim_a_host() {
+    let rig = Rig::remote(json!({}));
+    let url = rig.url("/permission/park");
+    let parked = std::thread::spawn(move || {
+        post_json(&url, json!({"session_id": SID, "cwd": "C:\\w", "tool_name": "Bash",
+            "tool_input": {"command": "ls"}, "wait": 60.0, "_host": "pi"})).map(|_| 200u16)
+    });
+    let mut item = Value::Null;
+    eventually("the local request is in the window", || {
+        item = rig.get("/api/pending").1["pending"].as_array().and_then(|a| a.first().cloned()).unwrap_or(Value::Null);
+        !item.is_null()
+    });
+    assert!(item.get("host").is_none(), "{item}");
+    rig.post("/api/decide", &json!({"id": item["id"], "verdict": "deny"}));
+    assert_eq!(parked.join().unwrap(), Some(200));
 }
 
 // ----------------------------------------------------- RemoteConversation

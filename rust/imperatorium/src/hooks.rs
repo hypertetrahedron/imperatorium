@@ -301,8 +301,13 @@ fn park(
     if !truthy(settings.get("enabled")) {
         return Map::new();
     }
-    let zero = json!(0);
-    let Some(wait) = py_float(or(settings.get("wait_seconds"), Some(&zero)).unwrap()) else {
+    // Held until answered unless the policy sets a limit (2026-11-15: the
+    // window's card stays; "pass" sends it to the terminal).
+    // Only a missing (or null) wait is no limit; an explicit 0 still means
+    // "do not hold it".
+    let forever = json!(crate::pending::FOREVER);
+    let set = settings.get("wait_seconds").filter(|v| !v.is_null()).unwrap_or(&forever);
+    let Some(wait) = py_float(or(Some(set), Some(&json!(0))).unwrap()) else {
         return Map::new();
     };
     let wait_v = json!(wait);
@@ -329,9 +334,12 @@ fn park(
     payload.insert("wait".into(), json!(wait));
     payload.insert("wait_background".into(), json!(wait_bg));
     payload.insert("wait_question".into(), json!(wait_q));
+    // So the dispatcher can drop the card once this process is gone (Claude
+    // Code ends it when the person interrupts).
+    payload.insert("_hook_pid".into(), json!(std::process::id()));
     let endpoint =
         std::env::var("IMPERATORIUM_PARK_ENDPOINT").unwrap_or_else(|_| DEFAULT_PARK.into());
-    let timeout = Duration::from_secs_f64((longest + 10.0).min(86_400.0));
+    let timeout = Duration::from_secs_f64((longest + 10.0).min(crate::pending::FOREVER + 60.0));
     match post_json(
         &endpoint,
         &json_dumps(&Value::Object(payload), true),
@@ -385,17 +393,24 @@ pub fn reply(
     }})
 }
 
-pub fn permission_main(home: Option<&str>) -> i32 {
+/// The policy a remote host's hook runs (`permission --park-only`): no
+/// rules of its own - auto-approval is this machine's - so every request
+/// the session would put to the person is offered to the window here.
+fn park_only_policy() -> Value {
+    json!({"enabled": false, "decision_format": "object", "park": {"enabled": true}})
+}
+
+pub fn permission_main(home: Option<&str>, park_only: bool) -> i32 {
     let Some(raw) = read_stdin() else { return 0 };
     let Some(Value::Object(request)) = loads_or_empty(&raw) else {
         return 0;
     };
-    let policy = load_policy(home);
+    let policy = if park_only { park_only_policy() } else { load_policy(home) };
     let request_v = Value::Object(request.clone());
     let decided = policy::decide(&request_v, &policy);
-    let reason = decided.reason.clone();
+    let reason = if park_only { String::new() } else { decided.reason.clone() };
     let tier = decided.tier;
-    let mut verdict: &str = decided.verdict;
+    let mut verdict: &str = if park_only { ASK } else { decided.verdict };
 
     let tool_input = request.get("tool_input");
     let mut detail = String::new();

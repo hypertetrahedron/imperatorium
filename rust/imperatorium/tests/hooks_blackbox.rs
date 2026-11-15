@@ -26,12 +26,17 @@ fn audit(state: &std::path::Path) -> Value {
     )
 }
 
+fn label_of(case: &Value) -> String {
+    format!("{} {}", case["test"].as_str().unwrap_or(""), case["which"].as_str().unwrap_or(""))
+}
+
 #[test]
 fn hooks_behave_as_the_python_hooks_did() {
     let cases = read_jsonl(&golden_dir("hooks_blackbox").join("cases.jsonl"));
     assert!(cases.len() > 40);
     let fake = FakeServer::start();
     let mut f = Failures::default();
+    let pid = regex::Regex::new(r#", "_hook_pid": \d+"#).unwrap();
     for case in &cases {
         let state = TempDir::new("hook");
         let places = Places::new(&[("state", &state.path)]);
@@ -76,10 +81,18 @@ fn hooks_behave_as_the_python_hooks_did() {
         let mut types: Vec<String> = seen.iter().filter_map(|(_, _, c, _)| c.clone()).collect();
         types.sort();
         types.dedup();
+        // Since 2026-11-15 a park carries the hook's own pid (so the window
+        // drops a request whose hook has gone): checked, then left out of
+        // the comparison, since it differs every run.
+        for (_, p, _, b) in &seen {
+            if p == "/permission/park" {
+                assert!(pid.is_match(&String::from_utf8_lossy(b)), "a park without the hook's pid: {}", label_of(&case));
+            }
+        }
         let got = json!({
             "code": code,
             "stdout": String::from_utf8_lossy(&stdout),
-            "requests": seen.iter().map(|(_, p, _, b)| json!([p, String::from_utf8_lossy(b)])).collect::<Vec<_>>(),
+            "requests": seen.iter().map(|(_, p, _, b)| json!([p, pid.replace(&String::from_utf8_lossy(b), "").into_owned()])).collect::<Vec<_>>(),
             "content_types": types,
             "audit": audit(&state.path),
         });

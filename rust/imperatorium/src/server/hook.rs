@@ -505,14 +505,22 @@ pub(super) fn start_tunnels(shared: &Arc<Shared>, fleet: &Arc<crate::remote::Fle
     }
 }
 
-/// HookOnlyHandler: what a host's tunnel lands on - `/hook`, and nothing
-/// else. Everything else the dispatcher serves would let any process on
-/// that host drive the sessions on this machine. The host is known from
-/// which listener the connection came in on, never from the payload.
+/// HookOnlyHandler: what a host's tunnel lands on - `/hook` and
+/// `/permission/park` (its sessions' permission requests, shown in the
+/// window under the host's name), and nothing else. Everything else the
+/// dispatcher serves would let any process on that host drive the sessions
+/// on this machine; a park can only ask, and its answer goes back to the
+/// host. The host is known from which listener the connection came in on,
+/// never from the payload.
 fn hook_only(server: tiny_http::Server, shared: Arc<Shared>, host: String) {
     let inflight = Arc::new(AtomicUsize::new(0));
+    // Parks are held until answered: counted apart, so a few waiting
+    // requests never crowd out the host's hooks.
+    let parked = Arc::new(AtomicUsize::new(0));
     for request in server.incoming_requests() {
-        let Some(slot) = Slot::take(&inflight, MAX_TUNNEL_HOOKS) else {
+        let park = request.url().split('?').next().unwrap_or("").trim_end_matches('/') == "/permission/park";
+        let (count, most) = if park { (&parked, MAX_TUNNEL_PARKS) } else { (&inflight, MAX_TUNNEL_HOOKS) };
+        let Some(slot) = Slot::take(count, most) else {
             busy(request);
             continue;
         };
@@ -527,7 +535,8 @@ fn hook_only(server: tiny_http::Server, shared: Arc<Shared>, host: String) {
 fn hook_only_one(mut request: tiny_http::Request, shared: &Arc<Shared>, host: &str) {
     {
         let path = request.url().split('?').next().unwrap_or("").trim_end_matches('/').to_string();
-        let (code, body) = if request.method() != &tiny_http::Method::Post || path != "/hook" {
+        let park = path == "/permission/park";
+        let (code, body) = if request.method() != &tiny_http::Method::Post || !(path == "/hook" || park) {
             (404, json!({"error": "no such path"}))
         } else {
             let ctype = request
@@ -552,7 +561,16 @@ fn hook_only_one(mut request: tiny_http::Request, shared: &Arc<Shared>, host: &s
                         let empty = Map::new();
                         let p = v.as_object().unwrap_or(&empty);
                         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            shared.on_hook(p, Some(host))
+                            if park {
+                                // Which host is the listener's to say; a pid
+                                // over there means nothing here.
+                                let mut p = p.clone();
+                                p.remove("_hook_pid");
+                                p.insert("_host".into(), json!(host));
+                                shared.park_request(&p)
+                            } else {
+                                shared.on_hook(p, Some(host))
+                            }
                         }))
                         .unwrap_or_else(|e| {
                             eprintln!("imperatorium: hook from {host} panicked: {}", panic_text(&*e));

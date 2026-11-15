@@ -149,6 +149,52 @@ impl Shared {
         got
     }
 
+    /// POST /permission/park, from this machine's hook or (with `_host` set
+    /// by the listener) a remote host's: the hook blocks here until a human
+    /// answers, passes it to the terminal, or nobody waits for it any more.
+    /// No verdict is a silent "ask": the terminal prompts.
+    pub(super) fn park_request(&self, p: &Map<String, Value>) -> Value {
+        let wait = self.park_wait(p);
+        let (verdict, who, answers) = self.pending.park_while(p, wait, |item| self.park_abandoned(item));
+        let mut reply = json!({"verdict": verdict, "decided_by": who});
+        if truthy(Some(&answers)) {
+            reply["answers"] = answers;
+        }
+        reply
+    }
+
+    /// Whether nobody waits for parked `item` any more: this machine's hook
+    /// process has ended (Claude Code ends it when the person interrupts),
+    /// or the session ended - or, for a remote one, whose hook cannot be
+    /// looked at from here, its turn stopped.
+    pub(super) fn park_abandoned(&self, item: &Map<String, Value>) -> bool {
+        let host = item.get("host").and_then(Value::as_str);
+        if host.is_none() {
+            if let Some(pid) = item.get("hook_pid").and_then(Value::as_u64) {
+                if !crate::proc::pid_alive(pid as u32) {
+                    return true;
+                }
+            }
+        }
+        let Some(sid) = item.get("session_id").and_then(Value::as_str) else {
+            return false;
+        };
+        let key = match host {
+            Some(h) => super::snapshot::remote_key(h, sid),
+            None => sid.to_string(),
+        };
+        let at = item.get("at").and_then(Value::as_f64).unwrap_or(0.0);
+        self.row(&key).is_some_and(|r| {
+            let after = r.get("last_event_at").and_then(Value::as_f64).is_some_and(|t| t > at);
+            let ended = match r.get("last_event").and_then(Value::as_str) {
+                Some("SessionEnd") => true,
+                Some("Stop" | "StopFailure") => host.is_some(),
+                _ => false,
+            };
+            after && ended
+        })
+    }
+
     /// Control.park_wait: how long a parked request is held. A background
     /// session has no terminal, so it gets `wait_background`; a question
     /// takes longer to answer than an Allow.

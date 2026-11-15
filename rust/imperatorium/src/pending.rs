@@ -13,8 +13,14 @@ use serde_json::{json, Map, Value};
 
 use crate::pyish::{py_str, strip, take, truthy};
 
+/// How long a request is held when nothing says otherwise: until it is
+/// answered, in effect (a week). The window's "pass" sends it to the
+/// terminal, and a request whose hook has gone is dropped (`park`'s `gone`).
+pub const FOREVER: f64 = 7.0 * 86400.0;
 /// Long-poll cap; the hook's own timeout is the real deadline.
-pub const MAX_HOLD: f64 = 600.0;
+pub const MAX_HOLD: f64 = FOREVER;
+/// How often a held request checks that someone still waits for it.
+const GONE_EVERY: Duration = Duration::from_secs(2);
 pub const QUESTION_TOOL: &str = "AskUserQuestion";
 /// Releases the hook without deciding: the terminal prompts at once.
 pub const PASS: &str = "pass";
@@ -41,7 +47,20 @@ fn new_id() -> String {
 impl Pending {
     /// Pending.park: register and wait up to `wait` seconds for a decision.
     /// (verdict, decided_by, answers); the verdict is None if nobody answered.
+    #[cfg(test)]
     pub fn park(&self, request: &Map<String, Value>, wait: f64) -> (Value, Value, Value) {
+        self.park_while(request, wait, |_| false)
+    }
+
+    /// `park`, giving up early once `gone(item)` says nobody waits for the
+    /// answer any more (the hook was ended, the session moved on); asked
+    /// every couple of seconds.
+    pub fn park_while(
+        &self,
+        request: &Map<String, Value>,
+        wait: f64,
+        gone: impl Fn(&Map<String, Value>) -> bool,
+    ) -> (Value, Value, Value) {
         let id = new_id();
         let get = |k: &str| request.get(k).cloned().unwrap_or(Value::Null);
         let mut item = json!({
@@ -52,6 +71,14 @@ impl Pending {
         .as_object()
         .unwrap()
         .clone();
+        // A remote host's request: which host, as the listener it came in on
+        // says (never the payload; see server::hook::hook_only_one).
+        if let Some(h) = request.get("_host").filter(|v| truthy(Some(v))) {
+            item.insert("host".into(), h.clone());
+        }
+        if let Some(p) = request.get("_hook_pid").filter(|v| v.is_u64()) {
+            item.insert("hook_pid".into(), p.clone());
+        }
         if item["tool"].as_str() == Some(QUESTION_TOOL) {
             if let Some(qs) = questions(request) {
                 let joined: Vec<String> = qs
@@ -73,13 +100,27 @@ impl Pending {
             wait.clamp(0.0, MAX_HOLD)
         };
         let deadline = Instant::now() + Duration::from_secs_f64(crate::timing::secs(hold));
+        let mut next_check = Instant::now() + GONE_EVERY;
         loop {
             let decided = items.get(&id).is_some_and(|i| !i["verdict"].is_null());
             let left = deadline.saturating_duration_since(Instant::now());
             if decided || left.is_zero() {
                 break;
             }
-            items = self.changed.wait_timeout(items, left).unwrap_or_else(std::sync::PoisonError::into_inner).0;
+            if Instant::now() >= next_check {
+                let snapshot = items.get(&id).cloned().unwrap_or_default();
+                // Not under the lock: the check may look at processes and
+                // sessions, and other parks and answers must not wait on it.
+                drop(items);
+                let abandoned = gone(&snapshot);
+                items = self.items.lk();
+                if abandoned {
+                    break;
+                }
+                next_check = Instant::now() + GONE_EVERY;
+            }
+            let nap = left.min(next_check.saturating_duration_since(Instant::now()));
+            items = self.changed.wait_timeout(items, nap).unwrap_or_else(std::sync::PoisonError::into_inner).0;
         }
         let item = items.get(&id).cloned().unwrap_or_default();
         let mut verdict = item.get("verdict").cloned().unwrap_or(Value::Null);
@@ -225,6 +266,41 @@ mod tests {
 
     fn req(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_request_nobody_waits_for_leaves_and_says_nothing() {
+        let p = Pending::default();
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let started = Instant::now();
+        let (verdict, _, _) = p.park_while(&req(json!({"session_id": "s", "tool_name": "Bash", "_host": "pi"})), FOREVER, |item| {
+            assert_eq!(item["host"], "pi");
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1
+        });
+        assert!(verdict.is_null());
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(p.waiting().is_empty());
+    }
+
+    #[test]
+    fn an_answer_still_ends_a_held_request_at_once() {
+        let p = Arc::new(Pending::default());
+        let q = Arc::clone(&p);
+        let answer = std::thread::spawn(move || {
+            let id = loop {
+                if let Some(i) = q.waiting().first() {
+                    break i["id"].clone();
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert!(q.decide(&id, &json!("deny"), json!("window"), None));
+        });
+        let started = Instant::now();
+        let (verdict, _, _) = p.park_while(&req(json!({"session_id": "s", "tool_name": "Bash"})), FOREVER, |_| false);
+        answer.join().unwrap();
+        assert_eq!(verdict, json!("deny"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

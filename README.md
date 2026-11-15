@@ -905,9 +905,18 @@ window's banner as a card - its options with descriptions, multi-select,
 free-text Other - with **Submit answer**, **Answer in terminal** (hands it
 back at once) and **Decline**. A bare Allow is refused for a question, so the
 Stream Deck and `imperatorium allow` cannot answer one and the deck does not show
-them. An interactive session's question waits `park.question_wait_seconds`
-(default 120, never longer than the other two waits). Needs the object
-`decision_format`; with the legacy one the terminal asks.
+them. Like every parked request, a question stays in the window until it is
+answered or handed back (or the session stops waiting for it); with
+`park.wait_seconds` set, it waits at least `park.question_wait_seconds`
+(default 120). Needs the object `decision_format`; with the legacy one the
+terminal asks.
+
+**Remote hosts' requests** show in the same banner, led by the host's name.
+`imperatorium remote add HOST` installs a permission hook there that only
+asks (`permission --park-only`: no policy on the host, so nothing is
+auto-approved there), and it reaches this window through the host's tunnel,
+whose listener takes `/hook` and `/permission/park` and nothing else. The
+answer goes back to the host; **Console** leaves it to the terminal there.
 
 ## Keep it running
 

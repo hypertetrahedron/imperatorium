@@ -2963,8 +2963,11 @@ async function loadPrefs(){
 
 // -- parked permission requests ---------------------------------------
 // Only present when policy.json parks `ask` decisions for the window. The
-// hook is blocked while one shows, and gives up on its own when it expires.
+// hook is blocked while one shows; it stays until it is answered, sent to
+// the console, or the session stops waiting for it. One from a remote host
+// says which host, first.
 let pendingSig = "";
+const hostTag = i => i.host ? `<span class="dqhost" title="a session on ${esc(i.host)}">${esc(i.host)}</span>` : "";
 async function drawPending(){
   let d;
   try { d = await get("/api/pending"); } catch (e) { return; }
@@ -2977,17 +2980,19 @@ async function drawPending(){
   // A question's line in the chat says where to answer it.
   if (asked && typeof drawLog === "function") drawLog();
   $("#decide").hidden = !items.length;
-  $("#decide").innerHTML = items.map(i => i.questions ? questionHtml(i) : `<div class="dq"><span title="${esc(i.input)}"><b>${
-    esc(folder(i.cwd))}</b> wants ${esc(i.tool)}: ${esc(i.input)}${i.reason ? " - " + esc(i.reason) : ""}</span>
+  $("#decide").innerHTML = items.map(i => i.questions ? questionHtml(i) : `<div class="dq"><span title="${esc(i.input)}">${
+    hostTag(i)}<b>${esc(folder(i.cwd))}</b> wants ${esc(i.tool)}: ${esc(i.input)}${i.reason ? " - " + esc(i.reason) : ""}</span>
     <button class="sm" data-dv="allow" data-di="${esc(i.id)}">Allow</button>
-    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}">Deny</button></div>`).join("");
+    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}">Deny</button>
+    <button class="sm ghost" data-dv="pass" data-di="${esc(i.id)}" title="answer it in the session's console instead${
+      i.host ? " (on " + esc(i.host) + ")" : ""}">Console</button></div>`).join("");
   document.querySelectorAll("[data-dv]").forEach(b => b.onclick = async () => {
     const card = b.closest(".dqq");
     const body = {id: b.dataset.di, verdict: b.dataset.dv, who: "window"};
     if (card && b.dataset.dv === "allow") body.answers = questionAnswers(card);
     const r = await post("/api/decide", body);
     const done = card ? {allow: "answer sent", pass: "left to the terminal", deny: "declined"}[b.dataset.dv]
-      : b.dataset.dv + " sent";
+      : b.dataset.dv === "pass" ? "left to the console" : b.dataset.dv + " sent";
     $("#say").textContent = r.ok ? done : "too late - it already expired";
     pendingSig = ""; drawPending();
   });
@@ -3005,7 +3010,7 @@ function questionHtml(i){
     <div class="qo">${q.options.map(o => `<button type="button" data-opt="${esc(o.label)}">${
       esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ""}</button>`).join("")}
       <input type="text" class="qother" placeholder="Other - type your own answer" aria-label="Other answer"></div></div>`).join("");
-  return `<div class="dq dqq" data-di="${esc(i.id)}"><div><b>${esc(folder(i.cwd))}</b> is asking you${
+  return `<div class="dq dqq" data-di="${esc(i.id)}"><div>${hostTag(i)}<b>${esc(folder(i.cwd))}</b> is asking you${
     i.questions.length > 1 ? " " + i.questions.length + " questions" : ""}:</div>${qs}
     <div class="qa"><button class="sm" data-dv="allow" data-di="${esc(i.id)}" disabled>Submit answer</button>
     <button class="sm ghost" data-dv="pass" data-di="${esc(i.id)}" title="Show the question at the session's terminal now">Answer in terminal</button>

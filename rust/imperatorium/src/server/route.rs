@@ -173,15 +173,10 @@ impl Shared {
         }
         match path {
             "/permission/park" => {
-                // The hook blocks here until a human answers or the wait
-                // runs out; running out is a silent "ask".
-                let wait = self.park_wait(p);
-                let (verdict, who, answers) = self.pending.park(p, wait);
-                let mut reply = json!({"verdict": verdict, "decided_by": who});
-                if truthy(Some(&answers)) {
-                    reply["answers"] = answers;
-                }
-                return (200, Body::Json(reply));
+                // This machine's hook: only a tunnel's listener names a host.
+                let mut p = p.clone();
+                p.remove("_host");
+                return (200, Body::Json(self.park_request(&p)));
             }
             "/api/decide" => {
                 let who = p

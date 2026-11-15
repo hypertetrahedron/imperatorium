@@ -261,7 +261,7 @@ fn main() {
         Some(name) if cli::handles(name) => cli::main(name, &args[1..], home.as_deref()),
         Some("hook") => hooks::hook_main(),
         Some("statusline") => hooks::statusline_main(),
-        Some("permission") => hooks::permission_main(home.as_deref()),
+        Some("permission") => hooks::permission_main(home.as_deref(), args.iter().any(|a| a == "--park-only")),
         Some("policy-decide") => policy_decide(),
         // Conformance only: settings.check over JSON lines.
         Some("settings-check") => settings::check_lines(),
