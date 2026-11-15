@@ -5,12 +5,16 @@
 //!
 //!   imperatorium release-package --version 0.3.1 --out dist/0.3.1
 //!       [--channel stable|preview] [--notes FILE] [--scripts DIR]
+//!       [--sign-key-env NAME]
 //!       KEY=PATH...
 //!
 //! A key starting `voice-` is the dictation worker for that triple. A
 //! missing file is an error: a release with a hole in it is worse than
 //! none. The install scripts (install.ps1, install.sh, install.cmd) are
-//! copied from `--scripts DIR` when it is given and has them.
+//! copied from `--scripts DIR` when it is given and has them. With
+//! `--sign-key-env NAME`, manifest.json is signed with the base64 Ed25519
+//! seed in that variable, into manifest.json.sig (see signing.rs); an
+//! empty variable is an error, not an unsigned release.
 
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -40,11 +44,12 @@ pub struct Args {
     out: PathBuf,
     notes: Option<String>,
     scripts: Option<PathBuf>,
+    sign_env: Option<String>,
     assets: Vec<String>,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
-    let (mut version, mut channel, mut out, mut notes, mut scripts) = (None, None, None, None, None);
+    let (mut version, mut channel, mut out, mut notes, mut scripts, mut sign_env) = (None, None, None, None, None, None);
     let mut assets = vec![];
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -59,6 +64,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--out" => out = Some(PathBuf::from(value()?)),
             "--notes" => notes = Some(value()?),
             "--scripts" => scripts = Some(PathBuf::from(value()?)),
+            "--sign-key-env" => sign_env = Some(value()?),
             n if n.starts_with("--") => return Err(format!("unknown option {n}")),
             _ => assets.push(a.clone()),
         }
@@ -72,6 +78,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         out: out.ok_or("--out is required")?,
         notes,
         scripts,
+        sign_env,
         assets,
     })
 }
@@ -81,6 +88,12 @@ pub fn run(a: &Args) -> Result<(), String> {
         .channel
         .clone()
         .unwrap_or_else(|| if a.version.contains('-') { "preview" } else { "stable" }.to_string());
+    // The key is read before anything is written, so a missing secret
+    // leaves no half-made release behind.
+    let seed = match &a.sign_env {
+        Some(var) => Some(crate::paths::env_nonempty(var).ok_or(format!("--sign-key-env {var}: the variable is empty"))?),
+        None => None,
+    };
     std::fs::create_dir_all(&a.out).map_err(|e| format!("{}: {e}", a.out.display()))?;
     let mut manifest = Map::new();
     manifest.insert("version".into(), json!(a.version.trim_start_matches('v')));
@@ -110,7 +123,19 @@ pub fn run(a: &Args) -> Result<(), String> {
         std::fs::write(a.out.join(name), text).map_err(|e| format!("{name}: {e}"))
     };
     w("SHA256SUMS", sums.join("\n") + "\n")?;
-    w("manifest.json", crate::pyish::json_dumps_indent(&Value::Object(manifest.clone()), 2) + "\n")?;
+    let body = crate::pyish::json_dumps_indent(&Value::Object(manifest.clone()), 2) + "\n";
+    let signature = match &seed {
+        Some(seed) => Some(crate::signing::sign(seed, body.as_bytes())?),
+        None => None,
+    };
+    w("manifest.json", body)?;
+    match &signature {
+        Some(sig) => {
+            w("manifest.json.sig", sig.clone() + "\n")?;
+            println!("signed by {}", crate::signing::public_of(seed.as_deref().unwrap_or(""))?);
+        }
+        None => println!("(unsigned: `imperatorium update` will refuse this release)"),
+    }
     if let Some(dir) = &a.scripts {
         for script in ["install.ps1", "install.sh", "install.cmd"] {
             let src = dir.join(script);

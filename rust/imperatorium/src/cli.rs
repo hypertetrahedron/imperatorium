@@ -890,11 +890,12 @@ pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("Service", "serve", "[--port N] [--host H] [--home DIR] [--state FILE] [--live]", "The dispatcher and window (what the service runs); without --live a shadow with its own state"),
     ("Service", "service", "install|uninstall|restart|status [--streamdeck] [--no-hotkey] [--dry-run] [-y]", "Register or remove the start-at-logon service"),
     ("Setup", "install", "[--yes] [--dry-run] [--home DIR] [--root DIR]... [--no-service] [...]", "Install on this machine: binary, config, Claude Code hooks, service"),
-    ("Setup", "uninstall", "[--yes] [--dry-run]", "Remove hooks, mod and service (config and state are kept)"),
+    ("Setup", "uninstall", "[--yes] [--dry-run] [--purge]", "Remove hooks, mod and service (config and state are kept; --purge removes them too)"),
     ("Setup", "check", "", "Check prerequisites and what is installed; changes nothing"),
-    ("Setup", "update", "[--check] [--channel stable|preview] [--from URL]", "Self-update from the project's releases, SHA-256 checked"),
+    ("Setup", "update", "[--check] [--channel stable|preview] [--version V] [--from URL] [--rollback]", "Self-update from the project's releases (signed manifest, SHA-256 checked); --version installs that release, up or down; --rollback goes back to the binary the last update replaced"),
     ("Setup", "test", "[FILTER ...]", "Run `cargo test` in a checkout (needs one: the folder holding rust/)"),
-    ("Setup", "release-package", "--version V --out DIR [--channel stable|preview] [--notes FILE] [--scripts DIR]", "Lay out a release folder: assets by target, SHA256SUMS, manifest.json"),
+    ("Setup", "release-package", "--version V --out DIR [--channel stable|preview] [--notes FILE] [--scripts DIR] [--sign-key-env NAME]", "Lay out a release folder: assets by target, SHA256SUMS, manifest.json"),
+    ("Setup", "release-keygen", "", "A new release signing key pair, as JSON (secret for the release workflow, public for signing.rs)"),
     ("Other machines", "remote", "add|remove|check [HOST] [--label L] [--no-tunnel] [--purge] ...", "Onboard, remove or check a machine reached over SSH"),
     ("Other machines", "remote-probe", "[HOST ...]", "Poll remote hosts once and print their sessions"),
     ("Window", "open", "", "Raise the Imperatorium window, or open it"),
@@ -1190,7 +1191,7 @@ mod tests {
     fn every_command_is_in_the_help() {
         let all = help_text(None).unwrap();
         for name in ["status", "start", "stop", "restart", "run", "service", "open", "sessions", "projects", "send", "queue", "focus",
-                     "history", "pending", "notify", "events", "test", "remote", "check", "install", "hook", "serve", "update"] {
+                     "history", "pending", "notify", "events", "test", "remote", "check", "install", "hook", "serve", "update", "release-keygen"] {
             assert!(COMMANDS.iter().any(|c| c.1 == name), "{name}");
             assert!(all.contains(&format!("  {name}")), "{name}");
         }

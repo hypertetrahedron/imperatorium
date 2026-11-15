@@ -841,13 +841,76 @@ pub fn uninstall_main(args: &[String], home: Option<&str>) -> i32 {
         }
     }
     println!("== Service");
+    let bin_dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
     service_for(&o, exe).uninstall(o.dry, &mut say);
+    if o.flags.get("purge") == Some(&json!(true)) {
+        println!("== Config and state (--purge)");
+        let failed = purge(&o.home, &crate::paths::state_dir(), o.dry, &mut say);
+        println!(
+            "\nRemoved{}. The binary itself stays in {}: delete that folder to finish.",
+            if failed { ", except as above" } else { "" },
+            bin_dir.display()
+        );
+        return i32::from(failed);
+    }
     println!(
-        "\nRemoved. config.json and policy.json ({}) and your state ({}) were left in place.",
+        "\nRemoved. config.json and policy.json ({}) and your state ({}) were left in place \
+         (`imperatorium uninstall --purge` removes them too).",
         o.home.display(),
         crate::paths::state_dir().display()
     );
     0
+}
+
+/// `uninstall --purge`: config.json, policy.json (and their backups) from
+/// the config folder, which goes too once nothing else is in it - it may be
+/// a folder the person chose, so nothing else in it is touched - and the
+/// whole state folder, which is only ever ours. True when something could
+/// not be removed.
+fn purge(home: &Path, state: &Path, dry: bool, say: &mut dyn FnMut(String)) -> bool {
+    let mut failed = false;
+    fn gone(p: &Path, r: std::io::Result<()>, say: &mut dyn FnMut(String)) -> bool {
+        match r {
+            Ok(()) => {
+                say(format!("   removed {}", p.display()));
+                false
+            }
+            Err(e) => {
+                say(format!("   could not remove {}: {e}", p.display()));
+                true
+            }
+        }
+    }
+    let names = ["config.json", "config.json.bak", "policy.json", "policy.json.bak"];
+    for n in names {
+        let p = home.join(n);
+        if p.is_file() {
+            if dry {
+                say(format!("   would remove {}", p.display()));
+            } else {
+                failed |= gone(&p, std::fs::remove_file(&p), say);
+            }
+        }
+    }
+    if !dry && home.is_dir() && std::fs::read_dir(home).map(|mut d| d.next().is_none()).unwrap_or(false) {
+        failed |= gone(home, std::fs::remove_dir(home), say);
+    }
+    // The state folder is <platform folder>/imperatorium; refuse anything
+    // else (or anything that looks like a checkout) rather than delete it.
+    let ours = state.file_name().is_some_and(|n| n.eq_ignore_ascii_case("imperatorium")) && !state.join(".git").exists();
+    if !state.is_dir() {
+        return failed;
+    }
+    if !ours {
+        say(format!("   {} does not look like Imperatorium's state folder - left alone", state.display()));
+        return true;
+    }
+    if dry {
+        say(format!("   would remove {} and everything in it", state.display()));
+    } else {
+        failed |= gone(state, std::fs::remove_dir_all(state), say);
+    }
+    failed
 }
 
 /// The hooks a remote host or container gets: the reporting ones only. Its

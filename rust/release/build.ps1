@@ -10,6 +10,12 @@
     against (serve dist\<version> over HTTP and point IMPERATORIUM_RELEASES
     or --from at it).
 
+    The manifest is signed. With IMPERATORIUM_SIGNING_KEY set (the base64
+    seed from `imperatorium release-keygen`) that key signs it. Without it, a
+    throwaway key is made for this build only: its public half goes in
+    <out>\TEST-PUBKEY.txt, and whoever tests the release sets
+    IMPERATORIUM_RELEASE_PUBKEY to it, or their binary refuses the manifest.
+
 .EXAMPLE
     powershell -File rust\release\build.ps1 -Version 0.3.1-preview.1
 #>
@@ -54,6 +60,25 @@ try {
     Pop-Location
     Remove-Item Env:\IMPERATORIUM_BUILD_VERSION -ErrorAction SilentlyContinue
 }
+$exe = "$rust\target\release\imperatorium.exe"
+$throwaway = $false
+if (-not $env:IMPERATORIUM_SIGNING_KEY) {
+    $key = (& $exe release-keygen) -join "`n" | ConvertFrom-Json
+    if ($LASTEXITCODE -or -not $key.secret) { throw 'release-keygen failed' }
+    $env:IMPERATORIUM_SIGNING_KEY = $key.secret
+    $throwaway = $true
+}
 $extra = @(); if ($Notes) { $extra = @('--notes', $Notes) }
-& "$rust\target\release\imperatorium.exe" release-package --version $Version --out $Out --scripts $root @extra @assets
-if ($LASTEXITCODE) { throw 'packaging failed' }
+try {
+    & $exe release-package --version $Version --out $Out --scripts $root --sign-key-env IMPERATORIUM_SIGNING_KEY @extra @assets
+    if ($LASTEXITCODE) { throw 'packaging failed' }
+} finally {
+    if ($throwaway) { Remove-Item Env:\IMPERATORIUM_SIGNING_KEY -ErrorAction SilentlyContinue }
+}
+if ($throwaway) {
+    Set-Content -Path (Join-Path $Out 'TEST-PUBKEY.txt') -Value $key.public -Encoding ascii
+    Write-Host ''
+    Write-Host 'Signed with a throwaway key (this build only). Testers must set'
+    Write-Host "    IMPERATORIUM_RELEASE_PUBKEY=$($key.public)"
+    Write-Host "(also in $Out\TEST-PUBKEY.txt) before installing or updating from it."
+}
