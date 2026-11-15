@@ -55,6 +55,7 @@ mod prs;
 mod pyish;
 mod registry;
 mod remote;
+mod remote_cli;
 mod server;
 mod service;
 mod service_ctl;
@@ -218,6 +219,8 @@ fn main() {
         Some("hook-relay") => remote::hook_relay_main(&args[1..]),
         Some("remote-probe") => remote::probe_main(&args[1..], home.as_deref()),
         // Setting a machine up from the binary alone (phase 6).
+        Some("remote") => remote_cli::main(&args[1..], home.as_deref()),
+        Some("check") => install::check_main(&args[1..], home.as_deref()),
         Some("install") => install::install_main(&args[1..], home.as_deref()),
         Some("uninstall") => install::uninstall_main(&args[1..], home.as_deref()),
         Some("status") => install::status_main(&args[1..], home.as_deref()),
