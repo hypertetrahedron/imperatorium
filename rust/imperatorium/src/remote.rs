@@ -1545,6 +1545,8 @@ mod tests {
 
     #[test]
     fn containers_run_through_docker_exec() {
+        // ssh_program() is read twice below; the ssh tests set it meanwhile.
+        let _turn = super::ssh_tests::TURN.lock().unwrap_or_else(|e| e.into_inner());
         let hosts = load_hosts(&json!({"remote": {"hosts": [
             "plainhost",
             {"name": "box-local", "container": "box1", "ssh": false},
@@ -1627,7 +1629,9 @@ mod ssh_tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::MutexGuard;
 
-    static TURN: Mutex<()> = Mutex::new(());
+    /// Held while a test reads or sets the process-wide settings (also by
+    /// tests::containers_run_through_docker_exec, which reads IMPERATORIUM_SSH).
+    pub(super) static TURN: Mutex<()> = Mutex::new(());
     static COUNT: AtomicU32 = AtomicU32::new(0);
     const SID: &str = "0b4bd5a2-27c4-4b3e-a6a5-0d8c4f1b2a11";
     const BUILD: &[u8] = b"not really an ELF";
