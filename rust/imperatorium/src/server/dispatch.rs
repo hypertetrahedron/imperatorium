@@ -706,7 +706,7 @@ impl Shared {
                 continue;
             }
             let idle = |r: &Row| r.get("status").and_then(Value::as_str) == Some("idle");
-            if best.is_none() || (idle(&row) && !idle(best.as_ref().unwrap())) {
+            if best.is_none() || (idle(row) && !idle(best.as_ref().unwrap())) {
                 best = Some(row.clone());
             }
         }

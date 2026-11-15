@@ -375,6 +375,72 @@ pub fn py_number(v: Option<&Value>) -> Option<f64> {
     }
 }
 
+/// Python 3.12+ `sum()` of floats (start 0): Neumaier's compensated
+/// summation, as CPython does it - the first item as the running total, a
+/// compensation term kept beside it, added back at the end when finite.
+pub fn py_fsum_builtin(items: impl IntoIterator<Item = f64>) -> f64 {
+    let mut it = items.into_iter();
+    let Some(first) = it.next() else { return 0.0 };
+    // `0 + first` in Python's int path, then the float path from there.
+    let (mut f, mut c) = (0.0 + first, 0.0f64);
+    for x in it {
+        let t = f + x;
+        if f.abs() >= x.abs() {
+            c += (f - t) + x;
+        } else {
+            c += (x - t) + f;
+        }
+        f = t;
+    }
+    if c != 0.0 && c.is_finite() {
+        f += c;
+    }
+    f
+}
+
+/// `json.dumps(value, indent=n)`: ensure_ascii, "," and ": " separators,
+/// each item on its own line; empty containers stay `[]` and `{}`.
+pub fn json_dumps_indent(v: &Value, indent: usize) -> String {
+    fn pad(out: &mut String, indent: usize, level: usize) {
+        out.push('\n');
+        out.push_str(&" ".repeat(indent * level));
+    }
+    fn go(out: &mut String, v: &Value, indent: usize, level: usize) {
+        match v {
+            Value::Array(a) if !a.is_empty() => {
+                out.push('[');
+                for (i, item) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    pad(out, indent, level + 1);
+                    go(out, item, indent, level + 1);
+                }
+                pad(out, indent, level);
+                out.push(']');
+            }
+            Value::Object(o) if !o.is_empty() => {
+                out.push('{');
+                for (i, (k, item)) in o.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    pad(out, indent, level + 1);
+                    write_json_str(out, k, true);
+                    out.push_str(": ");
+                    go(out, item, indent, level + 1);
+                }
+                pad(out, indent, level);
+                out.push('}');
+            }
+            other => write_json(out, other, true, false),
+        }
+    }
+    let mut out = String::new();
+    go(&mut out, v, indent, 0);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,70 +511,4 @@ mod tests {
         assert_eq!(py_round(3.5), 4);
         assert_eq!(py_round(41.4), 41);
     }
-}
-
-/// Python 3.12+ `sum()` of floats (start 0): Neumaier's compensated
-/// summation, as CPython does it - the first item as the running total, a
-/// compensation term kept beside it, added back at the end when finite.
-pub fn py_fsum_builtin(items: impl IntoIterator<Item = f64>) -> f64 {
-    let mut it = items.into_iter();
-    let Some(first) = it.next() else { return 0.0 };
-    // `0 + first` in Python's int path, then the float path from there.
-    let (mut f, mut c) = (0.0 + first, 0.0f64);
-    for x in it {
-        let t = f + x;
-        if f.abs() >= x.abs() {
-            c += (f - t) + x;
-        } else {
-            c += (x - t) + f;
-        }
-        f = t;
-    }
-    if c != 0.0 && c.is_finite() {
-        f += c;
-    }
-    f
-}
-
-/// `json.dumps(value, indent=n)`: ensure_ascii, "," and ": " separators,
-/// each item on its own line; empty containers stay `[]` and `{}`.
-pub fn json_dumps_indent(v: &Value, indent: usize) -> String {
-    fn pad(out: &mut String, indent: usize, level: usize) {
-        out.push('\n');
-        out.push_str(&" ".repeat(indent * level));
-    }
-    fn go(out: &mut String, v: &Value, indent: usize, level: usize) {
-        match v {
-            Value::Array(a) if !a.is_empty() => {
-                out.push('[');
-                for (i, item) in a.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    pad(out, indent, level + 1);
-                    go(out, item, indent, level + 1);
-                }
-                pad(out, indent, level);
-                out.push(']');
-            }
-            Value::Object(o) if !o.is_empty() => {
-                out.push('{');
-                for (i, (k, item)) in o.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    pad(out, indent, level + 1);
-                    write_json_str(out, k, true);
-                    out.push_str(": ");
-                    go(out, item, indent, level + 1);
-                }
-                pad(out, indent, level);
-                out.push('}');
-            }
-            other => write_json(out, other, true, false),
-        }
-    }
-    let mut out = String::new();
-    go(&mut out, v, indent, 0);
-    out
 }

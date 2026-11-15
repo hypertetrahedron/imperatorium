@@ -945,9 +945,9 @@ Summary: 12 tests - 2 COVERED already, 7 PORT now COVERED by new Rust tests, 0 M
 
 | Test | Verdict | Rust test or reason |
 |---|---|---|
-| StateFolder.test_finding_the_old_folder_does_not_move_it | COVERED | new: tests/core_rename.rs `the_old_state_folder_is_found_and_left_in_place` |
+| StateFolder.test_finding_the_old_folder_does_not_move_it | MOOT | 2026-11-15 clean break: the old folder is no longer looked for (paths::state_dir); tests/core_rename.rs `an_old_state_folder_is_left_alone` checks it is neither used nor moved |
 | StateFolder.test_the_old_folder_is_moved_on_first_start | DIFFERS | WON'T FIX 2026-11-15 (user decision: a clean break with the Python version; old installs uninstall with their own version first). Was: the binary never moves ccontrol to imperatorium (no rename anywhere in src; paths::state_dir only prefers the old folder while the new one is absent). The Python dispatcher's migrate_state_dir has no counterpart. Recorded as the #[ignore]d tests/core_rename.rs `the_old_folder_is_moved_on_first_start` |
-| StateFolder.test_a_folder_that_cannot_move_goes_on_being_used | COVERED | new: tests/core_rename.rs `the_old_state_folder_is_found_and_left_in_place (the move failing cannot happen: the binary never moves; the second half, the permission hook writing beside the old folder, is exactly what this test checks)` |
+| StateFolder.test_a_folder_that_cannot_move_goes_on_being_used | MOOT | 2026-11-15 clean break: the old folder is no longer used at all |
 | StateFolder.test_a_new_install_uses_the_new_name | COVERED | new: tests/core_rename.rs `a_new_install_uses_the_new_name` |
 | StateFolder.test_once_moved_the_old_one_is_ignored | COVERED | new: tests/core_rename.rs `once_the_new_folder_exists_the_old_one_is_ignored` |
 | Hooks.test_an_entry_stamped_before_the_rename_is_still_ours | COVERED | install_compare.rs (start 'legacy ccontrol', stamped statusMessage 'ccontrol': replaced, not duplicated) |

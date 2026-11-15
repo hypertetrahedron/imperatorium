@@ -139,8 +139,8 @@ impl Shared {
             .wait_timeout_while(g, std::time::Duration::from_secs_f64(timeout), |g| *g == seen);
     }
 
-    /// A POST, with the dispatcher's checks: no foreign Origin, a JSON body
-    /// of 1..MAX_BODY bytes.
+    // A POST, with the dispatcher's checks: no foreign Origin, a JSON body
+    // of 1..MAX_BODY bytes.
     // The request's parts, as Handler reads them off the request.
 
     /// Control.sessions(max_age): the rows, cached briefly.

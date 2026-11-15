@@ -329,7 +329,7 @@ fn cmd_sessions(a: &Args, base: &str) -> Res<i32> {
         println!("no live sessions");
         return Ok(0);
     }
-    println!("{} {} {} {} {}", pad("id", 8), pad("name", 28), pad("status", 10), pad("since", 6), "folder");
+    println!("{} {} {} {} folder", pad("id", 8), pad("name", 28), pad("status", 10), pad("since", 6));
     let now = now_secs();
     for r in &rows {
         println!("{}", sessions_line(r, now));

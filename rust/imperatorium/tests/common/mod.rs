@@ -146,7 +146,7 @@ impl Places {
                 normcase(&base).replace('\\', "/"),
             ];
             let tags = [
-                format!("{name}"),
+                name.to_string(),
                 format!("{name}-lc"),
                 format!("{name}/"),
                 format!("{name}/-lc"),
@@ -932,10 +932,13 @@ pub fn wait_until<T>(limit: Duration, mut f: impl FnMut() -> Option<T>) -> Optio
 /// A recording HTTP server on a free port (the hooks' dispatcher, ntfy):
 /// every request kept as (method, path, Content-Type, body); answers from
 /// `answer(path)` -> (status, body), 200 `{}` by default.
+type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, String, Option<String>, Vec<u8>)>>>;
+type Answers = std::sync::Arc<std::sync::Mutex<Vec<(String, u16, Vec<u8>)>>>;
+
 pub struct FakeServer {
     pub port: u16,
-    pub seen: std::sync::Arc<std::sync::Mutex<Vec<(String, String, Option<String>, Vec<u8>)>>>,
-    pub answer: std::sync::Arc<std::sync::Mutex<Vec<(String, u16, Vec<u8>)>>>,
+    pub seen: Seen,
+    pub answer: Answers,
     server: std::sync::Arc<tiny_http::Server>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -945,7 +948,7 @@ impl FakeServer {
         let server = std::sync::Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
         let port = server.server_addr().to_ip().unwrap().port();
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let answer: std::sync::Arc<std::sync::Mutex<Vec<(String, u16, Vec<u8>)>>> =
+        let answer: Answers =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let (s, seen2, answer2) = (server.clone(), seen.clone(), answer.clone());
         let thread = std::thread::spawn(move || {

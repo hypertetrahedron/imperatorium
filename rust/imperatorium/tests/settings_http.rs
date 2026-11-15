@@ -132,7 +132,7 @@ fn highlighting_applies_at_once() {
     // Blank goes back to the theme's: the key leaves config.json.
     save(&d, json!({"highlight.colors.keyword": ""}));
     assert!(!home_page(&d).contains("--hl-keyword"));
-    assert!(on_disk(&d)["highlight"].get("colors").map_or(true, |c| c.get("keyword").is_none()));
+    assert!(on_disk(&d)["highlight"].get("colors").is_none_or(|c| c.get("keyword").is_none()));
 }
 
 #[test]

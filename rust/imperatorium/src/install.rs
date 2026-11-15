@@ -299,7 +299,7 @@ fn write_settings(path: &Path, settings: &Map<String, Value>, say: &mut dyn FnMu
 /// time.strftime("%Y%m%d-%H%M%S"), local time.
 pub(crate) fn stamp() -> String {
     let s = crate::paths::local_stamp(); // "YYYY-MM-DD HH:MM:SS"
-    s.replace('-', "").replace(':', "").replacen(' ', "-", 1)
+    s.replace(['-', ':'], "").replacen(' ', "-", 1)
 }
 
 // -- config -----------------------------------------------------------------

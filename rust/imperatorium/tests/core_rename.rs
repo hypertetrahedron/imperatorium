@@ -1,10 +1,10 @@
 //! Ports of test_rename.py: what an install from before the rename of
 //! ccontrol / Central Control (2026-10-20) left behind is still found.
 //!
-//! The state folder is found where the old name left it (and the permission
-//! hook writes there too), a new install uses the new name, and a statusline
-//! hook that still says `ccontrol_statusline` is still heard. The binary does
-//! not move the old folder itself; see `the_old_folder_is_moved_on_first_start`.
+//! Since the clean break with the Python version (2026-11-15) a state folder
+//! under the old name is neither used nor moved: an install that old is
+//! uninstalled with its own version first. A statusline hook that still says
+//! `ccontrol_statusline` is still heard.
 #![cfg(windows)]
 mod common;
 use common::*;
@@ -42,15 +42,15 @@ fn old(base: &Path, name: &str) {
 }
 
 #[test]
-fn the_old_state_folder_is_found_and_left_in_place() {
-    // An import (every test run) computes the path; nothing moves it. The
-    // permission hook writes beside what is there, not somewhere new.
+fn an_old_state_folder_is_left_alone() {
+    // A clean break (2026-11-15): the pre-rename folder is neither used
+    // nor moved; the hook writes under the new name.
     let t = TempDir::new("rename-old");
     old(&t.path, "state.json");
     permission_audits_into(&t.path);
-    assert!(t.join("ccontrol").join("decisions.jsonl").is_file());
+    assert!(t.join("imperatorium").join("decisions.jsonl").is_file());
+    assert!(!t.join("ccontrol").join("decisions.jsonl").exists());
     assert!(t.join("ccontrol").join("state.json").is_file());
-    assert!(!t.join("imperatorium").exists());
 }
 
 #[test]
@@ -69,25 +69,6 @@ fn once_the_new_folder_exists_the_old_one_is_ignored() {
     permission_audits_into(&t.path);
     assert!(t.join("imperatorium").join("decisions.jsonl").is_file());
     assert!(!t.join("ccontrol").join("decisions.jsonl").exists());
-}
-
-/// DIFFERS: Python's `dispatcher.migrate_state_dir()` moved the whole old
-/// folder to the new name on the first start. The binary only prefers the
-/// old folder while the new one is absent (paths::state_dir) and never
-/// moves it, so an install from before the rename keeps using `ccontrol`.
-#[test]
-#[ignore = "DIFFERS: the binary never moves the ccontrol state folder to imperatorium on start"]
-fn the_old_folder_is_moved_on_first_start() {
-    let t = TempDir::new("rename-move");
-    old(&t.path, "state.json");
-    old(&t.path, "decisions.jsonl");
-    let _d = Dispatcher::start(Options {
-        env: vec![("LOCALAPPDATA".into(), t.path.to_string_lossy().into_owned())],
-        ..Options::new()
-    });
-    assert!(t.join("imperatorium").join("state.json").exists());
-    assert!(t.join("imperatorium").join("decisions.jsonl").exists());
-    assert!(!t.join("ccontrol").exists());
 }
 
 /// A session's statusline reading carries the plan's rate limits; they land

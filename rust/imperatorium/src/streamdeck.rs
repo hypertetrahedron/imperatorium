@@ -382,6 +382,7 @@ impl Fonts {
         text.chars().map(|c| sf.h_advance(sf.glyph_id(c))).sum()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw(&self, img: &mut image::RgbImage, text: &str, x: f32, y: f32, em: f32, fg: Rgb, bg: Rgb) {
         use ab_glyph::{Font, ScaleFont};
         let Some(f) = &self.font else { return };

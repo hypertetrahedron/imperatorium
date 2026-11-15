@@ -596,7 +596,8 @@ mod tests {
 pub const ACTIONS: &[&str] = &["merge", "pr", "discard"];
 
 /// changes._find: the worktree at `path` under `project`, and the base branch.
-fn find(project: &str, path: &str) -> Result<(Map<String, Value>, Value, Map<String, Value>), Value> {
+type Found = (Map<String, Value>, Value, Map<String, Value>);
+fn find(project: &str, path: &str) -> Result<Found, Value> {
     let listed = worktrees(project);
     if listed["ok"] != json!(true) {
         return Err(listed);

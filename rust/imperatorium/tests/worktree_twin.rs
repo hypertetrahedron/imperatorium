@@ -23,7 +23,7 @@ fn left(main: &Path) -> Value {
     let mut worktrees: Vec<String> = git(main, &["worktree", "list", "--porcelain"])
         .lines()
         .filter_map(|l| l.strip_prefix("worktree "))
-        .map(|p| p.rsplit(|c| c == '/' || c == '\\').next().unwrap().to_string())
+        .map(|p| p.rsplit(['/', '\\']).next().unwrap().to_string())
         .collect();
     worktrees.sort();
     let mut branches: Vec<String> = git(main, &["branch", "--format=%(refname:short)"])

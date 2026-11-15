@@ -390,8 +390,7 @@ fn text(b: &[u8]) -> String {
 /// The last non-blank line of what ssh said, or `fallback`.
 fn last_line(said: &str, fallback: String) -> String {
     said.lines()
-        .filter(|l| !strip(l).is_empty())
-        .last()
+        .rfind(|l| !strip(l).is_empty())
         .map(|l| take(strip(l), 200))
         .filter(|l| !l.is_empty())
         .unwrap_or(fallback)

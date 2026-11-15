@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn each_step_shows_the_replies_and_only_the_step_in_flight() {
-        let blocks = vec![
+        let blocks = [
             text("starting jira item"),
             tool("a", "Read", "ticket.md"),
             result("a"),

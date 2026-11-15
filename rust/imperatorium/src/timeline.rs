@@ -244,6 +244,8 @@ fn entries(path: &Path) -> Vec<Map<String, Value>> {
     crate::transcript::objects(&String::from_utf8_lossy(&raw), crate::transcript::Split::Lines)
 }
 
+type ByTool = (String, i64, i64, Option<f64>, Option<i64>);
+
 /// The timeline of the session whose transcript is `path`.
 pub fn read(path: &Path) -> Value {
     let es = entries(path);
@@ -372,7 +374,7 @@ pub fn read(path: &Path) -> Value {
             seen = sw;
         }
         let (mut n, mut nerr) = (0i64, 0i64);
-        let mut by: Vec<(String, i64, i64, Option<f64>, Option<i64>)> = vec![];
+        let mut by: Vec<ByTool> = vec![];
         while ti < order.len() && calls[order[ti]].t <= r.t {
             let c = &calls[order[ti]];
             n += 1;

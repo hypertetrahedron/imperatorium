@@ -78,21 +78,15 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// The dispatcher's state folder, as `cc_permission.state_dir` decides it.
+/// The dispatcher's state folder. A folder left under the pre-2026-10-20
+/// name (`ccontrol`) is not looked at: an install that old is uninstalled
+/// with its own version first.
 pub fn state_dir() -> PathBuf {
-    let base = env_nonempty("LOCALAPPDATA")
+    env_nonempty("LOCALAPPDATA")
         .or_else(|| env_nonempty("XDG_STATE_HOME"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".local").join("state"));
-    let new = base.join("imperatorium");
-    let old = base.join("ccontrol");
-    // The dispatcher moves the pre-2026-10-20 folder on start; until it
-    // has, the audit log goes where the rest of the state is.
-    if !new.exists() && old.is_dir() {
-        old
-    } else {
-        new
-    }
+        .unwrap_or_else(|| home_dir().join(".local").join("state"))
+        .join("imperatorium")
 }
 
 /// Where config.json and policy.json live: `--home`, then
@@ -269,21 +263,6 @@ mod imp {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn normpath_matches_python() {
-            use super::normpath;
-            assert_eq!(normpath(r"Y:\a\b\"), r"Y:\a\b");
-            assert_eq!(normpath("C:/a//b/./c/../d"), r"C:\a\b\d");
-            assert_eq!(normpath(r"C:\.."), r"C:\");
-            assert_eq!(normpath(r"..\..\x"), r"..\..\x");
-            assert_eq!(normpath(r"C:x\..\.."), "C:..");
-            assert_eq!(normpath(r"\\srv\share\a\..\b\"), r"\\srv\share\b");
-            assert_eq!(normpath(""), ".");
-        }
-    }
-
     fn full_path(p: &str) -> Option<String> {
         let src = wide(p);
         let mut buf: Vec<u16> = vec![0; 512];
@@ -335,6 +314,21 @@ mod imp {
             return None;
         }
         Some(String::from_utf16_lossy(&out[..got as usize]))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn normpath_matches_python() {
+            use super::normpath;
+            assert_eq!(normpath(r"Y:\a\b\"), r"Y:\a\b");
+            assert_eq!(normpath("C:/a//b/./c/../d"), r"C:\a\b\d");
+            assert_eq!(normpath(r"C:\.."), r"C:\");
+            assert_eq!(normpath(r"..\..\x"), r"..\..\x");
+            assert_eq!(normpath(r"C:x\..\.."), "C:..");
+            assert_eq!(normpath(r"\\srv\share\a\..\b\"), r"\\srv\share\b");
+            assert_eq!(normpath(""), ".");
+        }
     }
 }
 

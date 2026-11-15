@@ -213,7 +213,7 @@ mod ffi {
             out_buf: u32,
             in_buf: u32,
             timeout: u32,
-            security: *mut c_void,
+            security: *const c_void,
         ) -> isize;
         pub fn ConnectNamedPipe(h: isize, overlapped: *mut c_void) -> i32;
         pub fn ReadFile(h: isize, buf: *mut u8, n: u32, read: *mut u32, overlapped: *mut c_void) -> i32;
@@ -238,7 +238,7 @@ impl Pipe {
             loop {
                 // PIPE_ACCESS_INBOUND; byte pipe, blocking; unlimited instances.
                 let h = unsafe {
-                    ffi::CreateNamedPipeW(wide.as_ptr(), 1, 0, 255, 65536, 65536, 0, std::ptr::null_mut())
+                    ffi::CreateNamedPipeW(wide.as_ptr(), 1, 0, 255, 65536, 65536, 0, std::ptr::null())
                 };
                 if h == -1 {
                     return;

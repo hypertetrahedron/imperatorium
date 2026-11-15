@@ -1093,7 +1093,7 @@ mod history_tests {
         r.summary(30);
         let text = serde_json::to_string(&entry("b", 0, 20)).unwrap();
         let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
-        f.write_all(text[..30].as_bytes()).unwrap();
+        f.write_all(&text.as_bytes()[..30]).unwrap();
         drop(f);
         set_mtime(&path, now() + 1.0);
         assert_eq!(r.summary(30)["total_tokens"], 10);

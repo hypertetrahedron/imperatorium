@@ -412,7 +412,7 @@ fn session_twin_answers_as_python_did() {
             .filter(|l| !l.is_empty())
             .map(|l| format!("{l:?}")),
     );
-    timings.sort_by(|a, b| b.1.cmp(&a.1));
+    timings.sort_by_key(|t| std::cmp::Reverse(t.1));
     eprintln!(
         "session_twin: {:.1} s in all ({:.1} s to start the dispatcher); slowest steps: {}",
         began.elapsed().as_secs_f64(),
