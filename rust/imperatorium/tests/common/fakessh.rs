@@ -29,8 +29,14 @@ impl FakeSsh {
     /// FAKESSH_DIR (`mode` "sh": FAKESSH_MODE, the remote command run by sh).
     pub fn env(&self, mode: Option<&str>) -> Vec<(String, String)> {
         let mut e = vec![
-            ("IMPERATORIUM_SSH".to_string(), self.exe.to_string_lossy().into_owned()),
-            ("FAKESSH_DIR".to_string(), self.data.to_string_lossy().into_owned()),
+            (
+                "IMPERATORIUM_SSH".to_string(),
+                self.exe.to_string_lossy().into_owned(),
+            ),
+            (
+                "FAKESSH_DIR".to_string(),
+                self.data.to_string_lossy().into_owned(),
+            ),
         ];
         if let Some(m) = mode {
             e.push(("FAKESSH_MODE".into(), m.into()));
