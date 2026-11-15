@@ -330,12 +330,21 @@ mod features_tests {
         let seen = Arc::new(AtomicU64::new(0));
         let counter = Arc::clone(&seen);
         std::thread::spawn(move || {
+            // A connection each, with a read timeout: another test's
+            // connection that lands here (a "dead" port it freed and this
+            // listener took) must not hold up the request being waited for.
             for stream in listener.incoming() {
                 let Ok(mut s) = stream else { continue };
-                let mut buf = [0u8; 4096];
-                let _ = s.read(&mut buf);
-                counter.fetch_add(1, Ordering::SeqCst);
-                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                let counter = Arc::clone(&counter);
+                std::thread::spawn(move || {
+                    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+                    let mut buf = [0u8; 4096];
+                    if !matches!(s.read(&mut buf), Ok(n) if buf[..n].starts_with(b"POST")) {
+                        return;
+                    }
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                });
             }
         });
         (url, seen)
@@ -360,7 +369,7 @@ mod features_tests {
         n.attention(Arc::clone(&o), "k1", Some("proj".into()), Some("needs input".into()), json!(100.0));
         // The same (key, since) while the first is still waiting out its delay.
         n.attention(Arc::clone(&o), "k1", Some("proj".into()), Some("needs input".into()), json!(100.0));
-        assert!(until(Duration::from_secs(10), || n.sent() >= 1));
+        assert!(until(Duration::from_secs(15), || n.sent() >= 1), "not sent: {:?}", n.last_error());
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(seen.load(Ordering::SeqCst), 1);
         assert_eq!(n.sent(), 1);
