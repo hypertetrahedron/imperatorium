@@ -107,6 +107,17 @@ fn label(input: Option<&Value>) -> String {
     String::new()
 }
 
+/// A teammate's message to its lead: (its name, the body).
+fn teammate_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r#"(?s)<teammate-message\s+teammate_id="([^"]*)"[^>]*>(.*?)</teammate-message>"#).unwrap()
+    })
+}
+
+/// What a teammate says when it has gone for good.
+const TEAMMATE_ENDS: [&str; 2] = ["shutdown_approved", "teammate_terminated"];
+
 fn res() -> &'static (Regex, Regex, Regex) {
     static R: OnceLock<(Regex, Regex, Regex)> = OnceLock::new();
     R.get_or_init(|| {
@@ -129,6 +140,10 @@ pub struct Fold {
     ended_at: HashMap<String, (Option<f64>, String)>,
     /// a foreground subagent that returned -> its record
     done_calls: IndexMap<String, Map<String, Value>>,
+    /// a teammate's name -> its agentId
+    teammates: HashMap<String, String>,
+    /// agentId of a teammate waiting for a message -> since when
+    idle: HashMap<String, Option<f64>>,
     mcp: Vec<String>,
     hook_errors: Vec<Value>,
     seen_msgs: HashSet<String>,
@@ -275,6 +290,12 @@ impl Fold {
                         let k = key_of(Some(&id));
                         let name = b.get("name").cloned().unwrap_or(Value::Null);
                         let input = b.get("input").cloned().unwrap_or(Value::Null);
+                        if name.as_str() == Some("SendMessage") {
+                            let to = input.as_object().and_then(|i| i.get("to")).and_then(Value::as_str);
+                            if let Some(aid) = to.and_then(|t| self.teammates.get(t)) {
+                                self.idle.remove(aid);
+                            }
+                        }
                         // dict assignment: a repeated id keeps its place.
                         self.calls.insert(k, (id, name, input, at));
                     }
@@ -291,12 +312,29 @@ impl Fold {
                         let k = key_of(b.get("tool_use_id"));
                         self.returned(entry, b, &k, at);
                         self.started(entry, &k, at);
+                        self.teammate(entry, &k, at);
                         self.calls.shift_remove(&k);
                     }
                 }
             }
             let (note, task_id, status) = res();
             for text in texts(entry) {
+                for m in teammate_re().captures_iter(&text) {
+                    let Some(aid) = self.teammates.get(&m[1]).cloned() else { continue };
+                    let said: Option<Value> = serde_json::from_str(strip(&m[2])).ok();
+                    let Some(said) = said.as_ref().and_then(Value::as_object) else { continue };
+                    match said.get("type").and_then(Value::as_str) {
+                        Some("idle_notification") => {
+                            self.idle.insert(aid, at);
+                        }
+                        Some(t) if TEAMMATE_ENDS.contains(&t) => {
+                            self.ended.insert(aid.clone());
+                            self.ended_at.insert(aid.clone(), (at, "completed".into()));
+                            self.idle.remove(&aid);
+                        }
+                        _ => {}
+                    }
+                }
                 for m in note.captures_iter(&text) {
                     let body = &m[1];
                     if let Some(s) = status.captures(body) {
@@ -313,6 +351,51 @@ impl Fold {
         }
     }
 
+    /// Fold._teammate: a teammate spawned, or stopped by name.
+    fn teammate(&mut self, entry: &Map<String, Value>, call: &str, at: Option<f64>) {
+        let (name, input) = match self.calls.get(call) {
+            Some((_, n, i, _)) => (n.clone(), i.clone()),
+            None => (Value::Null, Value::Null),
+        };
+        let Some(result) = entry.get("toolUseResult").and_then(Value::as_object) else { return };
+        let name = name.as_str();
+        if matches!(name, Some("Agent") | Some("Task"))
+            && result.get("status").and_then(Value::as_str) == Some("teammate_spawned")
+            && truthy(result.get("agentId"))
+        {
+            let aid = py_str(&result["agentId"]);
+            let who = result
+                .get("name")
+                .filter(|v| truthy(Some(v)))
+                .cloned()
+                .unwrap_or_else(|| json!(aid));
+            self.teammates.insert(py_str(&who), aid.clone());
+            let label_v = result
+                .get("description")
+                .filter(|v| truthy(Some(v)))
+                .cloned()
+                .unwrap_or_else(|| json!(label(Some(&input))));
+            let task: Map<String, Value> = [
+                ("kind", json!("agents")),
+                ("label", label_v),
+                ("started", at.map(|a| json!(a)).unwrap_or(Value::Null)),
+                ("model", result.get("resolvedModel").cloned().unwrap_or(Value::Null)),
+                ("teammate", who),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+            self.tasks.insert(aid, task);
+        } else if name == Some("TaskStop") {
+            let stopped = result.get("task_id").and_then(Value::as_str);
+            if let Some(aid) = stopped.and_then(|t| self.teammates.get(t)).cloned() {
+                self.ended.insert(aid.clone());
+                self.ended_at.insert(aid.clone(), (at, "stopped".into()));
+                self.idle.remove(&aid);
+            }
+        }
+    }
+
     /// Fold._returned: a subagent run in the foreground came back.
     fn returned(&mut self, entry: &Map<String, Value>, block: &Map<String, Value>, call: &str, at: Option<f64>) {
         let Some((id, name, input, made)) = self.calls.get(call).cloned() else { return };
@@ -320,7 +403,10 @@ impl Fold {
             return;
         }
         let result = entry.get("toolUseResult").and_then(Value::as_object);
-        if result.and_then(|r| r.get("status")).and_then(Value::as_str) == Some("async_launched") {
+        if matches!(
+            result.and_then(|r| r.get("status")).and_then(Value::as_str),
+            Some("async_launched") | Some("teammate_spawned")
+        ) {
             return;
         }
         let agent = result
@@ -517,6 +603,7 @@ impl Fold {
             .into_iter()
             .map(|k| (k, Vec::new()))
             .collect();
+        let mut idle: Vec<Value> = Vec::new();
         for (tid, task) in &self.tasks {
             let expires = task
                 .get("expires")
@@ -527,6 +614,12 @@ impl Fold {
             }
             let mut item = task.clone();
             item.insert("id".into(), json!(tid));
+            if let Some(since) = self.idle.get(tid) {
+                // A teammate waiting for a message: alive, but nothing to wait on.
+                item.insert("idle_since".into(), since.map(|a| json!(a)).unwrap_or(Value::Null));
+                idle.push(Value::Object(item));
+                continue;
+            }
             // The fold only ever files a task under one of the four kinds;
             // anything else (Python would raise KeyError and lose the whole
             // summary) is left out rather than panicking.
@@ -549,6 +642,7 @@ impl Fold {
         for (k, v) in running {
             out.insert(k.into(), Value::Array(v));
         }
+        out.insert("idle_agents".into(), Value::Array(idle));
         let mut known: Vec<String> = self
             .tasks
             .keys()
@@ -742,6 +836,39 @@ mod tests {
         f.feed(&[e(json!({"type": "user", "message": {"content":
             "<task-notification><task-id>b1</task-id><status>completed</status></task-notification>"}}))]);
         assert_eq!(f.summary(0.0)["shells"], json!([]));
+    }
+
+    #[test]
+    fn a_teammate_runs_until_idle_and_again_when_messaged() {
+        let mut f = Fold::new();
+        let mate = |at: &str, body: &str| {
+            e(json!({"type": "user", "timestamp": at, "message": {"content": format!(
+                "Another Claude session sent a message:\n<teammate-message teammate_id=\"waiter-1\" \
+                 color=\"blue\">\n{body}\n</teammate-message>\n\nThis came from another Claude session.")}}))
+        };
+        f.feed(&[
+            e(json!({"type": "assistant", "timestamp": "2026-11-15T01:58:38Z", "message": {"id": "m1",
+                "content": [{"type": "tool_use", "id": "a1", "name": "Agent",
+                             "input": {"description": "Wait 30s then OK", "name": "waiter-1"}}]}})),
+            e(json!({"type": "user", "timestamp": "2026-11-15T01:58:38Z",
+                "toolUseResult": {"status": "teammate_spawned", "agentId": "waiter-1-abc",
+                                  "name": "waiter-1", "resolvedModel": "claude-haiku-5-5"},
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "a1"}]}})),
+        ]);
+        let s = f.summary(0.0);
+        assert_eq!(s["agents"][0]["id"], "waiter-1-abc");
+        assert_eq!(s["agents"][0]["teammate"], "waiter-1");
+        assert_eq!(s["finished"], json!([]));
+        f.feed(&[mate("2026-11-15T01:58:46Z", r#"{"type":"idle_notification","result":"OK"}"#)]);
+        let s = f.summary(0.0);
+        assert_eq!(s["agents"], json!([]));
+        assert_eq!(s["idle_agents"][0]["id"], "waiter-1-abc");
+        f.feed(&[e(json!({"type": "assistant", "timestamp": "2026-11-15T02:02:50Z", "message": {"id": "m2",
+            "content": [{"type": "tool_use", "id": "s1", "name": "SendMessage",
+                         "input": {"to": "waiter-1", "message": "again"}}]}}))]);
+        let s = f.summary(0.0);
+        assert_eq!(s["agents"].as_array().map(Vec::len), Some(1));
+        assert_eq!(s["idle_agents"], json!([]));
     }
 
     #[test]

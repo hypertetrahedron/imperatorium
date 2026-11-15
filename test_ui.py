@@ -360,6 +360,7 @@ class Shape(unittest.TestCase):
         a = ui.SCRIPT.index("function renderBlock(b)")
         body = highlighting() + "\n" + ui.SCRIPT[a:ui.SCRIPT.index("function drawShape")]
         js = ("const renderText = t => '[' + t + ']';\n"
+              "const teammateParts = () => null;\n"
               "const localStorage = {getItem: () => %s};\n" % json.dumps(json.dumps(shape))
               + esc + "\n" + body +
               "\nconst opened = new Set(%s);" % json.dumps(list(opened)) +
@@ -1427,8 +1428,23 @@ class TileTasks(unittest.TestCase):
         # What ended stays out of the running list, under its own row.
         self.assertEqual(done, ["b0"])
         self.assertEqual(extra, ["mcp"])
-        self.assertEqual(summary, "1 tool call \u00b7 1 shell \u00b7 1 subagent")
+        # Every running row is counted, the processes row by how many it is.
+        self.assertEqual(summary, "1 tool call \u00b7 1 shell \u00b7 1 subagent \u00b7 2 processes")
         self.assertEqual(empty, "none running")
+
+    def test_only_processes_is_not_none_running(self):
+        got = self.run_js(
+            "const l = taskList({status: 'idle', work: {processes: 1}}, []);"
+            "process.stdout.write(JSON.stringify(taskSummary(l.running, l.idle)));")
+        self.assertEqual(got, "1 process")
+
+    def test_idle_teammates_are_listed_not_counted_as_running(self):
+        got = self.run_js(
+            "const l = taskList({status: 'idle'}, [{id: 'w1', kind: 'agent', label: 'wait', idle: true},"
+            "                                    {id: 'w2', kind: 'agent', label: 'wait'}]);"
+            "process.stdout.write(JSON.stringify([l.running.map(t => t.id), l.idle.map(t => t.id),"
+            " taskSummary(l.running, l.idle)]));")
+        self.assertEqual(got, [["w2"], ["w1"], "1 subagent \u00b7 1 idle subagent"])
 
     def test_an_idle_session_has_no_tool_call_and_times_read_right(self):
         got = self.run_js(
@@ -1755,3 +1771,40 @@ class LogDiff(unittest.TestCase):
         have = self.turns((0, "a"), (1, "b|old"))
         want = self.turns((0, "a"), (1, "b|new"))
         self.assertEqual(self.diff(have, want), {"gone": [], "fresh": [], "changed": [1]})
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class TeammateMessages(unittest.TestCase):
+    """A teammate's report, shown as the terminal shows it."""
+
+    WRAP = ("Another Claude session sent a message:\n%s\n\nThis came from another Claude session "
+            "\u2014 not typed by your user, but very likely working on their behalf.")
+
+    def test_an_idle_notification_reads_as_finished(self):
+        text = self.WRAP % ('<teammate-message teammate_id="waiter-1" color="blue">\n'
+                            '{"type":"idle_notification","from":"waiter-1","timestamp":"2026-11-15T02:03:00.024Z",'
+                            '"idleReason":"available","result":"The wait finished and I sent `OK`."}\n'
+                            '</teammate-message>')
+        parts, line, html = run("[teammateParts(%s), teammateLine(teammateParts(%s)), teammateHtml(teammateParts(%s))]"
+                                % ((json.dumps(text),) * 3))
+        self.assertEqual([(p["name"], p["verb"], p["text"]) for p in parts],
+                         [("waiter-1", "finished", "The wait finished and I sent `OK`.")])
+        self.assertEqual(line, "@waiter-1 finished: The wait finished and I sent `OK`.")
+        self.assertIn("Teammate <span class=at>@waiter-1</span> finished", html)
+        self.assertIn("<code>OK</code>", html)
+        self.assertNotIn("idle_notification", html)
+        self.assertNotIn("This came from", html)
+
+    def test_plain_messages_and_several_in_one_turn(self):
+        text = self.WRAP % ('<teammate-message teammate_id="a" color="green" summary="Status update">\n'
+                            'Two of three done.\n</teammate-message>\n\n'
+                            '<teammate-message teammate_id="b" color="yellow">\n'
+                            '{"type":"idle_notification","result":"OK"}\n</teammate-message>')
+        parts = run("teammateParts(%s)" % json.dumps(text))
+        self.assertEqual([(p["name"], p["summary"], p["verb"], p["text"]) for p in parts],
+                         [("a", "Status update", "", "Two of three done."), ("b", "", "finished", "OK")])
+
+    def test_other_text_is_left_alone(self):
+        self.assertIsNone(run("teammateParts(%s)" % json.dumps("hello")))
+        mixed = 'Please look at this: <teammate-message teammate_id="x">hi</teammate-message>'
+        self.assertIsNone(run("teammateParts(%s)" % json.dumps(mixed)))

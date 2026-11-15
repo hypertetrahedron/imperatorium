@@ -269,6 +269,11 @@ def awaited(stat, folder, limit=TAIL_BYTES, agents=None):
     for item in stat.get("agents") or ():
         if item.get("id"):
             add(item["id"], item, "agent", transcripts.get(item["id"]))
+    # A teammate waiting for a message: still there, but not running.
+    for item in stat.get("idle_agents") or ():
+        if item.get("id"):
+            add(item["id"], item, "agent", transcripts.get(item["id"]),
+                idle=True, idle_since=item.get("idle_since"), teammate=item.get("teammate"))
 
     # A scheduled wakeup (ScheduleWakeup, CronCreate) prints nothing; what it
     # will do when it fires is its label.

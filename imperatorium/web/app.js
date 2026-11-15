@@ -403,8 +403,17 @@ function renderBlocks(blocks){
   return blocks.map(renderBlock).join("");
 }
 
+// A turn of yours that only carries teammates' messages: theirs, not yours.
+function mateTurn(it){
+  return it.speaker === "you" && (it.blocks || []).length > 0 &&
+    it.blocks.every(b => b.kind === "text" && teammateParts(b.text));
+}
+
 function renderBlock(b){
-  if (b.kind === "text")     return renderText(b.text);
+  if (b.kind === "text"){
+    const mates = teammateParts(b.text);
+    return mates ? teammateHtml(mates) : renderText(b.text);
+  }
   if (b.kind === "thinking") return `<div class="think">${esc(b.text)}</div>`;
   if (b.kind === "tool")     return toolHtml(b);
   if (b.kind === "result")   return resultHtml(b);
@@ -430,6 +439,8 @@ function categoryOf(it, b){
 }
 
 function oneLine(b){
+  const mates = b.kind === "text" && teammateParts(b.text);
+  if (mates) return teammateLine(mates);
   const text = b.kind === "tool" ? b.summary : b.text;
   return String(text || "").split("\n").map(l => l.trim()).find(l => l) || "";
 }
@@ -492,7 +503,7 @@ function setLog(items, sig, force){
     finds.at = Math.min(Math.max(finds.at, 0), finds.hits.length - 1);
   }
   drawLog(force);
-  const asked = items.filter(it => it.speaker === "you").pop();
+  const asked = items.filter(it => it.speaker === "you" && !mateTurn(it)).pop();
   currentPrompt = asked ? asked.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n\n") : "";
   drawCurrent();
 }
@@ -607,8 +618,9 @@ function drawLog(force){
         renderBlocks(it.blocks)}</details>`;
     else {
       const body = shapeBlocks(it, i, opened);
-      html = !body ? "" : `<div class="turn${it.speaker === "you" ? " you-turn" : ""}${it.note ? " sys" : ""}${findSet.has(i) ? " found" : ""}" data-i="${i}"><div class="who ${esc(it.speaker || it.role)}">${
-        esc(it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${body}</div>`;
+      const mate = mateTurn(it);
+      html = !body ? "" : `<div class="turn${mate ? " mate-turn" : it.speaker === "you" ? " you-turn" : ""}${it.note ? " sys" : ""}${findSet.has(i) ? " found" : ""}" data-i="${i}"><div class="who ${mate ? "mate" : esc(it.speaker || it.role)}">${
+        esc(mate ? "teammate" : it.note || SPEAKER[it.speaker] || it.speaker || it.role)}${it.via ? ` <span class="via" title="arrived through the session inbox: the window, the palette, impctl or another session">via inbox</span>` : ""}</div>${body}</div>`;
     }
     if (html) want.push({i, html, sig: findSet.has(i) ? html + "\0" + finds.q : html});
   });
@@ -2200,32 +2212,42 @@ try {
 const TASK_MARK = {tool: "tool", shell: "$", monitor: "mon", agent: "agent", wakeup: "wake",
                    process: "proc", mcp: "mcp", hooks: "hook"};
 const TASK_KINDS_SAID = [["tool", "tool call"], ["shell", "shell"], ["monitor", "monitor"],
-                         ["agent", "subagent"], ["wakeup", "wakeup"]];
+                         ["agent", "subagent"], ["wakeup", "wakeup"], ["process", "process"]];
 const LIVE_KINDS = new Set(["shell", "monitor", "agent", "wakeup"]);
 
-// Pure: {running, done, extra} for row `s`, given what /api/awaited said.
-// `extra` is what describes the session rather than runs in it.
+// Pure: {running, idle, done, extra} for row `s`, given what /api/awaited
+// said. `idle` is teammates waiting for a message; `extra` is what describes
+// the session rather than runs in it.
 function taskList(s, tasks){
-  const out = {running: [], done: [], extra: []};
+  const out = {running: [], idle: [], done: [], extra: []};
   if (!s) return out;
   if (s.doing && (RUNNING[s.status] || s.state === "working"))
     out.running.push({id: "tool", kind: "tool", label: s.doing, started: s.doing_since});
   for (const t of tasks || []){
     if (t.done) out.done.push(t);
+    else if (t.idle) out.idle.push(t);
     else if (LIVE_KINDS.has(t.kind)) out.running.push(t);
     else out.extra.push(t);
   }
   const n = (s.work || {}).processes || 0;
-  if (n) out.running.push({id: "processes", kind: "process",
+  if (n) out.running.push({id: "processes", kind: "process", count: n,
                            label: n + (n === 1 ? " process" : " processes") + " started by its shells"});
   return out;
 }
-// Pure: "2 shells · 1 subagent", or "none running".
-function taskSummary(list){
+// Pure: "2 shells · 1 subagent · 3 processes", "2 idle subagents", or
+// "none running". Every row in `list` is counted (a processes row by how
+// many it stands for), so the heading never says none above a running row.
+function taskSummary(list, idle){
   const n = {};
-  for (const t of list) n[t.kind] = (n[t.kind] || 0) + 1;
-  return TASK_KINDS_SAID.filter(([k]) => n[k]).map(([k, w]) => n[k] + " " + w + (n[k] === 1 ? "" : "s"))
-    .join(" · ") || "none running";
+  for (const t of list){
+    const k = TASK_KINDS_SAID.some(([w]) => w === t.kind) ? t.kind : "task";
+    n[k] = (n[k] || 0) + (t.count || 1);
+  }
+  const said = TASK_KINDS_SAID.concat([["task", "task"]]).filter(([k]) => n[k])
+    .map(([k, w]) => n[k] + " " + w + (n[k] === 1 ? "" : w.endsWith("s") ? "es" : "s"));
+  const waiting = (idle || []).length;
+  if (waiting) said.push(waiting + " idle subagent" + (waiting === 1 ? "" : "s"));
+  return said.join(" · ") || "none running";
 }
 const taskWhen = (t, now) => t.done ? (t.ended ? age(t.ended) + " ago" : "")
   : t.kind === "wakeup" ? (t.fires_at ? (t.fires_at > now ? "in " + age(2 * now - t.fires_at) : "due") : "")
@@ -2244,10 +2266,11 @@ function foldDone(open){
 }
 function taskRow(t, now, sub, running){
   const on = (taskView && taskView.id === t.id ? " on" : "") +
-    (running && t.kind !== "wakeup" ? " run" : "");
+    (running && t.kind !== "wakeup" ? " run" : "") + (t.idle ? " idle" : "");
   const live = !t.done && t.mtime && now - t.mtime < 5;
   const why = t.kind === "tool" ? "show it in the chat: " : "show it: ";
-  const status = t.done && t.status && t.status !== "completed"
+  const status = t.idle ? `<span class=st title="waiting for a message">idle</span>`
+    : t.done && t.status && t.status !== "completed"
     ? `<span class="st ${t.status === "failed" ? "bad" : ""}">${esc(STATUS_WORD[t.status] || t.status)}</span>` : "";
   let html = `<div class="tki${on}${t.done ? " done" : ""}${sub ? " sub" : ""}" data-task="${esc(t.id)}" title="${
     esc(why + (t.label || t.id))}"><span class=k>${TASK_MARK[t.kind] || "?"}</span><span class=l>${
@@ -2264,15 +2287,15 @@ function drawTileTasks(){
   if (!box) return;
   const s = current(), now = Date.now() / 1000;
   const l = taskList(s, procFor === selected ? procTasks : []);
-  let items = l.running.map(t => taskRow(t, now, false, true)).join("") ||
-    `<div class="tki static">nothing running</div>`;
+  let items = l.running.map(t => taskRow(t, now, false, true)).join("") +
+    l.idle.map(t => taskRow(t, now)).join("") || `<div class="tki static">nothing running</div>`;
   if (l.done.length)
     items += `<div class="tki grp" data-done-toggle title="tasks that ended in the last half hour">` +
       `<span class=ar>${doneOpen ? "&#9662;" : "&#9656;"}</span><span class=l>Recently completed (${l.done.length})</span></div>` +
       (doneOpen ? l.done.map(t => taskRow(t, now, true)).join("") : "");
   items += l.extra.map(t => taskRow(t, now)).join("");
   const html = `<button type=button class=tkh data-tasks-toggle aria-expanded="${tasksOpen}">` +
-    `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running))}${
+    `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running, l.idle))}${
       l.extra.some(t => t.kind === "hooks") ? ` <span class="st bad">hook errors</span>` : ""}</button><div class=tkl>${items}</div>`;
   box.classList.toggle("open", tasksOpen);
   if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }

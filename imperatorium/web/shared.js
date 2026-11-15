@@ -707,6 +707,58 @@ const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
 const QUOTE = /^\s*>\s?(.*)$/;
 const indentOf = s => s.replace(/\t/g, "    ").length;
 
+// -- a teammate's message to the session that started it --------------------
+// Claude Code hands a teammate's report to its lead as a user turn:
+// "Another Claude session sent a message:", one or more
+// <teammate-message teammate_id=.. color=.. summary=..> elements (a JSON
+// notification or plain text), then a paragraph on how to treat it. The
+// terminal shows "Teammate @name finished" and the result; so does this.
+const MATE_RE = /<teammate-message\s+([^>]*)>([\s\S]*?)<\/teammate-message>/g;
+const MATE_INTRO = /^\s*Another Claude session sent a message:\s*/;
+const MATE_TAIL = /(?:^|\n)\s*This came from another Claude session[\s\S]*$/;
+const MATE_COLORS = {blue: "--busy", green: "--ok", yellow: "--hl-ref", red: "--fail", purple: "--comp",
+                     orange: "--warn", pink: "--hl-variable", cyan: "--hl-string"};
+function mateAttr(attrs, name){
+  const m = new RegExp("(?:^|\\s)" + name + '="([^"]*)"').exec(attrs);
+  return m ? m[1] : "";
+}
+// Pure: [{name, color, summary, kind, verb, text}] for a text that is only
+// teammate messages, else null.
+function teammateParts(text){
+  if (typeof text !== "string" || text.indexOf("<teammate-message") < 0) return null;
+  const parts = [];
+  const rest = text.replace(MATE_RE, (all, attrs, body) => {
+    const p = {name: mateAttr(attrs, "teammate_id"), color: mateAttr(attrs, "color"),
+               summary: mateAttr(attrs, "summary"), kind: "message", verb: "", text: body.trim()};
+    let said = null;
+    try { said = JSON.parse(p.text); } catch (e) {}
+    if (said && typeof said === "object" && !Array.isArray(said)){
+      p.kind = String(said.type || "message");
+      p.verb = p.kind === "idle_notification" ? "finished"
+        : p.kind === "shutdown_approved" || p.kind === "teammate_terminated" ? "shut down"
+        : p.kind.replace(/_/g, " ");
+      p.text = String(said.result ?? said.message ?? said.content ?? said.reason ?? said.summary ?? "");
+    }
+    parts.push(p);
+    return "";
+  });
+  if (!parts.length || rest.replace(MATE_TAIL, "").replace(MATE_INTRO, "").trim()) return null;
+  return parts;
+}
+// Pure: the one line a folded teammate message shows.
+function teammateLine(parts){
+  return parts.map(p => "@" + p.name + " " + (p.verb || "says") + (p.summary || p.text ?
+    ": " + String(p.summary || p.text).split("\n").map(l => l.trim()).find(l => l) : "")).join(" · ");
+}
+function teammateHtml(parts){
+  return parts.map(p => {
+    const c = MATE_COLORS[p.color];
+    return `<div class="mate"${c ? ` style="--mate:var(${c})"` : ""}><div class=mh>Teammate <span class=at>@${
+      esc(p.name || "?")}</span>${p.verb ? " " + esc(p.verb) : p.summary ? ": " + esc(p.summary) : ""}</div>${
+      p.text ? `<div class=mb>${renderText(p.text)}</div>` : ""}</div>`;
+  }).join("");
+}
+
 function renderText(text){
   const lines = String(text == null ? "" : text).split("\n");
   const out = [];

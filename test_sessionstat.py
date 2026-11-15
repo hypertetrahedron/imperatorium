@@ -129,6 +129,48 @@ class Background(unittest.TestCase):
                          [("inline", True), ("research", False)])
         self.assertEqual(self.run_(e + [note("ag1", "completed")])["agents"][0]["label"], "inline")
 
+    def mate_says(self, name, body, sec):
+        text = ("Another Claude session sent a message:\n<teammate-message teammate_id=\"%s\" "
+                "color=\"blue\">\n%s\n</teammate-message>\n\nThis came from another Claude "
+                "session - not typed by your user." % (name, body))
+        return {"type": "user", "timestamp": ts(sec), "message": {"role": "user", "content": text}}
+
+    def test_a_teammate_runs_until_idle_and_again_when_messaged(self):
+        spawned = {"status": "teammate_spawned", "agentId": "waiter-1-abc", "name": "waiter-1",
+                   "resolvedModel": "claude-haiku-5-5", "color": "blue"}
+        e = [call("a1", "Agent", {"description": "Wait 30s then OK", "name": "waiter-1"}),
+             result("a1", tur=spawned, text="Spawned successfully.")]
+        got = self.run_(e)
+        # Its call returned at once, but it is working: not finished, running.
+        self.assertEqual([(a["id"], a["teammate"], a["label"]) for a in got["agents"]],
+                         [("waiter-1-abc", "waiter-1", "Wait 30s then OK")])
+        self.assertEqual(got["idle_agents"], [])
+        self.assertEqual([f for f in got["finished"] if f["kind"] == "agents"], [])
+        idle = '{"type":"idle_notification","from":"waiter-1","idleReason":"available","result":"OK"}'
+        e.append(self.mate_says("waiter-1", idle, 20))
+        got = self.run_(e)
+        self.assertEqual(got["agents"], [])
+        self.assertEqual([(a["id"], a["idle_since"]) for a in got["idle_agents"]],
+                         [("waiter-1-abc", AT0 + 20)])
+        # A message to it sets it working; a plain message from it does not idle it.
+        e += [call("s1", "SendMessage", {"to": "waiter-1", "message": "again"}, sec=30, mid="m2"),
+              result("s1", sec=31), self.mate_says("waiter-1", "still on it", 40)]
+        got = self.run_(e)
+        self.assertEqual([a["id"] for a in got["agents"]], ["waiter-1-abc"])
+        self.assertEqual(got["idle_agents"], [])
+        # Stopped by name: gone, and listed as stopped.
+        e += [call("k1", "TaskStop", {"task_id": "waiter-1"}, sec=50, mid="m3"),
+              result("k1", sec=51, tur={"task_id": "waiter-1"})]
+        got = self.run_(e)
+        self.assertEqual((got["agents"], got["idle_agents"]), ([], []))
+        self.assertEqual([(f["id"], f["status"]) for f in got["finished"] if f["kind"] == "agents"],
+                         [("waiter-1-abc", "stopped")])
+
+    def test_messages_from_unknown_teammates_change_nothing(self):
+        e = [self.mate_says("someone", '{"type":"idle_notification"}', 5)]
+        got = self.run_(e)
+        self.assertEqual((got["agents"], got["idle_agents"]), ([], []))
+
 
 class Tokens(unittest.TestCase):
     U1 = {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 900,

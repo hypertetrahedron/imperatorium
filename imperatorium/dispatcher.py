@@ -1522,7 +1522,7 @@ class Control:
             stat = self.stats.read(row["sessionId"], now) or {}
             folder = taskout.tasks_dir(row["sessionId"])
             agents = taskout.subagents_dir(sessionstat.transcript_path(row["sessionId"])) \
-                if stat.get("agents") or any(f.get("kind") == "agents"
+                if stat.get("agents") or stat.get("idle_agents") or any(f.get("kind") == "agents"
                                              for f in stat.get("finished") or ()) else None
             tasks = taskout.awaited(stat, folder, agents=agents)
         except Exception as exc:

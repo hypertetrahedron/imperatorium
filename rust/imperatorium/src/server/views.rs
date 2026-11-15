@@ -229,7 +229,7 @@ impl Shared {
             .get("finished")
             .and_then(Value::as_array)
             .is_some_and(|f| f.iter().any(|x| x.get("kind").and_then(Value::as_str) == Some("agents")));
-        let agents = if truthy(stat.get("agents")) || ran_agents {
+        let agents = if truthy(stat.get("agents")) || truthy(stat.get("idle_agents")) || ran_agents {
             crate::taskout::subagents_dir(sessionstat::transcript_path(&sid).as_deref())
         } else {
             None

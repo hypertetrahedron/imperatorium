@@ -8,6 +8,10 @@ Claude Code writes, as records rather than prose:
 - a backgrounded command's result carries `toolUseResult.backgroundTaskId`;
   a `Monitor` carries `taskId` and `timeoutMs`; a background subagent carries
   `status: "async_launched"` and `agentId`;
+- a named subagent (a teammate) carries `status: "teammate_spawned"`,
+  `agentId` and `name`. It works on after its call returns and reports in
+  `<teammate-message>`s: an `idle_notification` means it is waiting, and a
+  `SendMessage` to it sets it working again;
 - each of those ends with a `<task-notification>` whose `<status>` is
   completed, failed, killed or stopped, or with a `TaskStop` result. A
   Monitor also ends when its timeout runs out, which may say nothing;
@@ -35,6 +39,9 @@ CACHE_5M, CACHE_1H = 300.0, 3600.0
 NOTE = re.compile(r"<task-notification>(.*?)</task-notification>", re.S)
 TASK_ID = re.compile(r"<task-id>(.*?)</task-id>")
 STATUS = re.compile(r"<status>(.*?)</status>")
+TEAMMATE_MSG = re.compile(r'<teammate-message\s+teammate_id="([^"]*)"[^>]*>(.*?)</teammate-message>', re.S)
+# What a teammate says when it has gone for good.
+TEAMMATE_ENDS = {"shutdown_approved", "teammate_terminated"}
 SHELL_TOOLS = {"Bash", "PowerShell"}
 # Tasks that ended within this long are kept as `finished`, newest first.
 FINISHED_KEEP = 1800.0
@@ -109,6 +116,8 @@ class Fold:
         self.ended = set()      # task ids seen to end
         self.ended_at = {}      # task id -> (when it ended, how)
         self.done_calls = {}    # a foreground subagent that returned -> its record
+        self.teammates = {}     # a teammate's name -> its agentId
+        self.idle = {}          # agentId of a teammate waiting for a message -> since when
         self.mcp = []           # MCP servers connected, in the order they came
         self.hook_errors = []   # the newest hook failures
         self.seen_msgs = set()
@@ -182,6 +191,11 @@ class Fold:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         self.calls[block.get("id")] = (block.get("name"), block.get("input"))
                         self.call_at[block.get("id")] = at
+                        tool_input = block.get("input")
+                        if block.get("name") == "SendMessage" and isinstance(tool_input, dict):
+                            aid = self.teammates.get(tool_input.get("to"))
+                            if aid:
+                                self.idle.pop(aid, None)
         elif kind in ("user", "attachment"):
             if kind == "user" and not side and entry.get("promptId"):
                 self.prompts.add(entry["promptId"])
@@ -192,9 +206,24 @@ class Fold:
                         self._returned(entry, block, cid, at)
                         _started(self.tasks, self.ended, entry, cid, self.calls, at,
                                  self.ended_at)
+                        self._teammate(entry, cid, at)
                         self.calls.pop(cid, None)
                         self.call_at.pop(cid, None)
             for text in _texts(entry):
+                for name, body in TEAMMATE_MSG.findall(text):
+                    aid = self.teammates.get(name)
+                    try:
+                        said = json.loads(body.strip())
+                    except ValueError:
+                        said = None
+                    if not aid or not isinstance(said, dict):
+                        continue
+                    if said.get("type") == "idle_notification":
+                        self.idle[aid] = at
+                    elif said.get("type") in TEAMMATE_ENDS:
+                        self.ended.add(aid)
+                        self.ended_at[aid] = (at, "completed")
+                        self.idle.pop(aid, None)
                 for note in NOTE.findall(text):
                     status = STATUS.search(note)
                     if status and status.group(1).strip() in TERMINAL:
@@ -202,13 +231,31 @@ class Fold:
                             self.ended.add(t.strip())
                             self.ended_at[t.strip()] = (at, status.group(1).strip())
 
+    def _teammate(self, entry, cid, at):
+        """A teammate spawned, or stopped by name."""
+        name, tool_input = self.calls.get(cid, (None, None))
+        result = entry.get("toolUseResult")
+        if not isinstance(result, dict):
+            return
+        if name in AGENT_TOOLS and result.get("status") == "teammate_spawned" and result.get("agentId"):
+            aid = str(result["agentId"])
+            self.teammates[str(result.get("name") or aid)] = aid
+            self.tasks[aid] = {"kind": "agents", "label": result.get("description") or _label(tool_input),
+                               "started": at, "model": result.get("resolvedModel"),
+                               "teammate": result.get("name") or aid}
+        elif name == "TaskStop" and result.get("task_id") in self.teammates:
+            aid = self.teammates[result["task_id"]]
+            self.ended.add(aid)
+            self.ended_at[aid] = (at, "stopped")
+            self.idle.pop(aid, None)
+
     def _returned(self, entry, block, cid, at):
         """A subagent run in the foreground came back: it is finished."""
         name, tool_input = self.calls.get(cid, (None, None))
         if name not in AGENT_TOOLS:
             return
         result = entry.get("toolUseResult")
-        if isinstance(result, dict) and result.get("status") == "async_launched":
+        if isinstance(result, dict) and result.get("status") in ("async_launched", "teammate_spawned"):
             return
         agent = result.get("agentId") if isinstance(result, dict) else None
         self.done_calls[agent or cid] = {
@@ -235,8 +282,13 @@ class Fold:
     def summary(self, now):
         out = dict(self.out)
         running = {"agents": [], "shells": [], "monitors": [], "wakeups": []}
+        idle = []
         for tid, task in self.tasks.items():
             if tid in self.ended or (task.get("expires") and task["expires"] <= now):
+                continue
+            if tid in self.idle:
+                # A teammate waiting for a message: alive, but nothing to wait on.
+                idle.append(dict(task, id=tid, idle_since=self.idle[tid]))
                 continue
             running[task["kind"]].append(dict(task, id=tid))
         # A call still waiting on its result is running in the foreground - a
@@ -250,6 +302,7 @@ class Fold:
                 running["shells"].append(dict(item, kind="shells"))
 
         out.update(running)
+        out["idle_agents"] = idle
         # Every task id the transcript has named, running or not: an output
         # file under none of them belongs to a command still in the foreground.
         out["known_tasks"] = sorted(set(self.tasks) | self.ended)

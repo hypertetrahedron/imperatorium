@@ -493,6 +493,21 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
             add(&mut out, id, item, "agent", transcripts.get(&py_str(id)), none());
         }
     }
+    // A teammate waiting for a message: still there, but not running.
+    for item in stat
+        .get("idle_agents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(id) = item.get("id").filter(|v| truthy(Some(v))) {
+            let mut extra = Map::new();
+            extra.insert("idle".into(), json!(true));
+            extra.insert("idle_since".into(), item.get("idle_since").cloned().unwrap_or(Value::Null));
+            extra.insert("teammate".into(), item.get("teammate").cloned().unwrap_or(Value::Null));
+            add(&mut out, id, item, "agent", transcripts.get(&py_str(id)), extra);
+        }
+    }
     // A scheduled wakeup (ScheduleWakeup, CronCreate) prints nothing; what it
     // will do when it fires is its label.
     for item in stat
