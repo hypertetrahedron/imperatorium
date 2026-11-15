@@ -14,6 +14,7 @@ pub fn no_window(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        win::quiet_errors();
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
@@ -108,9 +109,16 @@ fn run_bounded(cmd: &mut Command, limit: Duration, keep: bool) -> io::Result<Out
 /// escape by being quick; KILL_ON_JOB_CLOSE while held, so a dispatcher
 /// killed mid-call takes its children with it; BREAKAWAY_OK, so a child that
 /// asks to leave may (one that asks and is refused would fail to start).
-/// Ending it seals the job first - an active-process limit of zero, which
-/// refuses and terminates any process that tries to join (the late git
-/// above can join after a plain kill) - then terminates what is in it.
+/// Ending it terminates what is in it until nothing is (the late git above
+/// joins after a single pass). It used to refuse late joiners with an
+/// active-process limit of zero instead; a process refused mid-start fails
+/// with 0xc0000142, and Windows put an error box on the desktop for it.
+///
+/// Still open: a dispatcher killed between creating a child and assigning
+/// it leaves that child suspended for good (seen when tests kill their
+/// dispatchers). Creating it straight into the job
+/// (PROC_THREAD_ATTRIBUTE_JOB_LIST) needs `CommandExt::raw_attribute`,
+/// unstable in Rust 1.100.
 ///
 /// Elsewhere: a process group of its own, killed on a timeout. No sweep
 /// after a clean exit: once the leader is reaped its group id can be reused,
@@ -125,10 +133,59 @@ mod win {
     pub use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::JobObjects::{
+        JobObjectBasicAccountingInformation, QueryInformationJobObject,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     };
     pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
+
+    /// How many processes are in the job now; None if it cannot be asked.
+    pub unsafe fn active(job: usize) -> Option<u32> {
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+        let ok = QueryInformationJobObject(
+            job as _,
+            JobObjectBasicAccountingInformation,
+            &mut info as *mut _ as *mut core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        ) != 0;
+        ok.then_some(info.ActiveProcesses)
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetErrorMode(mode: u32) -> u32;
+        fn GetErrorMode() -> u32;
+    }
+    /// SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX.
+    pub const QUIET: u32 = 0x0001 | 0x0002 | 0x8000;
+
+    /// No error dialogs from this process or anything it starts (children
+    /// inherit SEM_FAILCRITICALERRORS). A process that dies starting up
+    /// (0xc0000142) otherwise put "git.exe - Application Error" on the
+    /// desktop and left it there for someone to click.
+    pub fn quiet_errors() {
+        unsafe {
+            let mode = GetErrorMode();
+            if mode & QUIET != QUIET {
+                SetErrorMode(mode | QUIET);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn error_mode() -> u32 {
+        unsafe { GetErrorMode() }
+    }
+
+    #[cfg(test)]
+    pub fn set_error_mode(mode: u32) {
+        unsafe {
+            SetErrorMode(mode);
+        }
+    }
 
     /// The job's limit flags (and an active-process limit of zero).
     pub unsafe fn set_limits(job: usize, flags: u32) -> bool {
@@ -182,6 +239,7 @@ impl Job {
             use std::os::windows::io::AsRawHandle;
             use std::os::windows::process::CommandExt;
             use win::*;
+            quiet_errors();
             cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
             let mut child = cmd.spawn()?;
             let mut handle = CreateJobObjectW(std::ptr::null(), std::ptr::null()) as usize;
@@ -215,8 +273,18 @@ impl Job {
         unsafe {
             use win::*;
             if self.handle != 0 {
-                self.seal();
-                TerminateJobObject(self.handle as _, 1);
+                // Until the job is empty: a process a member was starting as
+                // the first pass ran joins after it, and goes with the next.
+                // (Refusing it instead - an active-process limit - kills it
+                // mid-start, and Windows shows "unable to start correctly
+                // (0xc0000142)" for that.)
+                for _ in 0..200 {
+                    TerminateJobObject(self.handle as _, 1);
+                    match active(self.handle) {
+                        Some(0) | None => break,
+                        _ => std::thread::sleep(Duration::from_millis(5)),
+                    }
+                }
                 windows_sys::Win32::Foundation::CloseHandle(self.handle as _);
             } else if let Ok(None) = child.try_wait() {
                 kill_pid_tree(child.id());
@@ -233,19 +301,6 @@ impl Job {
         let _ = child.wait();
     }
 
-    /// Refuse any process that tries to join from now on: the members stay;
-    /// one being created into the job is terminated and its CreateProcess
-    /// fails. (A no-op off Windows.)
-    pub fn seal(&self) -> bool {
-        #[cfg(windows)]
-        unsafe {
-            use win::*;
-            self.handle != 0
-                && set_limits(self.handle, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS)
-        }
-        #[cfg(not(windows))]
-        false
-    }
 
     /// Let what the child left running carry on without us.
     pub fn release(self) {
@@ -414,31 +469,63 @@ mod subproc_cov {
     }
 
     #[test]
-    fn a_sealed_job_refuses_a_late_child() {
+    fn children_started_while_the_job_ends_go_with_it() {
         // The late git joined ~90 ms after claude exited, after a one-shot
-        // kill would already have run: sealed first, it cannot start at all.
-        let script = "[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); \
-                      try { $p = Start-Process -FilePath cmd -ArgumentList '/c','exit' -PassThru -WindowStyle Hidden -ErrorAction Stop; 'spawned' } \
-                      catch { 'refused' }";
+        // kill had run. A parent that never stops starting children stands
+        // in: whatever it had going, and whatever it was starting as the job
+        // was ended, is gone afterwards - and nothing was refused mid-start
+        // (that is the "unable to start correctly" box).
+        let pidfile = scratch("spawner");
+        let _ = std::fs::remove_file(&pidfile);
+        let script = format!(
+            "while ($true) {{ $g = Start-Process -FilePath ping -ArgumentList '-n','30','127.0.0.1' -PassThru -WindowStyle Hidden; \
+             Add-Content -Path '{}' -Value $g.Id -Encoding ascii }}",
+            pidfile.display()
+        );
         let mut c = Command::new("powershell");
-        c.args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+        c.args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
             .stderr(Stdio::null());
         let (mut child, job) = Job::spawn(&mut c).unwrap();
-        let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
-        let mut line = String::new();
-        std::io::BufRead::read_line(&mut out, &mut line).unwrap();
-        assert_eq!(line.trim(), "ready");
-        assert!(job.seal());
-        use std::io::Write;
-        let mut stdin = child.stdin.take().unwrap();
-        writeln!(stdin, "go").unwrap();
-        drop(stdin);
-        let mut rest = String::new();
-        let _ = std::io::Read::read_to_string(&mut out, &mut rest);
+        let end = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < end && std::fs::read_to_string(&pidfile).map(|t| t.lines().count()).unwrap_or(0) < 3 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         job.kill(&mut child);
-        assert_eq!(rest.trim(), "refused");
+        std::thread::sleep(Duration::from_millis(500));
+        let pids: Vec<u32> = std::fs::read_to_string(&pidfile)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .collect();
+        let left: Vec<u32> = pids.iter().copied().filter(|p| alive(*p)).collect();
+        for p in &left {
+            kill_pid_tree(*p);
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(pids.len() >= 3, "the parent started {} children", pids.len());
+        assert!(left.is_empty(), "outlived the job: {left:?}");
+    }
+    #[test]
+    fn what_a_job_runs_shows_no_error_dialogs() {
+        // A refused late child dies starting up; with the default error mode
+        // Windows puts an "Application Error" box on the desktop for it.
+        // Children inherit the mode, so the child here reports its own.
+        let script = "Add-Type -Name M -Namespace W -MemberDefinition \
+                      '[DllImport(\"kernel32.dll\")] public static extern uint GetErrorMode();'; \
+                      [W.M]::GetErrorMode()";
+        // Start from the default, so a mode inherited from whatever ran the
+        // tests cannot pass for one set here.
+        win::set_error_mode(0);
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        let o = run_timeout(&mut c, Duration::from_secs(60)).unwrap();
+        let mode: u32 = String::from_utf8_lossy(&o.stdout).trim().parse().expect("a number");
+        // SEM_FAILCRITICALERRORS (no startup-failure box) is what children
+        // reliably inherit; the other two bits vary.
+        assert_eq!(mode & 0x0001, 0x0001, "child error mode {mode:#x}");
+        assert_eq!(win::error_mode() & win::QUIET, win::QUIET);
     }
 
     #[test]
