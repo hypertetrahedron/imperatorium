@@ -92,6 +92,11 @@ jobs:
           # under CI); the worktree twin's golden has the wording everyone else
           # sees. GITHUB_* cannot be overridden in `env:`, only unset here.
           unset GITHUB_ACTIONS CI
+          # The Windows runner has 4 cores; the unit tests that start
+          # PowerShell, ping and named pipes against 30 s deadlines ran out of
+          # time with 4 at once (82 s there against 28 s on a desktop). Two
+          # at a time keeps them honest.
+          if [ "$RUNNER_OS" = Windows ]; then export RUST_TEST_THREADS=2; fi
           if [ "$RUNNER_OS" = Linux ]; then flags=--no-default-features; fi
           cargo test --workspace --locked --no-fail-fast $flags
 
