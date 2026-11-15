@@ -901,7 +901,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("Window", "hotkey", "[--once] [--hotkey KEYS]", "The global hotkey that raises the window (Windows)"),
     ("Window", "streamdeck", "", "The Stream Deck surface"),
     ("Window", "voice", "...", "The dictation model: fetch and check"),
-    ("Sessions", "sessions", "[--json]", "List live sessions (* = wants attention); also: sessions chain|info|titles|items|list|stats ID"),
+    ("Sessions", "sessions", "[--json]", "List live sessions (* = wants attention); also: sessions chain|info|titles|items|list|stats ID, sessions batch (a whole corpus in one run)"),
     ("Sessions", "projects", "[--json]", "List the projects the dispatcher knows"),
     ("Sessions", "send", "PROMPT... (-s SESSION | -p PROJECT) [--mode auto|inject|launch|background] [--dry-run]", "Send a prompt to a session, or route it to a project"),
     ("Sessions", "queue", "list | add SESSION TEXT... | remove SESSION ITEM", "Prompts held until a session's turn ends"),
@@ -1206,7 +1206,7 @@ mod tests {
         for c in re.captures_iter(main) {
             let name = &c[1];
             // Not subcommands: `sessions`' own verbs and the `--version` spelling.
-            if ["chain", "info", "titles", "items", "list", "stats"].contains(&name) {
+            if ["chain", "info", "titles", "items", "list", "stats", "batch"].contains(&name) {
                 continue;
             }
             seen += 1;

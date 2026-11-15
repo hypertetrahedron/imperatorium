@@ -248,12 +248,12 @@ fn main() {
         // `sessions chain|info|...` read transcripts (phase 2); a bare
         // `sessions` is impctl's list of the live ones.
         Some("sessions")
-            if !matches!(
+            if matches!(
                 args.get(1).map(String::as_str),
-                Some("chain" | "info" | "titles" | "items" | "list" | "stats")
+                Some("chain" | "info" | "titles" | "items" | "list" | "stats" | "batch")
             ) =>
         {
-            cli::main("sessions", &args[1..], home.as_deref())
+            sessions_main(&args)
         }
         Some(name) if cli::handles(name) => cli::main(name, &args[1..], home.as_deref()),
         Some("hook") => hooks::hook_main(),
@@ -267,7 +267,6 @@ fn main() {
         Some("focus-check") => winfocus::check_lines(),
         // Internal: closing.rs types into a session's console through this.
         Some("type-into") => closing::type_into_main(&args[1..]),
-        Some("sessions") => sessions_main(&args),
         // A remote host's side (phase 4), run over SSH by the dispatcher.
         Some("remote-channel") => remote::channel_main(),
         Some("inbox-send") => remote::inbox_send_main(&args[1..]),
