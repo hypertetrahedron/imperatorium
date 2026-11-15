@@ -28,21 +28,52 @@ use crate::{
     activity, changes, conversation, costs, history, paths, procs, projects, registry, sessions,
     sessionstat, settings, ui,
 };
-mod views;
+
 mod alerts;
+mod conv;
+mod dispatch;
 mod hook;
-use self::hook::{decisions, start_tunnels};
+mod prefs;
 mod route;
 mod snapshot;
-use self::snapshot::{matrix_active, remote_key, Snap};
-mod conv;
+mod spend;
+mod views;
+
 pub use self::conv::signature;
 use self::conv::Cached;
-mod dispatch;
-mod spend;
-mod prefs;
+use self::hook::{decisions, start_tunnels};
 use self::prefs::{get, load_config, look};
+use self::snapshot::{matrix_active, remote_key, Snap};
 
+/// The dispatcher's state, shared by every request thread. Its methods are
+/// spread over the child modules by what they do: `route` (GET and POST
+/// dispatch), `hook` (tool hooks, the idle check, the mod's beats, tunnels),
+/// `snapshot` (the session list, its cache and the event streams), `conv`
+/// (the conversation cache and its views), `views` (read-only per-session
+/// and fleet views), `prefs` (the Settings form), `spend` (budget, usage,
+/// errors), `dispatch` (sending to sessions and the prompt queue) and
+/// `alerts` (push and speech channels).
+///
+/// Locks. Each is held for a short critical section and none is held across
+/// I/O on a request path except `snap_build`. Where two are ever held
+/// together, the order is:
+///
+/// - `snap_build`, then `snap` and `changes`: `snap_of` holds `snap_build`
+///   while the snapshot is built (which reads `config_live` and `doing` and
+///   calls into `stats` and the other components' own locks), then stores
+///   the result in `snap`. `snap` and `changes` are never held together:
+///   `invalidate` takes them one after the other, and never `snap_build`,
+///   so a build cannot hold up what invalidates it.
+/// - `settings_lock`, then `config_live` (write), then, after that guard is
+///   dropped, `snap`/`changes` (via `invalidate`) and `restart_needed`.
+/// - `tunnels`, then each tunnel's own lock (`hosts_status` reads the
+///   status while holding it).
+///
+/// `convs`, `paths`, `cost_history`, `errors_cache`, `tallies` and `doing`
+/// are leaf locks: no other lock of this struct is taken while one is held
+/// (`paths` and `convs` are taken one after the other, never nested), and
+/// none is held across a call to `conversation()`. `changes` is paired with
+/// the condvar `changed`, which waits on that mutex alone.
 pub struct Shared {
     /// Pushes and speech: counters, and what is scheduled.
     notifier: Arc<crate::notify::Notifier>,
