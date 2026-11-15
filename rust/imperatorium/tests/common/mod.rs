@@ -15,6 +15,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+pub mod console;
+pub mod fakessh;
+pub mod safety;
+
 // ---------------------------------------------------------------- places
 
 /// The binary under test: the one cargo builds for the integration tests,
