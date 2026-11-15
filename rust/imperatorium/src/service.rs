@@ -854,3 +854,49 @@ mod tests {
         assert_eq!(show(&systemctl(&["restart", "u"])), "systemctl --user restart u");
     }
 }
+
+/// What test_setup.py pinned down for the systemd unit and the launchd plist.
+#[cfg(test)]
+mod setup_cov {
+    use super::*;
+
+    fn svc(backend: Backend, exe: &str, home: &str) -> Service {
+        Service {
+            prefix: "Imperatorium".into(),
+            exe: PathBuf::from(exe),
+            home: PathBuf::from(home),
+            serve_args: vec![],
+            backend,
+            ctx: Ctx { home: PathBuf::from("/u"), xdg_config: None, uid: 501, temp: PathBuf::from("/t") },
+        }
+    }
+
+    #[test]
+    fn the_systemd_unit_restarts_and_quotes_paths_with_spaces() {
+        let s = svc(Backend::Systemd, "/opt/my bin/imperatorium", "/srv/imp");
+        let unit = s.systemd_unit(&["serve".into(), "--live".into()], "the dispatcher", "/usr/bin:/bin");
+        assert!(unit.contains("ExecStart=\"/opt/my bin/imperatorium\" \"serve\" \"--live\"\n"), "{unit}");
+        assert!(unit.contains("WorkingDirectory=/srv/imp\n"));
+        assert!(unit.contains("Restart=always\n"));
+        assert!(unit.contains("Environment=\"PATH=/usr/bin:/bin\"\n"));
+        assert!(unit.contains("WantedBy=default.target\n"));
+        assert!(unit.contains("Description=Imperatorium - the dispatcher\n"));
+    }
+
+    #[test]
+    fn the_launchd_plist_keeps_the_service_alive_and_escapes_what_it_holds() {
+        let s = svc(Backend::Launchd, "/usr/local/bin/imperatorium", "/Users/a & b/imp");
+        let body = s.launchd_plist("local.imperatorium.dispatcher", &["serve".into(), "--live".into()], "/usr/bin", "/tmp/x.log");
+        assert!(body.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist"));
+        assert!(body.contains(
+            "<key>ProgramArguments</key><array><string>/usr/local/bin/imperatorium</string><string>serve</string><string>--live</string></array>"
+        ), "{body}");
+        // The `&` in the home would break the XML if it were left bare.
+        assert!(body.contains("<key>WorkingDirectory</key><string>/Users/a &amp; b/imp</string>"), "{body}");
+        assert!(!body.contains("a & b"));
+        assert!(body.contains("<key>RunAtLoad</key><true/>"));
+        assert!(body.contains("<key>KeepAlive</key><true/>"));
+        assert!(body.contains("<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin</string></dict>"));
+        assert_eq!(body.matches("<dict>").count(), body.matches("</dict>").count());
+    }
+}

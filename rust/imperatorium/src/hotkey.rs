@@ -167,3 +167,98 @@ mod tests {
         assert_eq!(candidates(None, &json!({})).len(), 4);
     }
 }
+
+/// What test_hotkey.py pinned down, beyond the three tests above.
+#[cfg(test)]
+mod python_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn modifiers_combine() {
+        assert_eq!(parse_hotkey("ctrl+alt+space"), Ok((MOD_CONTROL | MOD_ALT, 0x20)));
+    }
+
+    #[test]
+    fn function_keys_count_from_vk_f1() {
+        // VK_F1 is 0x70, so F12 must be 0x7B.
+        assert_eq!(parse_hotkey("ctrl+shift+f12").unwrap().1, 0x7B);
+        assert_eq!(parse_hotkey("f1").unwrap().1, 0x70);
+    }
+
+    #[test]
+    fn letters_become_virtual_keys() {
+        assert_eq!(parse_hotkey("ctrl+alt+j").unwrap().1, 'J' as u32);
+    }
+
+    #[test]
+    fn backquote_by_name_or_symbol() {
+        assert_eq!(parse_hotkey("ctrl+alt+backquote").unwrap().1, 0xC0);
+        assert_eq!(parse_hotkey("ctrl+alt+`").unwrap().1, 0xC0);
+    }
+
+    #[test]
+    fn nonsense_is_refused_rather_than_silently_bound() {
+        for bad in ["", "ctrl+alt", "ctrl+alt+semicolon"] {
+            assert!(parse_hotkey(bad).is_err(), "{bad:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn every_default_candidate_parses() {
+        for spec in DEFAULT_HOTKEYS {
+            assert!(parse_hotkey(spec).is_ok(), "{spec} does not parse");
+        }
+    }
+
+    #[test]
+    fn an_explicit_override_wins() {
+        let config = json!({"palette": {"hotkey": "ctrl+alt+j"}});
+        assert_eq!(candidates(Some("win+k"), &config), ["win+k"]);
+    }
+
+    #[test]
+    fn missing_config_falls_back_to_defaults() {
+        let defaults: Vec<String> = DEFAULT_HOTKEYS.iter().map(|s| s.to_string()).collect();
+        // No file, or one that is not JSON, reaches `candidates` as Null.
+        assert_eq!(candidates(None, &Value::Null), defaults);
+        assert_eq!(candidates(None, &json!({})), defaults);
+        assert_eq!(candidates(None, &json!({"palette": {}})), defaults);
+    }
+
+    #[test]
+    fn an_empty_list_falls_back_rather_than_binding_nothing() {
+        let defaults: Vec<String> = DEFAULT_HOTKEYS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(candidates(None, &json!({"palette": {"hotkey": []}})), defaults);
+    }
+
+    #[test]
+    fn window_lookup_returns_what_it_found_or_nothing() {
+        // The enumeration is machine state; it must at least run and hand
+        // back (handle, title) pairs, and the filter must accept only ours.
+        for (_, title) in crate::winfocus::titled_windows(None) {
+            let _ = is_app_title(&title);
+        }
+    }
+
+    #[test]
+    fn only_the_app_window_matches() {
+        assert!(is_app_title("Imperatorium"));
+        assert!(!is_app_title("hypertetrahedron/imperatorium: A central app - Google Chrome"));
+        assert!(!is_app_title(""));
+    }
+
+    #[test]
+    fn the_waiting_count_in_the_title_still_matches() {
+        assert!(is_app_title("(3) Imperatorium"));
+        assert!(!is_app_title("(3) Imperatorium - Google Chrome"));
+        assert!(!is_app_title("Imperatorium (3)"));
+    }
+
+    #[test]
+    fn the_title_it_looks_for_matches_the_page() {
+        // If these drift apart the hotkey silently opens a second window
+        // every time instead of raising the one already there.
+        assert!(crate::ui::SHELL.linked().contains(WINDOW_TITLE));
+    }
+}

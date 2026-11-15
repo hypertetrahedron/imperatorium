@@ -553,3 +553,42 @@ mod tests {
         assert_eq!(provider(env(&[])), None);
     }
 }
+
+/// Ported from the Python suite (test_features.py `StatuslineProvider`,
+/// `StatuslineLine`).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |n: &str| pairs.iter().find(|(k, _)| *k == n).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn features_cloud_flags_win_in_claude_codes_order() {
+        assert_eq!(provider(env(&[("CLAUDE_CODE_USE_BEDROCK", "1")])), Some("bedrock"));
+        assert_eq!(
+            provider(env(&[("CLAUDE_CODE_USE_VERTEX", "true"), ("ANTHROPIC_API_KEY", "k")])),
+            Some("vertex")
+        );
+        assert_eq!(provider(env(&[("CLAUDE_CODE_USE_FOUNDRY", "1")])), Some("foundry"));
+        assert_eq!(
+            provider(env(&[("CLAUDE_CODE_USE_FOUNDRY", "1"), ("CLAUDE_CODE_USE_BEDROCK", "1")])),
+            Some("bedrock")
+        );
+    }
+
+    #[test]
+    fn features_the_line_names_the_provider_only_without_windows() {
+        let line = |v: Value| statusline_line(v.as_object().unwrap()).unwrap();
+        assert_eq!(
+            line(json!({"model": {"display_name": "Opus"}, "imperatorium_provider": "bedrock"})),
+            "Opus · Bedrock"
+        );
+        assert_eq!(
+            line(json!({"imperatorium_provider": "api",
+                        "rate_limits": {"five_hour": {"used_percentage": 5}}})),
+            "5h 5%"
+        );
+    }
+}

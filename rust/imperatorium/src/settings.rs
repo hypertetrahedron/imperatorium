@@ -640,3 +640,220 @@ pub fn check_lines() -> i32 {
     }
     0
 }
+
+/// test_quick.py: the quick-phrase key and phrases, and the shortcut list.
+#[cfg(test)]
+mod quick_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn key() -> &'static Value {
+        field("quick.key").unwrap()
+    }
+
+    fn phrases() -> &'static Value {
+        field("quick.phrases").unwrap()
+    }
+
+    fn put(f: &Value, v: Value) -> Result<Value, String> {
+        check(f, &v, &Value::Null)
+    }
+
+    #[test]
+    fn a_combination_is_stored_in_the_pages_order() {
+        assert_eq!(put(key(), json!("Shift + Ctrl + Q")), Ok(json!("ctrl+shift+q")));
+        assert_eq!(put(key(), json!("alt+space")), Ok(json!("alt+space")));
+    }
+
+    #[test]
+    fn shift_alone_or_no_modifier_is_refused() {
+        for v in ["q", "shift+q", "ctrl", "ctrl+alt", "ctrl+"] {
+            assert!(put(key(), json!(v)).is_err(), "{v}");
+        }
+    }
+
+    #[test]
+    fn reserved_keys_are_refused() {
+        for v in ["ctrl+enter", "alt+enter", "ctrl+k", "alt+3"] {
+            let err = put(key(), json!(v)).unwrap_err();
+            assert!(err.contains("already"), "{v}: {err}");
+        }
+    }
+
+    #[test]
+    fn phrase_text_and_lists() {
+        assert_eq!(
+            put(phrases(), json!("continue, as recommended\n\n  implement as recommended \n")),
+            Ok(json!(["continue, as recommended", "implement as recommended"]))
+        );
+        assert_eq!(put(phrases(), json!(["a, b", " ", "c"])), Ok(json!(["a, b", "c"])));
+    }
+
+    #[test]
+    fn phrase_limits() {
+        assert!(put(phrases(), json!(vec!["x"; 51])).is_err());
+        assert!(put(phrases(), json!(vec!["x"; 50])).is_ok());
+        assert!(put(phrases(), json!(["x".repeat(1001)])).is_err());
+        assert!(put(phrases(), json!(["x".repeat(1000)])).is_ok());
+    }
+
+    #[test]
+    fn defaults_include_the_common_ones() {
+        assert!(phrases()["default"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("implement as recommended")));
+        assert_eq!(key()["default"], json!("ctrl+space"));
+    }
+
+    fn shortcuts() -> Vec<(String, String, String)> {
+        schema()["shortcuts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                let f = |k: &str| s[k].as_str().unwrap().to_string();
+                (f("where"), f("keys"), f("what"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_key_named_by_a_setting_is_a_real_setting() {
+        let named = regex::Regex::new(r"^[a-z]+\.[a-z_]+$").unwrap();
+        let mut seen = 0;
+        for (_, keys, _) in shortcuts() {
+            if named.is_match(&keys) {
+                seen += 1;
+                assert!(field(&keys).is_some(), "{keys}");
+            }
+        }
+        assert!(seen >= 1, "no shortcut is named by a setting any more");
+    }
+
+    #[test]
+    fn every_reserved_key_is_on_the_list() {
+        // The list is what people read; a key the setting refuses should be
+        // one they can find there.
+        let listed = shortcuts().iter().map(|s| s.1.to_lowercase()).collect::<Vec<_>>().join(" ");
+        for combo in ["ctrl+enter", "alt+enter", "ctrl+k", "ctrl+f", "alt+n"] {
+            assert!(listed.contains(combo), "{combo} is not in {listed}");
+        }
+        assert!(listed.contains("alt+up"), "{listed}");
+    }
+}
+
+/// test_settings.py's `Checks`, ported: what the form may change in
+/// config.json and how (the HTTP half is tests/settings_http.rs).
+#[cfg(test)]
+mod py_ported {
+    use super::*;
+
+    fn config() -> Value {
+        json!({
+            "_comment": "This machine's settings.",
+            "roots": [],
+            "background": {"_comment": "Options for claude --bg.", "permission_mode": "acceptEdits"},
+            "notify": {"ntfy": {"enabled": false, "topic": "", "delay": 60, "token": "s3cret"},
+                       "speak": {"enabled": false, "delay": 5}},
+            "budget": {"thresholds": [80, 95]},
+            "remote": {"enabled": true, "hosts": [{"name": "devbox", "claude": "x"},
+                                                  {"name": "pi.local", "label": "pi", "tunnel": true}]},
+        })
+    }
+
+    fn f(key: &str) -> &'static Value {
+        field(key).unwrap_or_else(|| panic!("no field {key}"))
+    }
+
+    fn ok(key: &str, v: Value) -> Value {
+        check(f(key), &v, &Value::Null).unwrap_or_else(|e| panic!("{key} {v}: {e}"))
+    }
+
+    fn bad(key: &str, v: Value) {
+        assert!(check(f(key), &v, &Value::Null).is_err(), "{key} accepted {v}");
+    }
+
+    #[test]
+    fn numbers_are_checked_against_their_range() {
+        assert_eq!(ok("notify.ntfy.delay", json!("30")), json!(30));
+        for v in [json!(-1), json!(90000), json!("soon"), json!(1.5), json!(true)] {
+            bad("notify.ntfy.delay", v);
+        }
+    }
+
+    #[test]
+    fn thresholds_are_sorted_and_deduplicated() {
+        assert_eq!(ok("budget.thresholds", json!("95, 50,50")), json!([50, 95]));
+        bad("budget.thresholds", json!("120"));
+    }
+
+    #[test]
+    fn the_form_cannot_choose_a_bypass_mode() {
+        bad("background.permission_mode", json!("bypassPermissions"));
+        // ...but one already in config.json is kept when saved unchanged.
+        let kept = check(
+            f("background.permission_mode"),
+            &json!("bypassPermissions"),
+            &json!("bypassPermissions"),
+        );
+        assert_eq!(kept, Ok(json!("bypassPermissions")));
+    }
+
+    #[test]
+    fn text_fields_refuse_what_they_should() {
+        bad("notify.ntfy.server", json!("ftp://x"));
+        bad("notify.ntfy.topic", json!("has spaces"));
+        bad("background.model", json!("opus --dangerously-skip-permissions"));
+        bad("palette.hotkey", json!(["ctrl alt; j"]));
+        bad("roots", json!(["Z:/no/such/folder/here"]));
+    }
+
+    #[test]
+    fn the_form_shows_values_and_defaults_but_never_the_token() {
+        let d = describe(&config());
+        let by = |key: &str| -> Value {
+            d["fields"].as_array().unwrap().iter().find(|x| x["key"] == key).unwrap().clone()
+        };
+        assert_eq!(by("background.permission_mode")["value"], "acceptEdits");
+        assert_eq!(by("notify.ntfy.server")["value"], "https://ntfy.sh"); // a default
+        assert_eq!(by("voice.enabled")["value"], false); // no voice block: off
+        assert!(!d.to_string().contains("s3cret"));
+        let names: Vec<&str> = d["hosts"].as_array().unwrap().iter().map(|h| h["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["devbox", "pi.local"]);
+        let locked = describe(&json!({"background": {"permission_mode": "bypassPermissions"}}));
+        let field = locked["fields"].as_array().unwrap().iter()
+            .find(|x| x["key"] == "background.permission_mode").unwrap();
+        assert_eq!(field["locked"], true);
+        assert!(field["choices"].as_array().unwrap().contains(&json!("bypassPermissions")));
+    }
+
+    #[test]
+    fn apply_keeps_comments_and_drops_a_blank_background_option() {
+        let before = config();
+        let changes = json!({"background.permission_mode": "", "voice.max_seconds": 60});
+        let new = apply(&before, changes.as_object().unwrap()).unwrap();
+        assert!(new["background"].get("permission_mode").is_none());
+        assert_eq!(new["background"]["_comment"], "Options for claude --bg.");
+        assert_eq!(new["voice"], json!({"max_seconds": 60}));
+        assert_eq!(new["notify"]["ntfy"]["token"], "s3cret");
+        assert_eq!(before["background"]["permission_mode"], "acceptEdits"); // not mutated
+    }
+
+    #[test]
+    fn one_bad_value_saves_nothing() {
+        let changes = json!({"notify.ntfy.delay": 5, "notify.speak.rate": 99, "nonsense": 1});
+        let errors = apply(&config(), changes.as_object().unwrap()).unwrap_err();
+        let mut keys: Vec<&str> = errors.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["nonsense", "notify.speak.rate"]);
+    }
+
+    #[test]
+    fn restarts_name_each_process_once() {
+        let keys: Vec<String> = ["voice.model", "remote.enabled", "palette.hotkey", "notify.ntfy.delay"]
+            .iter().map(|s| s.to_string()).collect();
+        assert_eq!(restarts(&keys), vec!["dispatcher", "hotkey"]);
+        assert_eq!(restarts(&["budget.thresholds".to_string()]), Vec::<String>::new());
+    }
+}

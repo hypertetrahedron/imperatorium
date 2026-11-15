@@ -885,3 +885,380 @@ mod tests {
         assert_eq!(s["cache"]["hit"], 0.7);
     }
 }
+
+/// test_sessionstat.py, ported: the same transcript entries and the same
+/// expected numbers (the incremental `Reader` over a real folder is
+/// tests/sessionstat_reader.rs, through the dispatcher).
+#[cfg(test)]
+mod py_ported {
+    use super::*;
+
+    const AT0: f64 = 1791972000.0; // 2026-10-14T10:00:00Z
+
+    fn ts(sec: u32) -> String {
+        let t = 10 * 3600 + sec;
+        format!("2026-10-14T{:02}:{:02}:{:02}.000Z", t / 3600, t / 60 % 60, t % 60)
+    }
+
+    fn m(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    fn call_full(cid: &str, name: &str, inp: Value, sec: u32, mid: &str, usage: Value, side: bool) -> Map<String, Value> {
+        m(json!({"type": "assistant", "timestamp": ts(sec), "isSidechain": side,
+                 "message": {"id": mid, "model": "claude-opus-5-5", "usage": usage,
+                             "content": [{"type": "tool_use", "id": cid, "name": name, "input": inp}]}}))
+    }
+    fn call(cid: &str, name: &str, inp: Value, sec: u32, mid: &str) -> Map<String, Value> {
+        call_full(cid, name, inp, sec, mid, json!({}), false)
+    }
+    fn result_full(cid: &str, sec: u32, tur: Value, text: &str) -> Map<String, Value> {
+        m(json!({"type": "user", "timestamp": ts(sec), "toolUseResult": tur,
+                 "message": {"role": "user", "content": [
+                     {"type": "tool_result", "tool_use_id": cid, "content": text}]}}))
+    }
+    fn result(cid: &str, sec: u32, tur: Value) -> Map<String, Value> {
+        result_full(cid, sec, tur, "ok")
+    }
+    fn note(task_id: &str, status: &str, sec: u32, queued: bool) -> Map<String, Value> {
+        let text = format!(
+            "<task-notification>\n<task-id>{task_id}</task-id>\n<status>{status}</status>\n\
+             <summary>done</summary>\n</task-notification>"
+        );
+        if queued {
+            m(json!({"type": "attachment", "timestamp": ts(sec),
+                     "attachment": {"type": "queued_command", "prompt": text}}))
+        } else {
+            m(json!({"type": "user", "timestamp": ts(sec), "message": {"role": "user", "content": text}}))
+        }
+    }
+    fn run(entries: &[Map<String, Value>], now: f64) -> Value {
+        let mut f = Fold::new();
+        f.feed(entries);
+        f.summary(now)
+    }
+    fn run_(entries: &[Map<String, Value>]) -> Value {
+        run(entries, AT0 + 200.0)
+    }
+    fn ids(list: &Value, key: &str) -> Vec<String> {
+        list.as_array().unwrap().iter().map(|x| x[key].as_str().unwrap().to_string()).collect()
+    }
+    fn f(v: &Value) -> f64 {
+        v.as_f64().unwrap()
+    }
+
+    // class Background
+
+    #[test]
+    fn a_backgrounded_command_runs_until_its_notification() {
+        let mut e = vec![
+            call("c1", "Bash", json!({"command": "make", "description": "build it"}), 0, "m1"),
+            result("c1", 1, json!({"backgroundTaskId": "b1"})),
+        ];
+        let got = run_(&e);
+        let shells = got["shells"].as_array().unwrap();
+        assert_eq!(shells.len(), 1);
+        assert_eq!((shells[0]["id"].as_str(), shells[0]["label"].as_str()), (Some("b1"), Some("build it")));
+        e.push(note("b1", "completed", 100, false));
+        assert_eq!(run_(&e)["shells"], json!([]));
+    }
+
+    #[test]
+    fn a_notification_that_lands_mid_turn_counts() {
+        let e = vec![
+            call("c1", "Bash", json!({"command": "x"}), 0, "m1"),
+            result("c1", 1, json!({"backgroundTaskId": "b1"})),
+            note("b1", "failed", 100, true),
+        ];
+        assert_eq!(run_(&e)["shells"], json!([]));
+    }
+
+    #[test]
+    fn a_monitor_ends_at_its_timeout_or_on_task_stop() {
+        let mut e = vec![
+            call("c1", "Monitor", json!({"description": "watch log"}), 0, "m1"),
+            result("c1", 1, json!({"taskId": "mon", "timeoutMs": 300000, "persistent": false})),
+        ];
+        let got = run_(&e);
+        assert_eq!(f(&got["monitors"][0]["expires"]), AT0 + 1.0 + 300.0);
+        assert_eq!(run(&e, AT0 + 400.0)["monitors"], json!([]));
+        e.push(call("c2", "TaskStop", json!({"task_id": "mon"}), 50, "m2"));
+        e.push(result("c2", 51, json!({"task_id": "mon", "message": "stopped"})));
+        assert_eq!(run_(&e)["monitors"], json!([]));
+    }
+
+    #[test]
+    fn a_persistent_monitor_has_no_end() {
+        let e = vec![
+            call("c1", "Monitor", json!({}), 0, "m1"),
+            result("c1", 1, json!({"taskId": "m", "timeoutMs": 1000, "persistent": true})),
+        ];
+        assert_eq!(run(&e, AT0 + 99999.0)["monitors"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_monitor_event_is_not_its_end() {
+        let e = vec![
+            call("c1", "Monitor", json!({}), 0, "m1"),
+            result("c1", 1, json!({"taskId": "m", "timeoutMs": 10_000_000})),
+            m(json!({"type": "user", "timestamp": ts(5), "message": {"role": "user", "content":
+                "<task-notification>\n<task-id>m</task-id>\n<summary>Monitor event</summary>\n\
+                 <event>line</event>\n</task-notification>"}})),
+        ];
+        assert_eq!(run_(&e)["monitors"].as_array().unwrap().len(), 1);
+    }
+
+    /// Shapes copied from real transcripts (Claude Code 2.1.29x).
+    fn wake(cid: &str, sec: u32, tur: Value, inp: Option<Value>) -> Vec<Map<String, Value>> {
+        let inp = inp.unwrap_or_else(|| json!({"delaySeconds": 1200, "reason": "watching CI", "prompt": "/babysit"}));
+        vec![call(cid, "ScheduleWakeup", inp, sec, cid), result(cid, sec + 1, tur)]
+    }
+
+    #[test]
+    fn a_wakeup_is_pending_until_it_fires() {
+        let e = wake("w1", 0, json!({"scheduledFor": (AT0 + 1200.0) * 1000.0, "clampedDelaySeconds": 1200, "wasClamped": false}), None);
+        let got = run_(&e);
+        let w = got["wakeups"].as_array().unwrap();
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0]["id"].as_str(), w[0]["label"].as_str()), (Some("wakeup"), Some("watching CI")));
+        assert_eq!(f(&w[0]["fires_at"]), AT0 + 1200.0);
+        assert_eq!(run(&e, AT0 + 1201.0)["wakeups"], json!([]));
+    }
+
+    #[test]
+    fn a_new_wakeup_replaces_the_last_and_stop_cancels_it() {
+        let mut e = wake("w1", 0, json!({"scheduledFor": (AT0 + 1200.0) * 1000.0}), None);
+        e.extend(wake("w2", 10, json!({"scheduledFor": (AT0 + 600.0) * 1000.0}), None));
+        let fires: Vec<f64> = run_(&e)["wakeups"].as_array().unwrap().iter().map(|w| f(&w["fires_at"])).collect();
+        assert_eq!(fires, vec![AT0 + 600.0]);
+        e.extend(wake("w3", 20, json!({"scheduledFor": 0, "stopped": true, "cancelledWakeups": 1}), Some(json!({"stop": true}))));
+        assert_eq!(run_(&e)["wakeups"], json!([]));
+        e.extend(wake("w4", 30, json!({"scheduledFor": (AT0 + 900.0) * 1000.0}), None));
+        assert_eq!(run_(&e)["wakeups"].as_array().unwrap().len(), 1);
+    }
+
+    fn cron(cid: &str, recurring: bool) -> Vec<Map<String, Value>> {
+        vec![
+            call(cid, "CronCreate", json!({"cron": "0 15 20 10 *", "recurring": recurring, "prompt": "write the summary"}), 0, cid),
+            result(cid, 1, json!({"id": "197ff261", "humanSchedule": "0 15 20 10 *", "recurring": recurring,
+                                  "durable": false, "nextFireAt": (AT0 + 500.0) * 1000.0})),
+        ]
+    }
+
+    #[test]
+    fn a_one_shot_cron_ends_when_it_fires() {
+        let e = cron("c1", false);
+        let got = run_(&e);
+        let w = got["wakeups"].as_array().unwrap();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0]["label"], "write the summary");
+        assert_eq!(f(&w[0]["fires_at"]), AT0 + 500.0);
+        assert_eq!(run(&e, AT0 + 501.0)["wakeups"], json!([]));
+    }
+
+    #[test]
+    fn a_recurring_cron_lasts_until_deleted() {
+        let mut e = cron("c1", true);
+        assert_eq!(run(&e, AT0 + 99999.0)["wakeups"].as_array().unwrap().len(), 1);
+        e.push(call("c2", "CronDelete", json!({"id": "197ff261"}), 50, "m2"));
+        e.push(result_full("c2", 51, Value::Null, "Cancelled job 197ff261."));
+        assert_eq!(run_(&e)["wakeups"], json!([]));
+    }
+
+    #[test]
+    fn background_and_foreground_subagents() {
+        let mut e = vec![
+            call("a1", "Agent", json!({"description": "research"}), 0, "m1"),
+            result("a1", 1, json!({"status": "async_launched", "agentId": "ag1", "description": "research", "resolvedModel": "sonnet"})),
+            call("a2", "Agent", json!({"description": "inline"}), 2, "m2"),
+        ];
+        let got = run_(&e);
+        let mut seen: Vec<(String, bool)> = got["agents"].as_array().unwrap().iter()
+            .map(|a| (a["label"].as_str().unwrap().to_string(), truthy(a.get("foreground"))))
+            .collect();
+        seen.sort();
+        assert_eq!(seen, vec![("inline".to_string(), true), ("research".to_string(), false)]);
+        e.push(note("ag1", "completed", 100, false));
+        assert_eq!(run_(&e)["agents"][0]["label"], "inline");
+    }
+
+    fn mate_says(name: &str, body: &str, sec: u32) -> Map<String, Value> {
+        let text = format!(
+            "Another Claude session sent a message:\n<teammate-message teammate_id=\"{name}\" \
+             color=\"blue\">\n{body}\n</teammate-message>\n\nThis came from another Claude \
+             session - not typed by your user."
+        );
+        m(json!({"type": "user", "timestamp": ts(sec), "message": {"role": "user", "content": text}}))
+    }
+
+    #[test]
+    fn a_teammate_runs_until_idle_and_again_when_messaged() {
+        let spawned = json!({"status": "teammate_spawned", "agentId": "waiter-1-abc", "name": "waiter-1",
+                             "resolvedModel": "claude-haiku-5-5", "color": "blue"});
+        let mut e = vec![
+            call("a1", "Agent", json!({"description": "Wait 30s then OK", "name": "waiter-1"}), 0, "m1"),
+            result_full("a1", 1, spawned, "Spawned successfully."),
+        ];
+        let got = run_(&e);
+        // Its call returned at once, but it is working: not finished, running.
+        let a = &got["agents"][0];
+        assert_eq!(got["agents"].as_array().unwrap().len(), 1);
+        assert_eq!((a["id"].as_str(), a["teammate"].as_str(), a["label"].as_str()),
+                   (Some("waiter-1-abc"), Some("waiter-1"), Some("Wait 30s then OK")));
+        assert_eq!(got["idle_agents"], json!([]));
+        assert!(got["finished"].as_array().unwrap().iter().all(|x| x["kind"] != "agents"));
+        let idle = r#"{"type":"idle_notification","from":"waiter-1","idleReason":"available","result":"OK"}"#;
+        e.push(mate_says("waiter-1", idle, 20));
+        let got = run_(&e);
+        assert_eq!(got["agents"], json!([]));
+        assert_eq!(got["idle_agents"].as_array().unwrap().len(), 1);
+        assert_eq!(got["idle_agents"][0]["id"], "waiter-1-abc");
+        assert_eq!(f(&got["idle_agents"][0]["idle_since"]), AT0 + 20.0);
+        // A message to it sets it working; a plain message from it does not idle it.
+        e.push(call("s1", "SendMessage", json!({"to": "waiter-1", "message": "again"}), 30, "m2"));
+        e.push(result("s1", 31, Value::Null));
+        e.push(mate_says("waiter-1", "still on it", 40));
+        let got = run_(&e);
+        assert_eq!(ids(&got["agents"], "id"), vec!["waiter-1-abc"]);
+        assert_eq!(got["idle_agents"], json!([]));
+        // Stopped by name: gone, and listed as stopped.
+        e.push(call("k1", "TaskStop", json!({"task_id": "waiter-1"}), 50, "m3"));
+        e.push(result("k1", 51, json!({"task_id": "waiter-1"})));
+        let got = run_(&e);
+        assert_eq!((&got["agents"], &got["idle_agents"]), (&json!([]), &json!([])));
+        let fin: Vec<(String, String)> = got["finished"].as_array().unwrap().iter()
+            .filter(|x| x["kind"] == "agents")
+            .map(|x| (x["id"].as_str().unwrap().to_string(), x["status"].as_str().unwrap().to_string()))
+            .collect();
+        assert_eq!(fin, vec![("waiter-1-abc".to_string(), "stopped".to_string())]);
+    }
+
+    #[test]
+    fn messages_from_unknown_teammates_change_nothing() {
+        let got = run_(&[mate_says("someone", r#"{"type":"idle_notification"}"#, 5)]);
+        assert_eq!((&got["agents"], &got["idle_agents"]), (&json!([]), &json!([])));
+    }
+
+    // class Tokens
+
+    fn u1() -> Value {
+        json!({"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 900,
+               "cache_creation_input_tokens": 90,
+               "cache_creation": {"ephemeral_1h_input_tokens": 90, "ephemeral_5m_input_tokens": 0}})
+    }
+    fn u2() -> Value {
+        json!({"input_tokens": 2, "output_tokens": 7, "cache_read_input_tokens": 990,
+               "cache_creation_input_tokens": 8, "cache_creation": {}})
+    }
+    fn token_entries() -> Vec<Map<String, Value>> {
+        vec![
+            m(json!({"type": "permission-mode", "permissionMode": "auto"})),
+            m(json!({"type": "user", "timestamp": ts(0), "promptId": "p1", "version": "2.1.296",
+                     "gitBranch": "main", "message": {"role": "user", "content": "hi"}})),
+            call_full("c1", "Read", json!({}), 1, "m1", u1(), false),
+            call_full("c2", "Read", json!({}), 1, "m1", u1(), false), // same message, again
+            result("c1", 2, Value::Null),
+            result("c2", 2, Value::Null),
+            call_full("c3", "Read", json!({}), 60, "m2", u2(), false),
+            result("c3", 61, Value::Null),
+            call_full("s1", "Read", json!({}), 70, "side", u1(), true),
+            m(json!({"type": "system", "subtype": "turn_duration", "durationMs": 61000})),
+            m(json!({"type": "system", "subtype": "compact_boundary"})),
+        ]
+    }
+
+    #[test]
+    fn usage_is_counted_once_per_message_across_the_chain() {
+        let got = run(&token_entries(), AT0 + 100.0);
+        assert_eq!(got["tokens"], json!({"input": 22, "output": 17, "cache_read": 2790, "cache_write": 188}));
+    }
+
+    #[test]
+    fn cache_lifetime_and_context_come_from_the_main_chain() {
+        let got = run(&token_entries(), AT0 + 100.0);
+        // The 1h write from m1 still sets the lifetime; the clock runs from m2,
+        // not from the subagent's sidechain message after it.
+        assert_eq!(f(&got["cache"]["ttl"]), 3600.0);
+        assert_eq!(f(&got["cache"]["expires_at"]), AT0 + 60.0 + 3600.0);
+        assert_eq!(got["cache"]["warm"], true);
+        assert_eq!(got["context_tokens"], 1000);
+        assert!((f(&got["cache"]["hit"]) - 0.99).abs() < 1e-7);
+        assert_eq!(run(&token_entries(), AT0 + 5000.0)["cache"]["warm"], false);
+    }
+
+    #[test]
+    fn the_rest_of_the_summary() {
+        let got = run(&token_entries(), AT0 + 100.0);
+        assert_eq!((&got["prompts"], &got["turns"], &got["last_turn_ms"], &got["compactions"]),
+                   (&json!(1), &json!(1), &json!(61000), &json!(1)));
+        assert_eq!((&got["permission_mode"], &got["version"], &got["branch"], &got["model_id"]),
+                   (&json!("auto"), &json!("2.1.296"), &json!("main"), &json!("claude-opus-5-5")));
+        assert_eq!(f(&got["started"]), AT0);
+    }
+
+    // class Folding
+
+    #[test]
+    fn feeding_in_pieces_gives_the_same_answer() {
+        let mut e = token_entries();
+        e.extend([
+            call("c1", "Bash", json!({"command": "make"}), 80, "m3"),
+            result("c1", 81, json!({"backgroundTaskId": "b1"})),
+            call("c2", "Agent", json!({"description": "inline"}), 82, "m4"),
+            call("c3", "Monitor", json!({}), 83, "m5"),
+            result("c3", 84, json!({"taskId": "mon", "timeoutMs": 1_000_000})),
+            note("b1", "completed", 90, false),
+        ]);
+        let whole = run(&e, AT0 + 100.0);
+        for cut in 0..=e.len() {
+            let mut fold = Fold::new();
+            fold.feed(&e[..cut]);
+            fold.feed(&e[cut..]);
+            assert_eq!(fold.summary(AT0 + 100.0), whole, "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn a_line_separator_inside_a_string_does_not_split_the_record() {
+        // JSON leaves U+2028/U+2029 and form feed raw; only "\n" ends a line.
+        let lines = [
+            Value::Object(call("c1", "Bash", json!({"command": "grep"}), 0, "m1")),
+            Value::Object(result_full("c1", 1, Value::Null, "a\u{2028}b\u{2029}c\x0cd\u{85}e")),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        let entries = parse(&text);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(run(&entries, AT0 + 5.0)["shells"], json!([]));
+    }
+
+    #[test]
+    fn answered_calls_are_not_kept() {
+        let mut fold = Fold::new();
+        fold.feed(&[call("c1", "Read", json!({}), 0, "m1"), result("c1", 1, Value::Null)]);
+        assert!(fold.calls.is_empty());
+    }
+
+    // class ReaderTests (what needs no folder)
+
+    #[test]
+    fn unknown_or_malformed_id() {
+        let r = Reader::new();
+        assert!(r.read("../../etc/passwd", AT0).is_none());
+        assert!(transcript_path("../../etc/passwd").is_none());
+    }
+
+    // class StatuslineExtras
+
+    #[test]
+    fn statusline_durations_and_lines_are_kept_when_sent() {
+        let payload = m(json!({"cost": {"total_cost_usd": 1.5, "total_duration_ms": 9000,
+                                        "total_api_duration_ms": 4000,
+                                        "total_lines_added": 12, "total_lines_removed": 3}}));
+        let got = crate::usage::reading(&payload);
+        // Numbers compare as Python's == does: 9000.0 is 9000.
+        let nums: Vec<f64> = ["duration_ms", "api_duration_ms", "lines_added", "lines_removed"]
+            .iter().map(|k| got[*k].as_f64().unwrap()).collect();
+        assert_eq!(nums, vec![9000.0, 4000.0, 12.0, 3.0]);
+        assert!(crate::usage::reading(&Map::new())["lines_added"].is_null());
+    }
+}

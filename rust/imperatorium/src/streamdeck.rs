@@ -721,3 +721,321 @@ mod tests {
         assert!(!s.flashing());
     }
 }
+
+/// test_streamdeck.py, ported: layout, labelling, state mapping, flashing,
+/// decisions and the desktop-app glyph.
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+
+    fn row(cwd: &str, extra: Value) -> Row {
+        let mut r = json!({"sessionId": format!("s-{cwd}"), "cwd": cwd, "status": "idle"})
+            .as_object().unwrap().clone();
+        for (k, v) in extra.as_object().unwrap() {
+            r.insert(k.clone(), v.clone());
+        }
+        r
+    }
+
+    fn by_path() -> HashMap<String, String> {
+        [("Y:/projects-software/laser-ledger", "laser-ledger"),
+         ("Y:/projects-software/gem-trip", "gem-trip"),
+         ("Y:/projects-software/amarantha", "amarantha")]
+            .iter()
+            .map(|(p, n)| (crate::paths::abs_normcase(p).unwrap(), n.to_string()))
+            .collect()
+    }
+
+    fn names(slots: &[Slot]) -> Vec<&str> {
+        slots.iter().map(|s| s.project.as_str()).collect()
+    }
+
+    fn pinned(p: &[&str]) -> Vec<String> {
+        p.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn st(v: Value) -> &'static str {
+        state_for(Some(v.as_object().unwrap()))
+    }
+
+    // -- Labels -------------------------------------------------------------
+
+    #[test]
+    fn hyphens_become_word_breaks() {
+        assert_eq!(wrap("laser-ledger", 9), ["laser", "ledger"]);
+    }
+
+    #[test]
+    fn long_single_word_is_truncated_with_an_ellipsis() {
+        let lines = wrap("bookoferrantpages", 9);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_with('\u{2026}'));
+        assert!(lines[0].chars().count() <= 9);
+    }
+
+    #[test]
+    fn never_more_than_three_lines() {
+        assert!(wrap("a b c d e f g h i j k", 9).len() <= 3);
+        assert!(wrap("aaaaaaaa bbbbbbbb cccccccc dddddddd eeeeeeee", 9).len() <= 3);
+    }
+
+    #[test]
+    fn empty_label_still_returns_a_line() {
+        assert_eq!(wrap("", 9).len(), 1);
+    }
+
+    // -- States -------------------------------------------------------------
+
+    #[test]
+    fn no_session_is_none() {
+        assert_eq!(state_for(None), "none");
+    }
+
+    #[test]
+    fn attention_outranks_busy() {
+        assert_eq!(st(json!({"status": "busy", "attention": true})), "blocked");
+    }
+
+    #[test]
+    fn busy_and_working_both_read_as_working() {
+        assert_eq!(st(json!({"status": "busy"})), "working");
+        assert_eq!(st(json!({"state": "working"})), "working");
+    }
+
+    #[test]
+    fn idle_with_nothing_is_ready() {
+        assert_eq!(st(json!({"status": "idle"})), "ready");
+    }
+
+    #[test]
+    fn idle_waiting_on_a_background_task_is_tasks() {
+        assert_eq!(st(json!({"status": "idle", "background_tasks": 1})), "tasks");
+        assert_eq!(st(json!({"status": "idle", "waiting_tasks": 2})), "tasks");
+    }
+
+    #[test]
+    fn complete_is_its_own_colour() {
+        assert_eq!(st(json!({"attention": true, "attention_kind": "complete"})), "complete");
+    }
+
+    #[test]
+    fn finished_background_job_is_not_shown_as_live() {
+        assert_eq!(st(json!({"state": "done"})), "none");
+    }
+
+    // -- Layout -------------------------------------------------------------
+
+    #[test]
+    fn pinned_keys_keep_their_position() {
+        let s = Surface::new(15, pinned(&["laser-ledger", "gem-trip"]));
+        let slots = s.layout(&[row("Y:/projects-software/amarantha", json!({}))], &by_path());
+        assert_eq!(names(&slots), ["laser-ledger", "gem-trip", "amarantha"]);
+        assert!(slots[0].row.is_none());
+    }
+
+    #[test]
+    fn unpinned_blocked_project_sorts_ahead_of_other_extras() {
+        let s = Surface::new(15, vec![]);
+        let slots = s.layout(&[row("Y:/projects-software/amarantha", json!({})),
+                               row("Y:/projects-software/gem-trip", json!({"attention": true}))], &by_path());
+        assert_eq!(slots[0].project, "gem-trip");
+    }
+
+    #[test]
+    fn order_is_capped_at_the_key_count() {
+        let s = Surface::new(2, pinned(&["a", "b", "c", "d"]));
+        assert_eq!(s.layout(&[], &by_path()).len(), 2);
+    }
+
+    #[test]
+    fn every_session_of_a_project_gets_a_key() {
+        let s = Surface::new(15, vec![]);
+        let slots = s.layout(&[row("Y:/projects-software/gem-trip", json!({"sessionId": "late", "startedAt": 2})),
+                               row("Y:/projects-software/gem-trip", json!({"sessionId": "early", "startedAt": 1}))],
+                             &by_path());
+        assert_eq!(slots.iter().map(|sl| sl.id.as_str()).collect::<Vec<_>>(), ["early", "late"]);
+        assert_eq!(slots.iter().map(|sl| sl.count.clone()).collect::<Vec<_>>(),
+                   [Some("1/2".to_string()), Some("2/2".to_string())]);
+    }
+
+    #[test]
+    fn a_lone_session_has_no_counter() {
+        let s = Surface::new(15, vec![]);
+        let slots = s.layout(&[row("Y:/projects-software/gem-trip", json!({}))], &by_path());
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].count, None);
+    }
+
+    #[test]
+    fn pinned_project_expands_in_place() {
+        let s = Surface::new(15, pinned(&["gem-trip", "laser-ledger"]));
+        let slots = s.layout(&[row("Y:/projects-software/gem-trip", json!({"sessionId": "a"})),
+                               row("Y:/projects-software/gem-trip", json!({"sessionId": "b"}))], &by_path());
+        assert_eq!(names(&slots), ["gem-trip", "gem-trip", "laser-ledger"]);
+    }
+
+    #[test]
+    fn open_sessions_beat_pinned_projects_with_none() {
+        let s = Surface::new(3, pinned(&["laser-ledger", "amarantha"]));
+        let slots = s.layout(&[row("Y:/projects-software/gem-trip", json!({"sessionId": "a"})),
+                               row("Y:/projects-software/gem-trip", json!({"sessionId": "b"}))], &by_path());
+        assert_eq!(names(&slots), ["laser-ledger", "gem-trip", "gem-trip"]);
+        assert!(slots[1..].iter().all(|sl| sl.row.is_some()));
+    }
+
+    #[test]
+    fn finished_and_remote_sessions_get_no_key() {
+        let s = Surface::new(15, vec![]);
+        let slots = s.layout(&[row("Y:/projects-software/gem-trip", json!({"status": null, "state": "done"})),
+                               row("Y:/projects-software/amarantha", json!({"remote": true}))], &by_path());
+        assert!(slots.is_empty());
+    }
+
+    #[test]
+    fn sessions_outside_the_catalogue_are_named_by_folder() {
+        let s = Surface::new(15, vec![]);
+        let slots = s.layout(&[row("C:/somewhere/else", json!({}))], &by_path());
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].label, "else");
+    }
+
+    #[test]
+    fn a_press_on_an_empty_slot_does_nothing() {
+        let s = Surface::new(15, vec![]);
+        assert_eq!(s.press(7, 0.0), None); // no slots: no API call
+    }
+
+    #[test]
+    fn a_press_on_a_session_focuses_it() {
+        let mut s = Surface::new(15, vec![]);
+        s.slots = s.layout(&[row("Y:/projects-software/gem-trip", json!({"sessionId": "x"}))], &by_path());
+        let (path, payload) = s.press(0, 0.0).unwrap();
+        assert_eq!(path, "/api/focus");
+        assert_eq!(payload, json!({"project": "gem-trip", "session_id": "x"}));
+    }
+
+    #[test]
+    fn worktree_session_shares_its_projects_key() {
+        let wt = "Y:/projects-software/gem-trip/.claude/worktrees/lark";
+        let mut paths = by_path();
+        paths.insert(crate::paths::abs_normcase(wt).unwrap(), "lark".into());
+        let s = Surface::new(15, pinned(&["gem-trip"]));
+        let slots = s.layout(&[row("Y:/projects-software/gem-trip", json!({"startedAt": 1})),
+                               row(wt, json!({"startedAt": 2, "project": "gem-trip", "worktree": "lark"}))], &paths);
+        assert_eq!(names(&slots), ["gem-trip", "gem-trip"]);
+        assert_eq!(slots.iter().map(|sl| sl.count.clone()).collect::<Vec<_>>(),
+                   [Some("1/2".to_string()), Some("2/2".to_string())]);
+    }
+
+    // -- Flash --------------------------------------------------------------
+
+    #[test]
+    fn first_sight_does_not_flash() {
+        let mut s = Surface::new(15, vec![]);
+        assert_eq!(s.flash_state("a", "idle", 0.0), "idle");
+        assert!(!s.flashing());
+    }
+
+    #[test]
+    fn a_change_alternates_new_and_old_then_settles() {
+        let mut s = Surface::new(15, vec![]);
+        s.flash_state("a", "working", 0.0);
+        let seen: Vec<String> = [10.0, 10.3, 10.6, 11.1, 14.9].iter().map(|t| s.flash_state("a", "idle", *t)).collect();
+        assert_eq!(seen, ["idle", "idle", "working", "idle", "working"]);
+        assert!(s.flashing());
+        assert_eq!(s.flash_state("a", "idle", 15.0), "idle");
+        assert!(!s.flashing());
+    }
+
+    #[test]
+    fn a_change_mid_flash_restarts_from_the_shown_state() {
+        let mut s = Surface::new(15, vec![]);
+        s.flash_state("a", "working", 0.0);
+        s.flash_state("a", "idle", 1.0);
+        assert_eq!(s.flash_state("a", "blocked", 2.0), "blocked");
+        assert_eq!(s.flash_state("a", "blocked", 2.6), "idle");
+    }
+
+    // -- Decisions ----------------------------------------------------------
+
+    fn pending() -> Vec<Value> {
+        vec![json!({"id": "a1", "tool": "Bash", "cwd": "Y:/p/gem-trip"}),
+             json!({"id": "b2", "tool": "Edit", "cwd": "Y:/p/amarantha"})]
+    }
+
+    #[test]
+    fn no_pending_leaves_every_key_to_projects() {
+        let mut s = Surface::new(15, vec![]);
+        s.set_decision(&[], 0.0);
+        assert_eq!(s.project_keys(), 15);
+        assert_eq!(s.decision_slot(14), None);
+    }
+
+    #[test]
+    fn pending_takes_the_last_three_keys() {
+        let mut s = Surface::new(15, vec![]);
+        s.set_decision(&pending(), 100.0);
+        assert_eq!(s.project_keys(), 12);
+        let slots: Vec<_> = (11..=14).map(|k| s.decision_slot(k)).collect();
+        assert_eq!(slots, [None, Some("info"), Some("allow"), Some("deny")]);
+        assert_eq!(s.decision.as_ref().unwrap()["id"], "a1"); // oldest first
+    }
+
+    #[test]
+    fn a_press_before_the_key_is_armed_does_nothing() {
+        let mut s = Surface::new(15, vec![]);
+        s.set_decision(&pending(), 100.0);
+        assert_eq!(s.decide_press(13, 100.2), None);
+        assert_eq!(s.decide_press(13, 101.5), Some(json!({"id": "a1", "verdict": "allow", "who": "streamdeck"})));
+        assert_eq!(s.decide_press(14, 101.5).unwrap()["verdict"], "deny");
+    }
+
+    #[test]
+    fn the_info_key_never_decides() {
+        let mut s = Surface::new(15, vec![]);
+        s.set_decision(&pending(), 100.0);
+        assert_eq!(s.decide_press(12, 200.0), None);
+    }
+
+    #[test]
+    fn a_new_request_rearms_the_keys() {
+        // The next request replacing the answered one must not inherit the
+        // old arm time, or a double press would answer both.
+        let mut s = Surface::new(15, vec![]);
+        s.set_decision(&pending(), 100.0);
+        s.set_decision(&pending()[1..], 105.0);
+        assert_eq!(s.decide_press(13, 105.3), None);
+        assert_eq!(s.decide_press(13, 106.5).unwrap()["id"], "b2");
+    }
+
+    #[test]
+    fn the_same_request_keeps_its_arm_time() {
+        let mut s = Surface::new(15, vec![]);
+        s.set_decision(&pending(), 100.0);
+        s.set_decision(&pending(), 103.0);
+        assert!(s.decide_press(13, 103.1).is_some());
+    }
+
+    #[test]
+    fn layout_shrinks_while_a_decision_shows() {
+        let many: Vec<String> = (0..15).map(|i| format!("p{i}")).collect();
+        let mut s = Surface::new(15, many);
+        s.set_decision(&pending(), 0.0);
+        assert_eq!(s.layout(&[], &HashMap::new()).len(), 12);
+    }
+
+    // -- The desktop-app glyph ----------------------------------------------
+
+    #[test]
+    fn glyph_marks_the_top_left_corner_only() {
+        let fonts = Fonts { font: None };
+        let look: Look = (String::new(), "working".into(), None, true, None);
+        let img = render(&fonts, (72, 72), &look).to_rgb8();
+        let (bg, fg) = colours("working");
+        assert_eq!(img.get_pixel(5, 5).0, fg);
+        assert_eq!(img.get_pixel(60, 60).0, bg);
+        // Without the flag the corner is plain background.
+        let plain: Look = (String::new(), "working".into(), None, false, None);
+        assert_eq!(render(&fonts, (72, 72), &plain).to_rgb8().get_pixel(5, 5).0, bg);
+    }
+}

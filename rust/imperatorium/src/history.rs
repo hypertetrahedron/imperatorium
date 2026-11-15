@@ -339,3 +339,92 @@ mod tests {
         assert_eq!(snippet("nothing", "absent"), "");
     }
 }
+
+/// Ported from the Python suite (test_features.py `Matches`, `IndexTests`).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn rec(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    fn row(sid: &str, title: &str, modified: f64) -> Map<String, Value> {
+        rec(json!({"session_id": sid, "title": title, "first_prompt": "", "cwd": "",
+                   "modified": modified, "size": 1}))
+    }
+
+    /// An index whose listing is already taken (so the transcripts on this
+    /// machine are never read).
+    fn index_of(rows: Vec<Map<String, Value>>) -> Index {
+        let idx = Index::new();
+        *idx.listed.lk() = Some((Instant::now(), Arc::new(rows)));
+        idx
+    }
+
+    #[test]
+    fn features_a_body_match_needs_the_text_and_an_empty_query_matches_nothing() {
+        let r = rec(json!({"title": "session 4", "first_prompt": "", "cwd": ""}));
+        assert_eq!(matches("leaky", &r, ""), None);
+        assert_eq!(matches("leaky", &r, "a leaky pipe"), Some("text"));
+        assert_eq!(matches("", &rec(json!({"title": "x"})), ""), None);
+    }
+
+    #[test]
+    fn features_the_text_is_cached_by_size_and_rebuilt_when_it_changes() {
+        let idx = Index::new();
+        let calls = std::cell::RefCell::new(Vec::<String>::new());
+        let read = |sid: &str| {
+            calls.borrow_mut().push(sid.to_string());
+            Some("hello world".to_string())
+        };
+        let r = rec(json!({"session_id": "s1", "size": 10}));
+        assert!(idx.text(&r, &read).contains("hello"));
+        idx.text(&r, &read);
+        assert_eq!(*calls.borrow(), vec!["s1"]); // same size, no re-read
+        idx.text(&rec(json!({"session_id": "s1", "size": 20})), &read);
+        assert_eq!(*calls.borrow(), vec!["s1", "s1"]); // size changed, re-read
+    }
+
+    #[test]
+    fn features_a_cached_listing_is_not_taken_again() {
+        let idx = index_of(vec![row("a", "x", 1.0), row("b", "y", 5.0)]);
+        let first = idx.list();
+        let second = idx.list();
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn features_search_title_match_reads_no_transcript() {
+        let idx = index_of(vec![row("s1", "Raspberry Pi tunnel", 1.0)]);
+        let reads = std::cell::RefCell::new(0);
+        let read = |_: &str| {
+            *reads.borrow_mut() += 1;
+            Some(String::new())
+        };
+        let got = idx.search("tunnel", 50, &read);
+        assert_eq!(got["results"].as_array().unwrap().len(), 1);
+        assert_eq!(got["results"][0]["where"], "title");
+        assert_eq!(*reads.borrow(), 0);
+    }
+
+    #[test]
+    fn features_search_falls_back_to_full_text() {
+        let idx = index_of(vec![row("s1", "session 9", 1.0)]);
+        let read = |_: &str| Some("a leaky pipe here".to_string());
+        let got = idx.search("leaky", 50, &read);
+        assert_eq!(got["results"].as_array().unwrap().len(), 1);
+        assert_eq!(got["results"][0]["where"], "text");
+        assert!(got["results"][0]["snippet"].as_str().unwrap().contains("leaky"));
+        assert_eq!(got["complete"], true);
+    }
+
+    #[test]
+    fn features_an_empty_query_returns_the_plain_list() {
+        let idx = index_of(vec![row("s1", "session 9", 1.0)]);
+        let read = |_: &str| Some(String::new());
+        let got = idx.search("", 50, &read);
+        assert_eq!(got["complete"], true);
+        assert_eq!(got["results"][0]["where"], Value::Null);
+    }
+}

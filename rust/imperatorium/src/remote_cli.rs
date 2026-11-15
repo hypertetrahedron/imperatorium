@@ -724,3 +724,69 @@ mod tests {
         assert_eq!(check_rows(&f, true)[1].2, "not found");
     }
 }
+
+/// test_rename.py: a host from before the rename is noticed.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    #[test]
+    fn a_host_from_before_the_rename_is_noticed() {
+        let f = parse_probe("home=/home/les\nlegacy=ok\n");
+        assert!(f.legacy);
+        assert_eq!(f.home, "/home/les");
+        assert!(!parse_probe("home=/home/les\n").legacy);
+    }
+}
+
+/// What test_setup.py pinned down for `remote add` that remote_cli's own
+/// tests leave open.
+#[cfg(test)]
+mod setup_cov {
+    use super::*;
+
+    #[test]
+    fn the_probe_is_one_posix_script_that_does_not_depend_on_path() {
+        // A non-interactive ssh session on Ubuntu never reaches the PATH line in .bashrc.
+        assert!(PROBE.contains("$HOME/.local/bin/claude"));
+        assert!(PROBE.contains("$HOME/.claude/imperatorium/bin/imperatorium"));
+        assert!(!PROBE.contains("claude_agent_sdk"), "the Agent SDK is not needed on a host any more");
+    }
+
+    #[test]
+    fn re_adding_a_host_replaces_it_keeps_its_own_keys_and_does_not_alias() {
+        let base = json!({"remote": {"enabled": true, "hosts": [
+            "plain",
+            {"name": "pi", "claude": "/old", "label": "raspberry", "reader_python": "/x/python", "tunnel": {"local_port": 8801}}]}});
+        let (cfg, how) = upsert_host(&base, &host_entry("pi", Some("$HOME/.local/bin/claude"), None, true));
+        assert_eq!(how, "replaced");
+        let pi = &cfg["remote"]["hosts"][1];
+        assert_eq!(pi["claude"], json!("$HOME/.local/bin/claude"));
+        assert_eq!(pi["label"], json!("raspberry"));
+        assert_eq!(pi["reader_python"], json!("/x/python"));
+        assert_eq!(pi["tunnel"], json!({"local_port": 8801}));
+        assert_eq!(cfg["remote"]["hosts"][0], json!("plain"));
+        assert_eq!(base["remote"]["hosts"][1]["claude"], json!("/old"));
+    }
+
+    #[test]
+    fn removing_a_host_keeps_the_others_in_order() {
+        let base = json!({"remote": {"hosts": ["a", {"name": "b"}, {"name": "c"}]}});
+        let (cfg, changed) = remove_host(&base, "b");
+        assert!(changed);
+        assert_eq!(cfg["remote"]["hosts"], json!(["a", {"name": "c"}]));
+        assert!(!remove_host(&cfg, "zzz").1);
+        assert!(remove_host(&cfg, "a").1);
+    }
+
+    #[test]
+    fn a_config_written_by_onboarding_is_read_by_the_dispatcher() {
+        let example: Value = serde_json::from_str(include_str!("../../../config.example.json")).unwrap();
+        let (cfg, _) = upsert_host(&example, &host_entry("pi.local", Some("$HOME/.local/bin/claude"), Some("pi"), true));
+        let hosts = remote::load_hosts(&cfg);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].label, "pi");
+        assert_eq!(hosts[0].name, "pi.local");
+        assert_eq!(hosts[0].tunnel.map(|t| t.0), Some(remote::FIRST_TUNNEL_PORT));
+    }
+}

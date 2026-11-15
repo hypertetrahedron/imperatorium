@@ -121,3 +121,91 @@ mod tests {
         }
     }
 }
+
+/// test_core.py's InboxFrames: what `send` refuses before connecting, and
+/// that the pipe is opened for writing only.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_content_is_refused_before_connecting() {
+        // The socket does not exist: were it tried, the error would say so.
+        let err = send("no-such-socket", Some("tok"), &"a".repeat(MAX_CONTENT + 1)).unwrap_err();
+        assert_eq!(err, format!("content is {} chars; the cap is {MAX_CONTENT}", MAX_CONTENT + 1));
+        // Exactly the cap is not refused for its size (it fails later, on the socket).
+        let err = send("no-such-socket", Some("tok"), &"a".repeat(MAX_CONTENT)).unwrap_err();
+        assert!(!err.contains("the cap is"), "{err}");
+    }
+
+    #[test]
+    fn empty_content_is_refused_whatever_the_blanks() {
+        for bad in ["", " ", "\n\t "] {
+            assert_eq!(
+                send("x", Some("t"), bad).unwrap_err(),
+                "content must be a non-empty string",
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// The default pipe DACL grants others read only; asking for read as
+    /// well as write is never needed and can be what a policy refuses. A
+    /// pipe whose server is write-only-for-clients (PipeDirection.In) is
+    /// opened only by a client that asks for nothing but write.
+    #[cfg(windows)]
+    #[test]
+    fn pipe_is_opened_write_only() {
+        let name = format!("imp-core-inbox-{}", std::process::id());
+        let out = std::env::temp_dir().join(format!("{name}.bin"));
+        let _ = std::fs::remove_file(&out);
+        let script = format!(
+            "$s = New-Object System.IO.Pipes.NamedPipeServerStream('{name}', 'In', 1); \
+             $s.WaitForConnection(); $m = New-Object System.IO.MemoryStream; $s.CopyTo($m); \
+             [System.IO.File]::WriteAllBytes('{}', $m.ToArray()); $s.Dispose()",
+            out.display()
+        );
+        let mut server = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start powershell");
+        let path = format!(r"\\.\pipe\{name}");
+        // Until the pipe exists, opening it fails and nothing is consumed.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut last = String::new();
+        let mut sent = false;
+        while std::time::Instant::now() < end {
+            match send(&path, Some("tok"), "caf\u{e9} \u{2014} done") {
+                Ok(()) => {
+                    sent = true;
+                    break;
+                }
+                Err(e) => last = e,
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(sent, "never delivered: {last}");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !out.exists() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let got = std::fs::read(&out).expect("the server saved what it read");
+        let _ = server.wait();
+        let _ = std::fs::remove_file(&out);
+        assert_eq!(got, frames(Some("tok"), "caf\u{e9} \u{2014} done"));
+    }
+
+    /// An open that is refused names the usual cause, the session running
+    /// elevated. A directory cannot be opened for writing: access denied.
+    #[cfg(windows)]
+    #[test]
+    fn an_access_denied_names_the_elevated_session() {
+        let temp = std::env::temp_dir();
+        let dir = format!(r"\\?\{}", temp.display()).trim_end_matches('\\').to_string();
+        let err = write(&dir, b"x\n").unwrap_err();
+        assert!(err.contains("elevated"), "{err}");
+    }
+}

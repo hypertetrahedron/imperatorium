@@ -433,3 +433,216 @@ mod tests {
         assert!(Store::open(&crate::paths::state_dir().join("state.json")).is_err());
     }
 }
+
+/// test_core.py's StoreState, Reviewed.test_store_keeps_when and
+/// AttentionBookkeeping.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    struct Dir(PathBuf);
+    impl Dir {
+        fn new(label: &str) -> Dir {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let d = std::env::temp_dir().join(format!("imp-store-core-{label}-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).unwrap();
+            Dir(d)
+        }
+        fn state(&self) -> PathBuf {
+            self.0.join("state.json")
+        }
+    }
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn meta(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn reviewed_keeps_when() {
+        let d = Dir::new("reviewed");
+        let s = Store::open(&d.state()).unwrap();
+        s.mark_reviewed("a", 123.0);
+        let again = Store::open(&d.state()).unwrap();
+        assert_eq!(again.reviewed()["a"], json!(123.0));
+        assert_eq!(again.reviewed().len(), 1);
+    }
+
+    #[test]
+    fn register_merges_and_ignores_none() {
+        let d = Dir::new("register");
+        let s = Store::open(&d.state()).unwrap();
+        s.register("sid", Some(&json!("t")), &meta(json!({"cwd": "C:/x", "name": "first"})));
+        s.register("sid", None, &meta(json!({"cwd": null, "name": "second"})));
+        let rec = s.session("sid").unwrap();
+        assert_eq!(rec["cwd"], "C:/x");
+        assert_eq!(rec["name"], "second");
+        assert_eq!(s.snapshot()["tokens"]["sid"], "t");
+    }
+
+    #[test]
+    fn clear_attention_removes_the_key_and_tolerates_strangers() {
+        let d = Dir::new("clear");
+        let s = Store::open(&d.state()).unwrap();
+        s.register("sid", None, &meta(json!({"attention_since": 123.0})));
+        s.clear_attention("sid");
+        assert!(!s.session("sid").unwrap().contains_key("attention_since"));
+        s.clear_attention("unknown-sid"); // must not panic
+        assert!(s.session("unknown-sid").is_none());
+    }
+
+    #[test]
+    fn forget_drops_token_and_record() {
+        let d = Dir::new("forget");
+        let s = Store::open(&d.state()).unwrap();
+        s.register("sid", Some(&json!("t")), &Map::new());
+        s.forget("sid");
+        let snap = s.snapshot();
+        assert!(snap["tokens"].as_object().unwrap().is_empty());
+        assert!(snap["sessions"].as_object().unwrap().is_empty());
+        // and the file says so too
+        let reread = Store::open(&d.state()).unwrap().snapshot();
+        assert!(reread["tokens"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn events_are_capped() {
+        let d = Dir::new("events");
+        let s = Store::open(&d.state()).unwrap();
+        for i in 0..520 {
+            s.add_event_json(json!({"kind": format!("e{i}")}));
+        }
+        let events = s.snapshot()["events"].as_array().unwrap().clone();
+        assert_eq!(events.len(), 400);
+        // Stored oldest first (the API reverses them): the newest is last.
+        assert_eq!(events.last().unwrap()["kind"], "e519");
+        assert_eq!(events[0]["kind"], "e120");
+    }
+
+    #[test]
+    fn a_corrupt_state_file_does_not_crash_startup() {
+        let d = Dir::new("corrupt");
+        std::fs::write(d.state(), "{not json").unwrap();
+        let s = Store::open(&d.state()).unwrap();
+        assert!(s.snapshot()["tokens"].as_object().unwrap().is_empty());
+        // and it is usable afterwards
+        s.register("a", Some(&json!("t")), &Map::new());
+        assert_eq!(Store::open(&d.state()).unwrap().snapshot()["tokens"]["a"], "t");
+    }
+
+    #[test]
+    fn repeated_failures_do_not_restart_the_clock() {
+        // Three 529s in four minutes: the age on the tile has to mean
+        // "stuck since", not "failed again just now".
+        let d = Dir::new("failures");
+        let s = Store::open(&d.state()).unwrap();
+        s.raise_attention("sid", "API overloaded - wait and retry", "failure", &Map::new());
+        let first = s.session("sid").unwrap()["attention_since"].clone();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        s.raise_attention("sid", "API unavailable - retry", "failure", &Map::new());
+        let rec = s.session("sid").unwrap();
+        assert_eq!(rec["attention_since"], first);
+        assert_eq!(rec["attention_reason"], "API unavailable - retry");
+        assert_eq!(rec["attention_kind"], "failure");
+    }
+
+    #[test]
+    fn clearing_drops_the_reason_with_the_flag() {
+        let d = Dir::new("clearing");
+        let s = Store::open(&d.state()).unwrap();
+        s.raise_attention("sid", "API overloaded - wait and retry", "failure", &Map::new());
+        s.clear_attention("sid");
+        let rec = s.session("sid").unwrap();
+        for key in ["attention_since", "attention_reason", "attention_kind"] {
+            assert!(!rec.contains_key(key), "{key}");
+        }
+    }
+
+    #[test]
+    fn clearing_keeps_everything_else() {
+        let d = Dir::new("keeps");
+        let s = Store::open(&d.state()).unwrap();
+        s.raise_attention("sid", "why", "failure", &meta(json!({"cwd": "Y:/x"})));
+        s.clear_attention("sid");
+        assert_eq!(s.session("sid").unwrap()["cwd"], "Y:/x");
+    }
+}
+
+/// Ported from the Python suite (test_features.py `QueueStore`).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn open(label: &str) -> (Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("imp-featstore-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        (Store::open(&dir.join("state.json")).unwrap(), dir)
+    }
+
+    fn prompts(q: &[Value]) -> Vec<String> {
+        q.iter().map(|i| i["prompt"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn features_the_queue_is_fifo_and_an_empty_one_leaves_the_map() {
+        let (s, dir) = open("fifo");
+        assert!(s.take_queued("nobody").is_none());
+        s.enqueue("s1", "first", false);
+        s.enqueue("s1", "second", false);
+        assert_eq!(prompts(&s.queued("s1")), ["first", "second"]);
+        assert_eq!(s.take_queued("s1").unwrap()["prompt"], "first");
+        assert_eq!(s.queued("s1").len(), 1);
+        s.take_queued("s1");
+        assert_eq!(s.snapshot()["queue"], json!({}));
+        assert!(s.queued_keys().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn features_requeue_front_puts_it_back_first_with_the_error() {
+        let (s, dir) = open("requeue");
+        s.enqueue("s1", "first", false);
+        let item = s.take_queued("s1").unwrap();
+        s.enqueue("s1", "second", false);
+        s.requeue_front("s1", &item, Some("delivery failed"));
+        let got = s.queued("s1");
+        assert_eq!(got[0]["prompt"], "first");
+        assert_eq!(got[0]["error"], "delivery failed");
+        assert_eq!(got[1]["prompt"], "second");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn features_ids_are_unique_so_unqueue_removes_one_item_by_id() {
+        let (s, dir) = open("unqueue");
+        // Queued back to back, as in one clock tick.
+        let a = s.enqueue("s1", "x", false);
+        let b = s.enqueue("s1", "y", false);
+        assert_ne!(a["id"], b["id"]);
+        assert!(s.unqueue("s1", &a["id"]));
+        assert_eq!(prompts(&s.queued("s1")), ["y"]);
+        assert!(!s.unqueue("s1", &json!("no-such-id")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn features_the_queue_survives_a_reload_and_prefs_round_trip() {
+        let (s, dir) = open("reload");
+        s.enqueue("s1", "persisted", false);
+        let changes = |v: Value| v.as_object().unwrap().clone();
+        s.set_prefs(&changes(json!({"pinned": ["a", "b"], "group": "x"})));
+        assert_eq!(s.snapshot()["prefs"], json!({"pinned": ["a", "b"], "group": "x"}));
+        s.set_prefs(&changes(json!({"group": null})));
+        assert_eq!(s.snapshot()["prefs"], json!({"pinned": ["a", "b"]}));
+        let reloaded = Store::open(&dir.join("state.json")).unwrap();
+        assert_eq!(reloaded.queued("s1")[0]["prompt"], "persisted");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

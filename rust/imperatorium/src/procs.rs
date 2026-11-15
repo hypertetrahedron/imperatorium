@@ -289,3 +289,116 @@ mod tests {
         assert_eq!(exe("pwsh"), "pwsh");
     }
 }
+
+/// test_core.py's BackgroundTasks.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+
+    const NOW: f64 = 1000.0;
+    const OLD: f64 = 900.0;
+
+    /// 100 is a claude session; 200 another with an MCP server and nothing else.
+    fn table(extra: &[Proc]) -> Vec<Proc> {
+        let mut t: Vec<Proc> = vec![
+            (100, 1, "claude".into(), Some(OLD)),
+            (200, 1, "claude".into(), Some(OLD)),
+            (201, 200, "node".into(), Some(OLD)),
+        ];
+        t.extend(extra.iter().cloned());
+        t
+    }
+
+    fn count(t: &[Proc]) -> HashMap<u32, u64> {
+        waiting_shells(&[100, 200], t, NOW)
+    }
+
+    fn p(pid: u32, ppid: u32, name: &str) -> Proc {
+        (pid, ppid, name.into(), Some(OLD))
+    }
+
+    #[test]
+    fn the_python_table() {
+        assert!(count(&table(&[])).is_empty());
+        // a running shell counts
+        assert_eq!(count(&table(&[p(110, 100, "bash")])), HashMap::from([(100, 1)]));
+        // git bash re-exec is one task: bash -> usr/bin/bash -> conhost
+        let t = table(&[p(110, 100, "bash"), p(111, 110, "bash"), p(112, 111, "conhost")]);
+        assert_eq!(count(&t), HashMap::from([(100, 1)]));
+        // powershell behind cmd counts
+        assert_eq!(count(&table(&[p(120, 100, "cmd"), p(121, 120, "pwsh")])), HashMap::from([(100, 1)]));
+        // a brand-new shell is a hook, not a task
+        assert!(count(&table(&[(110, 100, "bash".into(), Some(999.0))])).is_empty());
+        // two tasks
+        assert_eq!(
+            count(&table(&[p(110, 100, "bash"), p(130, 100, "pwsh")])),
+            HashMap::from([(100, 2)])
+        );
+    }
+
+    #[test]
+    fn annotate_counts_zero_and_skips_ended_rows() {
+        // A pid nothing runs under: counted as zero, and no background_tasks.
+        let mut rows: Vec<Map<String, Value>> = vec![
+            serde_json::from_value(serde_json::json!({"pid": 4_000_000u32, "status": "busy"})).unwrap(),
+            serde_json::from_value(serde_json::json!({"pid": 4_000_001u32})).unwrap(),
+            serde_json::from_value(serde_json::json!({"status": "idle"})).unwrap(),
+        ];
+        annotate(&mut rows);
+        let n = |r: &Map<String, Value>| r.get("shell_processes").cloned();
+        assert_eq!(
+            [n(&rows[0]), n(&rows[1]), n(&rows[2])],
+            [Some(Value::from(0u64)), None, None]
+        );
+        assert!(!rows[0].contains_key("background_tasks"));
+    }
+
+    /// A shell this process started and left running, as a session's
+    /// background command would be.
+    #[cfg(windows)]
+    fn sleeper() -> std::process::Child {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start powershell")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_live_table_reads() {
+        let mut child = sleeper();
+        let me = std::process::id();
+        let rows: HashMap<u32, u32> = process_table().into_iter().map(|(pid, ppid, _, _)| (pid, ppid)).collect();
+        let kid = rows.get(&child.id()).copied();
+        let _ = child.kill();
+        let _ = child.wait();
+        // This process is in the table, and its child is under it.
+        assert!(rows.contains_key(&me));
+        assert_eq!(kid, Some(me));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn annotate_marks_idle_rows_that_wait_on_a_shell() {
+        let mut child = sleeper();
+        std::thread::sleep(std::time::Duration::from_millis((MIN_AGE * 1000.0) as u64 + 1500));
+        let me = std::process::id();
+        let mut rows: Vec<Map<String, Value>> = vec![
+            serde_json::from_value(serde_json::json!({"pid": me, "status": "idle"})).unwrap(),
+            serde_json::from_value(serde_json::json!({"pid": me, "status": "busy"})).unwrap(),
+        ];
+        annotate(&mut rows);
+        let _ = child.kill();
+        let _ = child.wait();
+        // Only the idle row is told it waits; every live row shows its count.
+        // (At least our one sleeper: another test's shell may be ours too.)
+        let waits = rows[0].get("background_tasks").and_then(Value::as_u64).unwrap_or(0);
+        assert!(waits >= 1, "{rows:?}");
+        assert!(!rows[1].contains_key("background_tasks"));
+        assert_eq!(rows[0].get("shell_processes"), Some(&Value::from(waits)));
+        assert_eq!(rows[1].get("shell_processes"), Some(&Value::from(waits)));
+    }
+}

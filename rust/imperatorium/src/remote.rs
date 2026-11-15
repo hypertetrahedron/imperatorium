@@ -1618,3 +1618,746 @@ mod tests {
         assert_eq!(hash_word("nope /x"), None);
     }
 }
+
+/// What test_remote.py pinned down, with a fake `ssh` (examples/fakessh.rs,
+/// through IMPERATORIUM_SSH) in place of the SSH channel: no network, no
+/// host. The settings are process-wide, so these tests take turns.
+#[cfg(test)]
+mod ssh_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::MutexGuard;
+
+    static TURN: Mutex<()> = Mutex::new(());
+    static COUNT: AtomicU32 = AtomicU32::new(0);
+    const SID: &str = "0b4bd5a2-27c4-4b3e-a6a5-0d8c4f1b2a11";
+    const BUILD: &[u8] = b"not really an ELF";
+
+    /// `name` (an example when `folder` is "examples", else a binary) in the
+    /// cargo target folder: found from the test exe's own ancestors and from
+    /// this crate's ../target, whichever layout cargo used.
+    fn exe_beside(folder: &str, name: &str) -> PathBuf {
+        let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+        let mut roots: Vec<PathBuf> = std::env::current_exe().unwrap().ancestors().map(Path::to_path_buf).collect();
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("target");
+        roots.push(target.join("release"));
+        roots.push(target.join("debug"));
+        for r in roots {
+            let p = if folder.is_empty() { r.join(&exe) } else { r.join(folder).join(&exe) };
+            if p.is_file() {
+                return p;
+            }
+        }
+        panic!("{name} is not built: cargo build --release --examples --bins (in rust/)");
+    }
+
+    struct Fx {
+        _turn: MutexGuard<'static, ()>,
+        dir: PathBuf,
+    }
+
+    impl Fx {
+        fn new() -> Fx {
+            let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+            let dir = std::env::temp_dir().join(format!(
+                "imp-remote-{}-{}",
+                std::process::id(),
+                COUNT.fetch_add(1, Ordering::SeqCst)
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            let build = dir.join("builds").join("x86_64-unknown-linux-musl");
+            std::fs::create_dir_all(&build).unwrap();
+            std::fs::write(build.join("imperatorium"), BUILD).unwrap();
+            std::env::set_var("IMPERATORIUM_SSH", exe_beside("examples", "fakessh"));
+            std::env::set_var("FAKESSH_DIR", &dir);
+            std::env::set_var("IMPERATORIUM_REMOTE_BUILDS", dir.join("builds"));
+            Fx { _turn: turn, dir }
+        }
+
+        fn rules(&self, rules: Value) {
+            std::fs::write(self.dir.join("rules.json"), rules.to_string()).unwrap();
+        }
+
+        /// Every call fakessh has answered, tunnels excluded.
+        fn calls(&self) -> Vec<Value> {
+            std::fs::read_to_string(self.dir.join("log.jsonl"))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .filter(|c| c["tunnel"] != true)
+                .collect()
+        }
+
+        fn commands(&self) -> Vec<String> {
+            self.calls().iter().map(|c| c["cmd"].as_str().unwrap_or("").to_string()).collect()
+        }
+
+        /// The host's answer to the binary probe: it already has this build.
+        fn probe(&self) -> Value {
+            json!({"match": "uname -m", "stdout": format!("x86_64\n{}  /h/.claude/imperatorium/bin/imperatorium\n", sha256_hex(BUILD))})
+        }
+
+        /// The real `imperatorium remote-channel`, as if run on the host,
+        /// reading transcripts from this fixture's own ~/.claude.
+        fn real_channel(&self) -> Value {
+            let claude = self.dir.join("claude");
+            std::fs::create_dir_all(&claude).unwrap();
+            json!({"match": "remote-channel",
+                   "run": [exe_beside("", "imperatorium"), "remote-channel"],
+                   "env": {"CLAUDE_CONFIG_DIR": claude, "HOME": self.dir, "USERPROFILE": self.dir}})
+        }
+
+        fn transcript(&self, sid: &str, lines: &[Value]) {
+            let dir = self.dir.join("claude").join("projects").join("-home-les-x");
+            std::fs::create_dir_all(&dir).unwrap();
+            let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+            std::fs::write(dir.join(format!("{sid}.jsonl")), text).unwrap();
+        }
+    }
+
+    impl Drop for Fx {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn host(name: &str) -> Host {
+        Host { name: name.into(), claude: DEFAULT_CLAUDE.into(), label: name.into(), tunnel: None }
+    }
+
+    fn done(stdout: &str) -> Value {
+        json!({"match": "agents --json", "stdout": stdout})
+    }
+
+    const SESSIONS: &str = concat!(
+        "[{\"sessionId\":\"a\",\"cwd\":\"/home/les/x\",\"kind\":\"interactive\",\"pid\":7}]\n\n",
+        "--- imperatorium session files ---\n",
+        "{\"sessionId\":\"a\",\"pid\":7,\"status\":\"waiting\",\"statusUpdatedAt\":1790000000000,",
+        "\"messagingSocketPath\":\"/tmp/cc-msg-a.sock\",\"name\":\"x-1\"}\n",
+        "{\"sessionId\":\"ghost\",\"pid\":9,\"status\":\"idle\",",
+        "\"messagingSocketPath\":\"/tmp/cc-msg-g.sock\"}\n"
+    );
+
+    fn polled(fx: &Fx, reply: Value) -> Result<Vec<Row>, String> {
+        fx.rules(json!([reply]));
+        agents(&host("devbox"))
+    }
+
+    fn fleet_of(hosts: Vec<Host>) -> Arc<Fleet> {
+        Fleet::new(hosts, 3600.0)
+    }
+
+    fn poll_all(fleet: &Fleet) {
+        for p in &fleet.each {
+            fleet.poll_host(p);
+        }
+    }
+
+    fn fails(fleet: &Fleet, name: &str) -> u64 {
+        fleet.status()[name]["fails"].as_u64().unwrap()
+    }
+
+    fn wait_for(secs: f64, mut f: impl FnMut() -> bool) -> bool {
+        let end = Instant::now() + Duration::from_secs_f64(secs);
+        while Instant::now() < end {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        f()
+    }
+
+    // ---- Config
+
+    #[test]
+    fn no_remote_block_is_not_an_error() {
+        assert!(load_hosts(&json!({})).is_empty());
+        assert!(load_hosts(&Value::Null).is_empty());
+    }
+
+    // ---- Polling
+
+    #[test]
+    fn claude_is_called_by_absolute_path() {
+        // `claude` is not on PATH for a non-interactive SSH session on
+        // Ubuntu: .bashrc returns early.
+        let fx = Fx::new();
+        polled(&fx, done("[]")).unwrap();
+        assert!(fx.commands()[0].contains("$HOME/.local/bin/claude agents --json --all"), "{:?}", fx.commands());
+    }
+
+    #[test]
+    fn ssh_is_bounded_and_never_prompts() {
+        let fx = Fx::new();
+        polled(&fx, done("[]")).unwrap();
+        let args = fx.calls()[0]["args"].to_string();
+        assert!(args.contains("BatchMode=yes") && args.contains("ConnectTimeout"), "{args}");
+    }
+
+    #[test]
+    fn rows_are_tagged_with_their_host() {
+        let fx = Fx::new();
+        let rows = polled(&fx, done(r#"[{"sessionId":"a","cwd":"/home/les/x","status":"idle"}]"#)).unwrap();
+        assert_eq!(rows[0]["host"], "devbox");
+        assert_eq!(rows[0]["remote"], true);
+    }
+
+    #[test]
+    fn a_remote_session_is_never_marked_dispatchable_by_the_poll() {
+        // A token only ever comes from that host's hooks, and the dispatcher
+        // does the pairing; the poll alone must not imply it is reachable.
+        let fx = Fx::new();
+        let rows = polled(&fx, done(r#"[{"sessionId":"a","dispatchable":true}]"#)).unwrap();
+        assert!(!truthy(rows[0].get("dispatchable")), "{:?}", rows[0]);
+    }
+
+    #[test]
+    fn a_missing_binary_is_reported_with_its_reason() {
+        let fx = Fx::new();
+        let e = polled(&fx, json!({"match": "agents", "code": 127, "stderr": "bash: claude: No such file or directory\n"})).unwrap_err();
+        assert!(e.contains("No such file"), "{e}");
+    }
+
+    #[test]
+    fn an_old_claude_without_json_is_reported() {
+        // raspberrypi.local runs 2.1.49, where --json does not exist.
+        let fx = Fx::new();
+        let e = polled(&fx, json!({"match": "agents", "code": 1, "stderr": "error: unknown option '--json'\n"})).unwrap_err();
+        assert!(e.contains("--json"), "{e}");
+    }
+
+    #[test]
+    fn non_json_output_is_refused() {
+        let fx = Fx::new();
+        let e = polled(&fx, done("Welcome to Ubuntu!\n")).unwrap_err();
+        assert!(e.contains("did not return JSON"), "{e}");
+    }
+
+    #[test]
+    fn a_timeout_becomes_an_error() {
+        // `agents` bounds its call with CALL_TIMEOUT through `run`; a short
+        // bound on `run` itself shows the same path (an Err, not a hang).
+        let fx = Fx::new();
+        fx.rules(json!([{"match": "agents", "sleep_ms": 5000, "stdout": "[]"}]));
+        let started = Instant::now();
+        let e = run("devbox", "claude agents --json", None, 0.5).err().expect("a timeout");
+        assert!(e.contains("timed out"), "{e}");
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    // ---- Dispatch
+
+    fn started(fx: &Fx, cwd: &str, prompt: &str) -> Result<Value, String> {
+        fx.rules(json!([{"match": "--bg", "stdout": "backgrounded \u{b7} 31886b01\n"}]));
+        start_background(&host("devbox"), cwd, prompt, &Map::new())
+    }
+
+    #[test]
+    fn the_interpreter_path_is_left_unquoted_so_home_expands() {
+        // The first live dispatch failed exactly here: quoting the whole
+        // command line turned $HOME into a literal.
+        let fx = Fx::new();
+        started(&fx, "/home/les/proj", "do the thing").unwrap();
+        let cmd = &fx.commands()[0];
+        assert!(cmd.contains("$HOME/.local/bin/claude"), "{cmd}");
+        assert!(!cmd.contains("'$HOME"), "{cmd}");
+    }
+
+    #[test]
+    fn the_prompt_is_quoted_so_spaces_and_quotes_survive() {
+        let fx = Fx::new();
+        started(&fx, "/home/les/proj", "fix the thing; rm -rf /  # not really").unwrap();
+        assert!(fx.commands()[0].contains("'fix the thing; rm -rf /  # not really'"), "{:?}", fx.commands());
+    }
+
+    #[test]
+    fn the_working_directory_is_quoted() {
+        let fx = Fx::new();
+        started(&fx, "/home/les/my proj", "go").unwrap();
+        assert!(fx.commands()[0].contains("cd '/home/les/my proj'"), "{:?}", fx.commands());
+    }
+
+    #[test]
+    fn the_session_id_comes_back() {
+        let fx = Fx::new();
+        let out = started(&fx, "/home/les/proj", "go").unwrap();
+        assert_eq!(out["id"], "31886b01");
+        assert_eq!(out["host"], "devbox");
+    }
+
+    #[test]
+    fn an_empty_prompt_never_reaches_the_wire() {
+        let fx = Fx::new();
+        assert!(started(&fx, "/home/les/proj", "   ").is_err());
+        assert!(fx.calls().is_empty());
+    }
+
+    #[test]
+    fn a_failure_is_reported_rather_than_claimed_as_success() {
+        let fx = Fx::new();
+        fx.rules(json!([{"match": "--bg", "code": 255, "stderr": "Permission denied (publickey).\n"}]));
+        let e = start_background(&host("devbox"), "/home/les/proj", "go", &Map::new()).unwrap_err();
+        assert!(e.contains("publickey"), "{e}");
+    }
+
+    #[test]
+    fn a_start_with_no_id_is_not_silently_retried() {
+        // It may well have started; claiming failure would tempt a retry and
+        // start a second one.
+        let fx = Fx::new();
+        fx.rules(json!([{"match": "--bg", "stdout": "something happened\n"}]));
+        let e = start_background(&host("devbox"), "/home/les/proj", "go", &Map::new()).unwrap_err();
+        assert!(e.contains("no session id"), "{e}");
+        assert_eq!(fx.calls().len(), 1);
+    }
+
+    // ---- Backoff
+
+    #[test]
+    fn a_failing_host_is_parked_and_skipped() {
+        let fx = Fx::new();
+        fx.rules(json!([{"match": "agents", "code": 255, "stderr": "unreachable\n"}]));
+        let fleet = fleet_of(vec![host("devbox")]);
+        poll_all(&fleet);
+        assert!(fleet.rows().is_empty());
+        assert_eq!(fails(&fleet, "devbox"), 1);
+        // Parked: the poll loop checks `due` first, so the next pass does
+        // not pay the connect timeout again.
+        assert!(!fleet.due("devbox"));
+        assert_eq!(fx.calls().len(), 1);
+    }
+
+    #[test]
+    fn the_delay_grows_with_each_failure() {
+        let _fx = Fx::new();
+        let fleet = fleet_of(vec![host("devbox")]);
+        let mut delays = vec![];
+        for _ in 0..3 {
+            fleet.failed("devbox", "unreachable");
+            delays.push(fleet.status()["devbox"]["parked_for"].as_f64().unwrap());
+        }
+        assert!(delays.windows(2).all(|w| w[0] < w[1]), "{delays:?}");
+    }
+
+    #[test]
+    fn a_parked_host_becomes_due_again_once_the_delay_passes() {
+        let _fx = Fx::new();
+        let fleet = fleet_of(vec![host("devbox")]);
+        fleet.failed("devbox", "unreachable");
+        assert!(!fleet.due("devbox"));
+        fleet.state.lk().get_mut("devbox").unwrap().insert("next_attempt".into(), json!(now() - 1.0));
+        assert!(fleet.due("devbox"));
+    }
+
+    #[test]
+    fn the_delay_is_capped() {
+        let _fx = Fx::new();
+        let fleet = fleet_of(vec![host("devbox")]);
+        for _ in 0..20 {
+            fleet.failed("devbox", "nope");
+        }
+        assert!(fleet.status()["devbox"]["parked_for"].as_f64().unwrap() <= crate::timing::t().remote_backoff_max);
+    }
+
+    #[test]
+    fn success_clears_the_park() {
+        let _fx = Fx::new();
+        let fleet = fleet_of(vec![host("devbox")]);
+        fleet.failed("devbox", "nope");
+        fleet.ok("devbox");
+        assert_eq!(fails(&fleet, "devbox"), 0);
+        assert!(fleet.due("devbox"));
+    }
+
+    #[test]
+    fn one_dead_host_does_not_hide_a_working_one() {
+        // servicehost1 being off must not cost you sight of developmenthost1.
+        let fx = Fx::new();
+        fx.rules(json!([
+            {"match": "agents", "host": "bad", "code": 255, "stderr": "unreachable\n"},
+            {"match": "agents", "host": "good", "stdout": "[{\"sessionId\":\"s1\",\"cwd\":\"/w\"}]"}
+        ]));
+        let fleet = fleet_of(vec![host("bad"), host("good")]);
+        poll_all(&fleet);
+        let hosts: Vec<String> = fleet.rows().iter().map(|r| py_str(&r["host"])).collect();
+        assert_eq!(hosts, ["good"]);
+    }
+
+    #[test]
+    fn poll_never_raises() {
+        // ssh itself cannot be started: the host is parked, nothing panics.
+        let _fx = Fx::new();
+        std::env::set_var("IMPERATORIUM_SSH", "imperatorium-no-such-ssh-anywhere");
+        let fleet = fleet_of(vec![host("devbox")]);
+        poll_all(&fleet);
+        assert!(fleet.rows().is_empty());
+        assert_eq!(fails(&fleet, "devbox"), 1);
+    }
+
+    // ---- Session files
+
+    #[test]
+    fn status_and_inbox_come_from_the_hosts_session_files() {
+        let fx = Fx::new();
+        let rows = polled(&fx, done(SESSIONS)).unwrap();
+        assert_eq!(rows[0]["status"], "waiting");
+        assert_eq!(rows[0]["socket"], "/tmp/cc-msg-a.sock");
+        assert_eq!(rows[0]["status_changed_at"], 1790000000.0);
+        // `waiting` is a session asking for you - true on any machine.
+        assert_eq!(rows[0]["attention"], true);
+    }
+
+    #[test]
+    fn a_session_file_without_a_live_process_is_not_a_session() {
+        let fx = Fx::new();
+        let rows = polled(&fx, done(SESSIONS)).unwrap();
+        let ids: Vec<String> = rows.iter().map(|r| py_str(&r["sessionId"])).collect();
+        assert_eq!(ids, ["a"]);
+    }
+
+    #[test]
+    fn the_same_call_reads_the_files() {
+        let fx = Fx::new();
+        polled(&fx, done("[]")).unwrap();
+        assert_eq!(fx.calls().len(), 1);
+        assert!(fx.commands()[0].contains(".claude/sessions/*.json"));
+    }
+
+    #[test]
+    fn no_session_files_is_not_an_error() {
+        let fx = Fx::new();
+        let rows = polled(&fx, done(&format!("[{{\"sessionId\":\"a\"}}]\n\n{FILES_MARK}\n"))).unwrap();
+        assert_eq!(rows[0]["sessionId"], "a");
+    }
+
+    #[test]
+    fn a_torn_session_file_is_skipped() {
+        let fx = Fx::new();
+        let rows = polled(&fx, done(&format!("[{{\"sessionId\":\"a\"}}]\n{FILES_MARK}\n{{\"sessionId\":\"a\",\"stat\n"))).unwrap();
+        assert!(rows[0].get("socket").is_none_or(Value::is_null));
+    }
+
+    // ---- Injection
+
+    fn injecting(fx: &Fx, socket: &str, token: Option<&str>, content: &str) -> Result<(), String> {
+        fx.rules(json!([fx.probe(), {"match": "inbox-send", "stdout": ""}]));
+        let h = host("devbox");
+        inject(&h, &Deploy::new("devbox"), socket, token, content)
+    }
+
+    #[test]
+    fn the_token_goes_on_stdin_never_the_command_line() {
+        let fx = Fx::new();
+        injecting(&fx, "/tmp/cc-msg-a.sock", Some("s3cret"), "do it").unwrap();
+        let sent: Vec<Value> = fx.calls().into_iter().filter(|c| c["cmd"].as_str().unwrap_or("").contains("inbox-send")).collect();
+        assert_eq!(sent.len(), 1);
+        assert!(!sent[0]["args"].to_string().contains("s3cret"));
+        let frames: Vec<Value> = sent[0]["stdin"].as_str().unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(frames[0], json!({"type": "auth", "token": "s3cret"}));
+        assert_eq!(frames[1]["message"]["content"], "do it");
+    }
+
+    #[test]
+    fn the_socket_path_is_quoted() {
+        let fx = Fx::new();
+        injecting(&fx, "/tmp/my dir/s.sock", Some("t"), "go").unwrap();
+        assert!(fx.commands().iter().any(|c| c.ends_with("inbox-send '/tmp/my dir/s.sock'")), "{:?}", fx.commands());
+    }
+
+    #[test]
+    fn a_windows_pipe_path_is_refused() {
+        let fx = Fx::new();
+        assert!(injecting(&fx, r"\\.\pipe\x", Some("t"), "go").is_err());
+        assert!(fx.calls().is_empty());
+    }
+
+    #[test]
+    fn no_token_is_refused_before_the_wire() {
+        let fx = Fx::new();
+        assert!(injecting(&fx, "/s", None, "go").is_err());
+        assert!(fx.calls().is_empty());
+    }
+
+    #[test]
+    fn an_empty_prompt_is_refused_before_the_wire() {
+        let fx = Fx::new();
+        assert!(injecting(&fx, "/s", Some("t"), "  ").is_err());
+        assert!(fx.calls().is_empty());
+    }
+
+    #[test]
+    fn the_hosts_own_error_is_what_is_reported() {
+        let fx = Fx::new();
+        fx.rules(json!([fx.probe(), {"match": "inbox-send", "code": 1,
+            "stderr": "Traceback...\nConnectionRefusedError: [Errno 111] Connection refused\n"}]));
+        let e = inject(&host("devbox"), &Deploy::new("devbox"), "/s", Some("t"), "go").unwrap_err();
+        assert!(e.contains("Connection refused"), "{e}");
+    }
+
+    // ---- Tunnels
+
+    #[test]
+    fn tunnel_true_gets_a_port_of_its_own() {
+        let hosts = load_hosts(&json!({"remote": {"hosts": [
+            {"name": "a", "tunnel": true}, {"name": "b", "tunnel": true}, {"name": "c"}]}}));
+        let ports: Vec<Option<u16>> = hosts.iter().map(|h| h.tunnel.map(|t| t.0)).collect();
+        assert_eq!(ports, [Some(8793), Some(8794), None]);
+        assert_eq!(hosts[0].tunnel.unwrap().1, 8792);
+    }
+
+    #[test]
+    fn the_tunnel_never_lands_on_the_dispatchers_own_port() {
+        let argv = Tunnel::new("devbox", 8793, 8792).argv();
+        let at = argv.iter().position(|a| a == "-R").unwrap();
+        assert_eq!(argv[at + 1], "127.0.0.1:8792:127.0.0.1:8793");
+    }
+
+    #[test]
+    fn a_tunnel_that_cannot_forward_exits_rather_than_idling() {
+        // Without this ssh stays connected with no forward, and the host's
+        // hooks talk to nothing while the tunnel looks up.
+        let flags = Tunnel::new("devbox", 8793, 8792).argv().join(" ");
+        for want in ["ExitOnForwardFailure=yes", "ServerAliveInterval", "BatchMode=yes"] {
+            assert!(flags.contains(want), "{flags}");
+        }
+    }
+
+    #[test]
+    fn a_dropped_tunnel_backs_off() {
+        let t = Tunnel::new("devbox", 8793, 8792);
+        let delays: Vec<f64> = (0..4).map(|_| t.down("gone")).collect();
+        assert!(delays.windows(2).all(|w| w[0] <= w[1]) && delays[3] > delays[0], "{delays:?}");
+        assert_eq!(t.status()["up"], false);
+        assert_eq!(t.status()["error"], "gone");
+    }
+
+    // ---- The reader channel (the real `remote-channel`, as if on the host)
+
+    fn project_transcript(fx: &Fx) {
+        fx.transcript(SID, &[
+            json!({"type": "user", "uuid": "u1", "parentUuid": null, "sessionId": SID, "timestamp": "2026-10-14T09:00:00.000Z",
+                   "message": {"role": "user", "content": "how large is this project?"}}),
+            json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1", "sessionId": SID, "timestamp": "2026-10-14T09:00:01.000Z",
+                   "message": {"role": "assistant", "content": [
+                       {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "du -sh ."}}]}}),
+            json!({"type": "user", "uuid": "u2", "parentUuid": "a1", "sessionId": SID, "timestamp": "2026-10-14T09:00:02.000Z",
+                   "message": {"role": "user", "content": [
+                       {"type": "tool_result", "tool_use_id": "t1", "content": "4.2M\t."}]}}),
+            json!({"type": "assistant", "uuid": "a2", "parentUuid": "u2", "sessionId": SID, "timestamp": "2026-10-14T09:00:03.000Z",
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": "About 4.2 MB."}]}}),
+        ]);
+    }
+
+    fn channel_to(_fx: &Fx) -> Channel {
+        Channel::new("devbox", Arc::new(Deploy::new("devbox")))
+    }
+
+    fn opened(fx: &Fx) -> usize {
+        fx.commands().iter().filter(|c| c.contains("remote-channel")).count()
+    }
+
+    #[test]
+    fn items_come_back_rendered_by_the_same_code() {
+        let fx = Fx::new();
+        project_transcript(&fx);
+        fx.rules(json!([fx.probe(), fx.real_channel()]));
+        let ch = channel_to(&fx);
+        let (items, title) = ch.read(SID, 60, None).unwrap();
+        let who: Vec<&str> = items.iter().map(|i| i["speaker"].as_str().unwrap()).collect();
+        assert_eq!(who, ["you", "claude"]);
+        // The tool call and its result join Claude's turn, as they do locally.
+        let kinds: Vec<&str> = items[1]["blocks"].as_array().unwrap().iter().map(|b| b["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["tool", "result", "text"]);
+        assert!(!title.is_empty(), "a transcript with a first prompt has a title");
+    }
+
+    #[test]
+    fn one_channel_serves_many_reads() {
+        let fx = Fx::new();
+        project_transcript(&fx);
+        fx.rules(json!([fx.probe(), fx.real_channel()]));
+        let ch = channel_to(&fx);
+        for _ in 0..4 {
+            ch.read(SID, 60, None).unwrap();
+        }
+        assert_eq!(opened(&fx), 1);
+    }
+
+    #[test]
+    fn a_failed_read_is_reported_and_the_channel_survives() {
+        let fx = Fx::new();
+        project_transcript(&fx);
+        fx.rules(json!([fx.probe(), fx.real_channel()]));
+        let ch = channel_to(&fx);
+        let e = ch.call(json!({"op": "no-such-op"}).as_object().unwrap().clone(), 10.0).unwrap_err();
+        assert!(e.contains("unknown op"), "{e}");
+        assert_eq!(ch.read(SID, 60, None).unwrap().0.len(), 2);
+        assert_eq!(opened(&fx), 1);
+    }
+
+    #[test]
+    fn a_hung_read_kills_the_channel_rather_than_waiting() {
+        let fx = Fx::new();
+        fx.rules(json!([fx.probe(), {"match": "remote-channel", "never_reply": true}]));
+        let ch = channel_to(&fx);
+        let req = json!({"op": "read", "session": "slow", "limit": 60}).as_object().unwrap().clone();
+        let started = Instant::now();
+        let e = ch.call(req, 1.0).unwrap_err();
+        assert!(e.contains("no reply"), "{e}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(ch.state.lk().live.is_none());
+    }
+
+    #[test]
+    fn a_dead_host_is_not_redialled_on_every_poll() {
+        let fx = Fx::new();
+        fx.rules(json!([fx.probe(), {"match": "remote-channel", "no_stdin": true, "code": 255, "stderr": "ssh: connect to host devbox: Connection timed out\n"}]));
+        let ch = channel_to(&fx);
+        assert!(ch.read(SID, 60, None).is_err());
+        let first = opened(&fx);
+        assert_eq!(first, 1);
+        assert!(ch.read(SID, 60, None).is_err());
+        assert_eq!(opened(&fx), first, "the second read dialled again");
+    }
+
+    #[test]
+    fn a_channel_that_exits_reports_why() {
+        let fx = Fx::new();
+        fx.rules(json!([fx.probe(), {"match": "remote-channel", "no_stdin": true, "code": 255, "stderr": "Permission denied (publickey).\n"}]));
+        let ch = channel_to(&fx);
+        let e = ch.read(SID, 60, None).map(|_| ()).unwrap_err();
+        assert!(e.contains("publickey"), "{e}");
+    }
+
+    #[test]
+    fn the_binary_path_is_left_to_the_hosts_shell() {
+        let fx = Fx::new();
+        project_transcript(&fx);
+        fx.rules(json!([fx.probe(), fx.real_channel()]));
+        channel_to(&fx).read(SID, 60, None).unwrap();
+        let cmd = fx.commands().into_iter().find(|c| c.contains("remote-channel")).unwrap();
+        // Double quotes, so the host's shell expands $HOME.
+        assert_eq!(cmd, "\"$HOME/.claude/imperatorium/bin/imperatorium\" remote-channel");
+    }
+
+    // ---- The stats channel
+
+    fn cache_transcript(fx: &Fx) {
+        fx.transcript(SID, &[json!({"type": "assistant", "timestamp": "2026-10-14T10:00:00.000Z",
+            "message": {"id": "m1", "model": "claude-opus-5-5", "content": [],
+                        "usage": {"input_tokens": 10, "cache_read_input_tokens": 70000,
+                                  "cache_creation_input_tokens": 20,
+                                  "cache_creation": {"ephemeral_1h_input_tokens": 20}}}})]);
+    }
+
+    #[test]
+    fn the_cache_and_context_come_back_read_on_the_host() {
+        let fx = Fx::new();
+        cache_transcript(&fx);
+        fx.rules(json!([fx.probe(), fx.real_channel()]));
+        let ch = channel_to(&fx);
+        let got = ch.stats(&[SID.to_string(), "not-a-session".to_string()]).unwrap();
+        assert_eq!(got.keys().collect::<Vec<_>>(), [SID]);
+        let one = &got[SID];
+        assert_eq!(one["context_tokens"], 70030);
+        assert_eq!(one["model_id"], "claude-opus-5-5");
+        assert_eq!(one["cache"]["ttl"], 3600.0);
+        assert_eq!(one["cache"]["expires_at"], 1791972000.0 + 3600.0);
+    }
+
+    #[test]
+    fn one_channel_serves_every_stats_poll() {
+        let fx = Fx::new();
+        cache_transcript(&fx);
+        fx.rules(json!([fx.probe(), fx.real_channel()]));
+        let ch = channel_to(&fx);
+        ch.stats(&[SID.to_string()]).unwrap();
+        ch.stats(&[SID.to_string()]).unwrap();
+        assert_eq!(opened(&fx), 1);
+    }
+
+    // ---- One thread per host
+
+    #[test]
+    fn a_slow_host_does_not_hold_up_another() {
+        let fx = Fx::new();
+        fx.rules(json!([
+            {"match": "agents", "host": "slow", "sleep_ms": 1500, "stdout": "[{\"sessionId\":\"s-slow\",\"cwd\":\"/w\"}]"},
+            {"match": "agents", "host": "good", "stdout": "[{\"sessionId\":\"s-good\",\"cwd\":\"/w\"}]"}
+        ]));
+        let fleet = fleet_of(vec![host("slow"), host("good")]);
+        fleet.start(Arc::new(|| {}));
+        let hosts = |f: &Fleet| f.rows().iter().map(|r| py_str(&r["host"])).collect::<Vec<_>>();
+        assert!(wait_for(1.2, || !fleet.rows().is_empty()));
+        assert_eq!(hosts(&fleet), ["good"]);
+        assert!(wait_for(6.0, || fleet.rows().len() == 2));
+        assert_eq!(hosts(&fleet), ["slow", "good"]); // config order
+    }
+
+    #[test]
+    fn each_poll_that_lands_says_so() {
+        let fx = Fx::new();
+        fx.rules(json!([done(SESSIONS)]));
+        let fleet = fleet_of(vec![host("good")]);
+        let told = Arc::new(AtomicU32::new(0));
+        let t = told.clone();
+        fleet.start(Arc::new(move || {
+            t.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert!(wait_for(5.0, || told.load(Ordering::SeqCst) > 0));
+    }
+
+    #[test]
+    fn a_host_that_starts_failing_leaves_the_board() {
+        let fx = Fx::new();
+        let fleet = fleet_of(vec![host("devbox")]);
+        fx.rules(json!([done(SESSIONS)]));
+        poll_all(&fleet);
+        assert_eq!(fleet.rows().len(), 1);
+        fx.rules(json!([{"match": "agents", "code": 255, "stderr": "unreachable\n"}]));
+        poll_all(&fleet);
+        assert!(fleet.rows().is_empty());
+        assert!(truthy(fleet.status()["devbox"].get("polled_at")), "when it last answered");
+    }
+
+    #[test]
+    fn refresh_asks_a_parked_host_now() {
+        let fx = Fx::new();
+        fx.rules(json!([{"match": "agents", "code": 255, "stderr": "unreachable\n"}]));
+        let fleet = fleet_of(vec![host("devbox")]);
+        fleet.start(Arc::new(|| {}));
+        assert!(wait_for(5.0, || fleet.status().get("devbox").is_some_and(|s| truthy(s.get("fails")))));
+        fx.rules(json!([done(SESSIONS)])); // back, but parked for a minute
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(fleet.rows().is_empty());
+        assert_eq!(fleet.refresh(), 1);
+        assert!(wait_for(5.0, || !fleet.rows().is_empty()));
+        assert_eq!(fails(&fleet, "devbox"), 0);
+    }
+
+    // ---- Stats on rows
+
+    #[test]
+    fn each_row_carries_its_hosts_numbers() {
+        let fx = Fx::new();
+        fx.rules(json!([done(SESSIONS), fx.probe(),
+            {"match": "remote-channel", "canned": {"stats": {"stats": {"a": {"cache": {"expires_at": 5.0}, "context_tokens": 9}}}}}]));
+        let fleet = fleet_of(vec![host("devbox")]);
+        poll_all(&fleet);
+        assert_eq!(fleet.rows()[0]["stat"]["context_tokens"], 9);
+    }
+
+    #[test]
+    fn rows_stand_without_them() {
+        let fx = Fx::new();
+        fx.rules(json!([done(SESSIONS), fx.probe(),
+            {"match": "remote-channel", "code": 1, "stderr": "no such binary on this host\n"}]));
+        let fleet = fleet_of(vec![host("devbox")]);
+        poll_all(&fleet);
+        let rows = fleet.rows();
+        let ids: Vec<String> = rows.iter().map(|r| py_str(&r["sessionId"])).collect();
+        assert_eq!(ids, ["a"]);
+        assert!(rows[0].get("stat").is_none());
+    }
+}

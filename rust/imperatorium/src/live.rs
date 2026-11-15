@@ -145,3 +145,76 @@ impl Live {
         self.events.lk().remove(key);
     }
 }
+
+/// Ported from the Python suite (test_features.py `Live`).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+
+    fn obj(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    fn pre(input: Value, extra: Value) -> Map<String, Value> {
+        let mut m = obj(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                               "tool_input": input, "tool_use_id": "t1"}));
+        for (k, v) in extra.as_object().into_iter().flatten() {
+            m.insert(k.clone(), v.clone());
+        }
+        m
+    }
+
+    #[test]
+    fn features_pre_then_post_pairs_into_one_finished_call() {
+        let live = Live::default();
+        live.ingest("k", &pre(json!({"command": "npm test"}), json!({})), 100.0);
+        live.ingest(
+            "k",
+            &obj(json!({"hook_event_name": "PostToolUse", "tool_use_id": "t1"})),
+            105.0,
+        );
+        let events = live.events("k");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["ok"], true);
+        assert_eq!(live.current("k", 110.0), Value::Null);
+    }
+
+    #[test]
+    fn features_a_running_call_is_current_until_it_ends_or_goes_stale() {
+        let live = Live::default();
+        live.ingest("k", &pre(json!({"command": "npm test"}), json!({})), 100.0);
+        let cur = live.current("k", 105.0);
+        assert_eq!(cur["tool"], "Bash");
+        assert_eq!(cur["since"], 100.0);
+        // Stuck for ten minutes: a lost Post, not a long call.
+        assert_eq!(live.current("k", 100.0 + 601.0), Value::Null);
+    }
+
+    #[test]
+    fn features_a_failure_event_is_recorded_not_ok() {
+        let live = Live::default();
+        live.ingest("k", &pre(json!({}), json!({})), 1.0);
+        live.ingest(
+            "k",
+            &obj(json!({"hook_event_name": "PostToolUseFailure", "tool_use_id": "t1",
+                        "error": "boom\nmore"})),
+            2.0,
+        );
+        let e = &live.events("k")[0];
+        assert_eq!(e["ok"], false);
+        assert_eq!(e["error"], "boom");
+    }
+
+    #[test]
+    fn features_a_subagents_calls_a_non_tool_event_and_forget() {
+        let live = Live::default();
+        let got = live.ingest("k", &pre(json!({}), json!({"agent_id": "sub1"})), 1.0);
+        assert!(got);
+        assert!(live.events("k").is_empty());
+        assert!(!live.ingest("k", &obj(json!({"hook_event_name": "Stop"})), 1.0));
+        live.ingest("k", &pre(json!({}), json!({})), 1.0);
+        assert_eq!(live.events("k").len(), 1);
+        live.forget("k");
+        assert!(live.events("k").is_empty());
+    }
+}

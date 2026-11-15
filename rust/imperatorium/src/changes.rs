@@ -788,3 +788,267 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
     })();
     result.unwrap_or_else(|e| json!({"ok": false, "error": e}))
 }
+
+/// Ported from the Python suite (test_features.py): real temporary git
+/// repositories, as there, because this module is a thin wrapper over git.
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn sh(cwd: &str, args: &[&str]) -> String {
+        git(cwd, args, true).unwrap_or_else(|e| panic!("git {args:?} in {cwd}: {e}"))
+    }
+
+    fn norm_p(p: &str) -> String {
+        norm(p)
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// A repository on `main` with one commit; removed with its folder.
+    struct Repo {
+        top: PathBuf,
+        dir: String,
+    }
+
+    impl Repo {
+        fn new(label: &str) -> Repo {
+            let top = std::env::temp_dir().join(format!(
+                "imp-feat-{label}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let main = top.join("r");
+            std::fs::create_dir_all(&main).unwrap();
+            let dir = main.to_string_lossy().into_owned();
+            sh(&dir, &["init", "-q", "-b", "main"]);
+            sh(&dir, &["config", "user.email", "test@example.com"]);
+            sh(&dir, &["config", "user.name", "Test"]);
+            sh(&dir, &["config", "core.autocrlf", "false"]);
+            write(&main.join("f.txt"), "one\n");
+            sh(&dir, &["add", "f.txt"]);
+            sh(&dir, &["commit", "-q", "-m", "init"]);
+            Repo { top, dir }
+        }
+
+        fn path(&self, rel: &str) -> PathBuf {
+            Path::new(&self.dir).join(rel)
+        }
+
+        /// A worktree under .claude/worktrees/, the shape Claude Code makes.
+        fn agent_worktree(&self, name: &str, branch: &str, commit: bool) -> String {
+            let rel = format!(".claude/worktrees/{name}");
+            sh(&self.dir, &["worktree", "add", &rel, "-b", branch, "-q"]);
+            let full = self.path(&rel);
+            let full_s = full.to_string_lossy().into_owned();
+            if commit {
+                let mut text = std::fs::read_to_string(full.join("f.txt")).unwrap();
+                text.push_str("two\n");
+                write(&full.join("f.txt"), &text);
+                sh(&full_s, &["add", "f.txt"]);
+                sh(&full_s, &["commit", "-q", "-m", "wt change"]);
+            }
+            full_s
+        }
+    }
+
+    impl Drop for Repo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.top);
+        }
+    }
+
+    /// A folder that is not a repository.
+    fn plain_dir(label: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("imp-feat-plain-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn features_changes_of_a_clean_repo() {
+        let r = Repo::new("clean");
+        let got = changes(&r.dir);
+        assert_eq!(got["ok"], true);
+        assert_eq!(got["repo"], true);
+        assert_eq!(got["files"], json!([]));
+        assert_eq!(got["diff"], "");
+        assert_eq!(got["branch"], "main");
+    }
+
+    #[test]
+    fn features_changes_report_modified_and_untracked_files() {
+        let r = Repo::new("dirty");
+        write(&r.path("f.txt"), "one\nmodified\n");
+        write(&r.path("new.txt"), "new\n");
+        let got = changes(&r.dir);
+        assert_eq!(got["ok"], true);
+        let files = got["files"].as_array().unwrap();
+        let mut paths: Vec<&str> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
+        paths.sort();
+        assert_eq!(paths, ["f.txt", "new.txt"]);
+        let by = |p: &str| files.iter().find(|f| f["path"] == p).unwrap().clone();
+        assert_eq!(by("new.txt")["untracked"], true);
+        assert_eq!(by("f.txt")["unstaged"], true);
+        assert!(got["diff"].as_str().unwrap().contains("modified"));
+    }
+
+    #[test]
+    fn features_changes_of_a_non_repo_and_a_missing_directory() {
+        let other = plain_dir("changes");
+        let got = changes(&other.to_string_lossy());
+        assert_eq!(got["ok"], true);
+        assert_eq!(got["repo"], false);
+        assert_eq!(got["files"], json!([]));
+        let r = Repo::new("missing");
+        let gone = changes(&r.path("nope-nope").to_string_lossy());
+        assert_eq!(gone["ok"], false);
+        assert!(gone.get("error").is_some());
+        let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[test]
+    fn features_worktrees_ahead_count_agent_flag_and_dirty() {
+        let r = Repo::new("wts");
+        assert_eq!(worktrees(&r.dir)["worktrees"], json!([])); // a plain repo
+        r.agent_worktree("x", "feature", true);
+        let got = worktrees(&r.dir);
+        assert_eq!(got["ok"], true);
+        assert_eq!(got["base"], "main");
+        let list = got["worktrees"].as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        let wt = &list[0];
+        assert_eq!(wt["agent"], true);
+        assert_eq!(wt["branch"], "feature");
+        assert_eq!(wt["ahead"], 1);
+        assert_eq!(wt["behind"], 0);
+        assert_eq!(wt["dirty"], false);
+        assert_eq!(wt["subject"], "wt change");
+
+        // Made by hand: not an agent's.
+        sh(&r.dir, &["worktree", "add", "sibling", "-b", "other", "-q"]);
+        let got = worktrees(&r.dir);
+        let by = |b: &str| {
+            got["worktrees"].as_array().unwrap().iter().find(|w| w["branch"] == b).unwrap().clone()
+        };
+        assert_eq!(by("other")["agent"], false);
+
+        // Uncommitted work is dirty.
+        let y = r.agent_worktree("y", "dirtyfeat", false);
+        write(&Path::new(&y).join("f.txt"), "one\nuncommitted\n");
+        let got = worktrees(&r.dir);
+        let dirty = got["worktrees"].as_array().unwrap().iter().find(|w| w["branch"] == "dirtyfeat").unwrap().clone();
+        assert_eq!(dirty["dirty"], true);
+    }
+
+    #[test]
+    fn features_worktrees_of_a_non_repo() {
+        let other = plain_dir("wts");
+        let got = worktrees(&other.to_string_lossy());
+        assert_eq!(got["ok"], true);
+        assert_eq!(got["repo"], false);
+        let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[test]
+    fn features_pr_reports_a_push_failure_and_refuses_a_dirty_worktree_first() {
+        let r = Repo::new("pr");
+        let wt = r.agent_worktree("x", "feature", true);
+        // No origin to push to: the failure is the push's, not gh's.
+        let out = finish(&r.dir, &wt, "pr", false);
+        assert_eq!(out["ok"], false);
+        assert!(out["error"].as_str().unwrap().contains("push failed"), "{out}");
+        // Dirty: refused before any network.
+        write(&Path::new(&wt).join("f.txt"), "one\ntwo\nuncommitted\n");
+        let out = finish(&r.dir, &wt, "pr", false);
+        assert_eq!(out["ok"], false);
+        assert!(out["error"].as_str().unwrap().contains("uncommitted changes"), "{out}");
+    }
+
+    #[test]
+    fn features_a_merge_git_refuses_is_reported_and_changes_nothing() {
+        // A refusal that leaves no conflict markers (here: unrelated
+        // histories) was once reported as a successful merge.
+        let r = Repo::new("orphan");
+        sh(&r.dir, &["worktree", "add", ".claude/worktrees/x", "-q", "--detach"]);
+        let wt = r.path(".claude/worktrees/x").to_string_lossy().into_owned();
+        sh(&wt, &["checkout", "--orphan", "orphanfeat", "-q"]);
+        sh(&wt, &["rm", "-f", "-q", "f.txt"]);
+        write(&Path::new(&wt).join("g.txt"), "two\n");
+        sh(&wt, &["add", "g.txt"]);
+        sh(&wt, &["commit", "-q", "-m", "orphan"]);
+        let before = sh(&r.dir, &["log", "--oneline"]);
+        let out = finish(&r.dir, &wt, "merge", false);
+        let after = sh(&r.dir, &["log", "--oneline"]);
+        assert_eq!(out["ok"], false);
+        assert!(out["error"].as_str().unwrap().contains("refused"), "{out}");
+        assert_eq!(after, before);
+    }
+
+    /// `main` with a long-lived `feat` in a sibling worktree, ahead of it.
+    fn with_feat(label: &str) -> (Repo, String) {
+        let r = Repo::new(label);
+        let feat = r.top.join("feat").to_string_lossy().into_owned();
+        sh(&r.dir, &["worktree", "add", &feat, "-b", "feat", "-q"]);
+        write(&Path::new(&feat).join("feat.txt"), "feature work\n");
+        sh(&feat, &["add", "feat.txt"]);
+        sh(&feat, &["commit", "-q", "-m", "feat work"]);
+        (r, feat)
+    }
+
+    #[test]
+    fn features_made_worktree_edge_cases() {
+        let (r, feat) = with_feat("made");
+        // A detached source gives its commit and no base.
+        let head = sh(&feat, &["rev-parse", "HEAD"]).trim().to_string();
+        sh(&feat, &["checkout", "-q", "--detach"]);
+        let made = make_worktree(&feat, "d").unwrap().unwrap();
+        assert_eq!(made["base"], Value::Null);
+        assert_eq!(made["start"], head.as_str());
+        let listed = worktrees(&r.dir);
+        let wt = listed["worktrees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["branch"] == made["branch"])
+            .unwrap()
+            .clone();
+        assert_eq!((wt["base"].clone(), wt["base_recorded"].clone()), (json!("main"), json!(false)));
+        // Not a repository: None.
+        let other = plain_dir("made");
+        assert!(make_worktree(&other.to_string_lossy(), "x").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[test]
+    fn features_merge_refuses_a_base_checked_out_nowhere() {
+        let (r, feat) = with_feat("nowhere");
+        let made = make_worktree(&feat, "m").unwrap().unwrap();
+        let path = made["path"].as_str().unwrap().to_string();
+        write(&Path::new(&path).join("bg.txt"), "bg\n");
+        sh(&path, &["add", "bg.txt"]);
+        sh(&path, &["commit", "-q", "-m", "bg change"]);
+        sh(&feat, &["checkout", "-q", "--detach"]);
+        let out = finish(&r.dir, &path, "merge", false);
+        assert_eq!(out["ok"], false);
+        assert!(out["error"].as_str().unwrap().contains("feat is not checked out anywhere"), "{out}");
+        assert_eq!(norm_p(&path), norm_p(made["path"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn features_drop_worktree_undoes_it_including_the_branch() {
+        let (r, feat) = with_feat("drop");
+        let made = make_worktree(&feat, "m").unwrap().unwrap();
+        let branch = made["branch"].as_str().unwrap().to_string();
+        assert!(Path::new(made["path"].as_str().unwrap()).is_dir());
+        drop_worktree(&made);
+        assert!(!Path::new(made["path"].as_str().unwrap()).is_dir());
+        assert_eq!(sh(&r.dir, &["branch", "--list", &branch]).trim(), "");
+    }
+}

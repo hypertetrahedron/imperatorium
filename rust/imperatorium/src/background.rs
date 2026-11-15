@@ -181,3 +181,126 @@ mod tests {
         assert_eq!(parse_id("nothing here"), None);
     }
 }
+
+/// test_core.py's BackgroundCommand.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn opts(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn prompt_is_the_last_argument() {
+        // Options before the prompt, so a prompt starting with a dash is not
+        // read as a flag.
+        let cmd = build_command("--not-a-flag", &opts(json!({"model": "sonnet"})));
+        assert_eq!(cmd.last().unwrap(), "--not-a-flag");
+        assert_eq!(&cmd[..2], ["claude", "--bg"]);
+    }
+
+    #[test]
+    fn options_are_omitted_when_unset() {
+        // A name is always supplied, derived from the prompt; nothing else is.
+        assert_eq!(build_command("x", &Map::new()), ["claude", "--bg", "--name", "x", "x"]);
+        let cmd = build_command("x", &Map::new());
+        for flag in ["--model", "--permission-mode", "--agent"] {
+            assert!(!cmd.iter().any(|a| a == flag), "{flag}");
+        }
+    }
+
+    #[test]
+    fn every_option_is_passed_through() {
+        let cmd = build_command(
+            "x",
+            &opts(json!({"model": "opus", "permission_mode": "plan", "agent": "Plan",
+                         "name": "n", "extra": ["--effort", "high"]})),
+        );
+        for flag in ["--model", "--permission-mode", "--agent", "--name", "--effort"] {
+            assert!(cmd.iter().any(|a| a == flag), "{flag} in {cmd:?}");
+        }
+        assert_eq!(
+            cmd,
+            ["claude", "--bg", "--name", "n", "--model", "opus", "--permission-mode", "plan",
+             "--agent", "Plan", "--effort", "high", "x"]
+        );
+    }
+
+    #[test]
+    fn a_short_name_is_derived_from_the_prompt() {
+        // Without one, Claude Code names the session after the whole prompt,
+        // which is unreadable on the board and useless on a Stream Deck key.
+        assert_eq!(
+            short_name("implement the new feature as recommended").as_deref(),
+            Some("implement-the-new-feature")
+        );
+        assert_eq!(
+            short_name("Reply with the single word: ok.").as_deref(),
+            Some("reply-with-the-single")
+        );
+    }
+
+    #[test]
+    fn a_derived_name_is_a_usable_handle() {
+        let name = short_name("fix the *Kohler* shower!! integration").unwrap();
+        assert!(!name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'), "{name}");
+        assert!(name.chars().count() <= 28);
+    }
+
+    #[test]
+    fn an_unnameable_prompt_yields_no_name() {
+        for prompt in ["   ", "!!!", ""] {
+            assert_eq!(short_name(prompt), None, "{prompt:?}");
+        }
+    }
+
+    #[test]
+    fn an_explicit_name_beats_the_derived_one() {
+        let cmd = build_command("do the thing", &opts(json!({"name": "mine"})));
+        assert!(cmd.iter().any(|a| a == "mine"));
+        assert!(!cmd.iter().any(|a| a == "do-the-thing"));
+    }
+
+    #[test]
+    fn the_id_is_taken_from_the_end_of_the_output() {
+        // Preamble can contain hex-looking noise; the id is what it ends with.
+        assert_eq!(parse_id("started 8b879562").as_deref(), Some("8b879562"));
+        assert_eq!(parse_id("deadbeef then cafe1234").as_deref(), Some("cafe1234"));
+    }
+
+    #[test]
+    fn no_id_is_reported_as_none() {
+        for text in ["", "no identifier printed"] {
+            assert_eq!(parse_id(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn an_empty_prompt_is_refused_before_launching() {
+        let here = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        for bad in ["", "   "] {
+            assert_eq!(start(bad, &here, &Map::new()).unwrap_err(), "prompt is empty", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_missing_directory_is_refused_before_launching() {
+        let gone = std::env::current_dir().unwrap().join("no-such-dir");
+        let err = start("do it", &gone.to_string_lossy(), &Map::new()).unwrap_err();
+        assert!(err.starts_with("not a directory: "), "{err}");
+        assert!(start("do it", "", &Map::new()).is_err());
+    }
+
+    #[test]
+    fn unknown_config_keys_do_not_reach_the_command() {
+        // config.json is hand-edited and carries "_comment" keys.
+        let cmd = build_command(
+            "do it",
+            &opts(json!({"_comment": "ignore me", "permission_mode": "plan"})),
+        );
+        assert!(cmd.iter().any(|a| a == "--permission-mode"));
+        assert!(!cmd.join(" ").contains("_comment") && !cmd.join(" ").contains("ignore me"));
+    }
+}

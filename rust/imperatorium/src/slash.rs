@@ -249,3 +249,173 @@ mod tests {
         assert_eq!(parse("hello /x"), None);
     }
 }
+
+/// test_slash.py, ported with the same inputs and expected values.
+#[cfg(test)]
+mod py_ported {
+    use super::*;
+
+    const SID: &str = "11111111-1111-1111-1111-111111111111";
+
+    fn row(patch: Value) -> Map<String, Value> {
+        let mut r = json!({"sessionId": SID, "pid": 4242, "status": "idle"})
+            .as_object()
+            .unwrap()
+            .clone();
+        r.extend(patch.as_object().unwrap().clone());
+        r
+    }
+
+    fn pair(a: &str, b: &str) -> Option<(String, String)> {
+        Some((a.to_string(), b.to_string()))
+    }
+
+    #[test]
+    fn a_command_and_its_arguments() {
+        assert_eq!(parse("/model opus"), pair("model", "opus"));
+        assert_eq!(
+            parse("  /Compact  keep the API notes "),
+            pair("compact", "keep the API notes")
+        );
+    }
+
+    #[test]
+    fn text_that_only_mentions_a_command_is_a_prompt() {
+        for text in ["run /compact please", "", "/", "/ compact", "//comment"] {
+            assert_eq!(parse(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_commands_are_typed() {
+        for text in [
+            "/compact",
+            "/clear",
+            "/context",
+            "/cost",
+            "/model opus",
+            "/resume abc123",
+            "/code-review high",
+        ] {
+            assert_eq!(refusal(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_menu_the_window_cannot_drive_is_refused() {
+        for text in ["/config", "/permissions", "/mcp", "/model", "/rewind"] {
+            assert!(refusal(text).unwrap().contains("opens a menu"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_bare_menu_command_is_told_to_take_an_argument() {
+        assert!(refusal("/model").unwrap().contains("/model <name>"));
+    }
+
+    #[test]
+    fn exit_points_at_close() {
+        assert!(refusal("/exit").unwrap().contains("Close"));
+    }
+
+    #[test]
+    fn a_second_line_would_submit_the_first() {
+        assert!(refusal("/compact\nthen delete it all").unwrap().contains("one line"));
+    }
+
+    #[test]
+    fn an_idle_local_session_takes_it() {
+        assert_eq!(blocked(&row(json!({})), &[]), None);
+    }
+
+    #[test]
+    fn never_into_a_turn_or_a_prompt_waiting_on_you() {
+        for status in [json!("busy"), json!("shell"), json!("waiting"), Value::Null] {
+            assert!(blocked(&row(json!({"status": status})), &[]).is_some(), "{status}");
+        }
+    }
+
+    #[test]
+    fn never_while_a_permission_decision_is_parked_for_it() {
+        // Enter would answer the dialog the hook is holding open.
+        let why = blocked(&row(json!({})), &[json!({"session_id": SID})]);
+        assert!(why.unwrap().contains("permission"));
+        assert_eq!(blocked(&row(json!({})), &[json!({"session_id": "other"})]), None);
+    }
+
+    #[test]
+    fn a_remote_session_has_no_console_here() {
+        let why = blocked(&row(json!({"remote": true, "host": "pi"})), &[]);
+        assert!(why.unwrap().contains("pi"));
+    }
+
+    #[test]
+    fn a_session_without_a_process() {
+        assert!(blocked(&row(json!({"pid": null})), &[]).is_some());
+    }
+
+    /// The Windows check is `cfg!(windows)`, fixed when the binary is built,
+    /// so the other branch is only reachable on a non-Windows build.
+    #[cfg(not(windows))]
+    #[test]
+    fn windows_only() {
+        assert!(blocked(&row(json!({})), &[]).unwrap().contains("Windows"));
+    }
+
+    /// The typer here is the binary's own `type-into` child, with no seam
+    /// to substitute (Python took a `typer=` argument), so what can be
+    /// checked is the guard: a pid that is not a process id types nothing.
+    #[test]
+    fn typing_needs_a_process_id() {
+        assert!(!type_command(&Value::Null, "/compact"));
+        assert!(!type_command(&json!("4242"), "/compact"));
+    }
+
+    #[test]
+    fn lines_become_one() {
+        assert_eq!(
+            clean_typed("spend up to\r\n$40\n\n\tthen stop"),
+            ("spend up to $40 then stop".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn plain_text_is_unchanged() {
+        assert_eq!(clean_typed("  i approve  "), ("i approve".to_string(), false));
+    }
+
+    #[test]
+    fn control_and_invisible_characters_go() {
+        let (clean, changed) = clean_typed("ok\x1b[31m\u{200b} go\x03");
+        assert_eq!(clean, "ok[31m go");
+        assert!(changed);
+    }
+
+    #[test]
+    fn emoji_stay() {
+        assert_eq!(clean_typed("ship it \u{1f680}").0, "ship it \u{1f680}");
+    }
+
+    #[test]
+    fn a_leading_shell_or_memory_key_is_dropped() {
+        assert_eq!(clean_typed("!rm -rf build").0, "rm -rf build");
+        assert_eq!(clean_typed("# Heading\ntext").0, "Heading text");
+    }
+
+    #[test]
+    fn a_command_is_kept_as_a_command() {
+        assert_eq!(clean_typed("/compact\nkeep notes").0, "/compact keep notes");
+    }
+
+    #[test]
+    fn typed_refusal_empty_and_too_long() {
+        assert!(typed_refusal("").unwrap().contains("nothing"));
+        assert!(typed_refusal(&"x".repeat(TYPED_MAX + 1)).unwrap().contains("too long"));
+        assert_eq!(typed_refusal(&"x".repeat(TYPED_MAX)), None);
+    }
+
+    #[test]
+    fn a_command_gets_the_command_rules() {
+        assert!(typed_refusal("/config").unwrap().contains("menu"));
+    }
+}

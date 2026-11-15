@@ -276,3 +276,121 @@ mod tests {
         );
     }
 }
+
+/// Ported from the Python suite (test_features.py `ParkedQuestions`).
+#[cfg(test)]
+mod features_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn question() -> Map<String, Value> {
+        json!({"session_id": "s", "cwd": "C:/w/proj", "tool_name": "AskUserQuestion",
+               "tool_input": {"questions": [
+                   {"question": "Which colour?", "header": "Colour", "multiSelect": false,
+                    "options": [{"label": "Red", "description": "warm"},
+                                {"label": "Green", "description": "cool"}]},
+                   {"question": "Which sizes?", "header": "Size", "multiSelect": true,
+                    "options": [{"label": "S"}, {"label": "M"}]}]}})
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    /// Park `request` on a thread; the item once it is waiting.
+    fn park_in_background(
+        request: Map<String, Value>,
+        wait: f64,
+    ) -> (Arc<Pending>, std::thread::JoinHandle<(Value, Value, Value)>, Value) {
+        let p = Arc::new(Pending::default());
+        let parked = Arc::clone(&p);
+        let t = std::thread::spawn(move || parked.park(&request, wait));
+        let start = Instant::now();
+        while p.waiting().is_empty() {
+            assert!(start.elapsed() < Duration::from_secs(10), "never parked");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let item = p.waiting()[0].clone();
+        (p, t, item)
+    }
+
+    #[test]
+    fn features_the_item_carries_the_questions() {
+        let (p, t, item) = park_in_background(question(), 5.0);
+        let asked: Vec<&str> = item["questions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["question"].as_str().unwrap())
+            .collect();
+        assert_eq!(asked, ["Which colour?", "Which sizes?"]);
+        assert_eq!(
+            item["questions"][0]["options"][1],
+            json!({"label": "Green", "description": "cool"})
+        );
+        assert_eq!(item["questions"][1]["multiSelect"], true);
+        assert_eq!(item["input"], "Which colour? / Which sizes?");
+        p.decide(&item["id"], &json!("deny"), json!("window"), None);
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn features_answers_come_back_with_the_allow() {
+        let (p, t, item) = park_in_background(question(), 5.0);
+        let answers = json!({"Which colour?": "Green", "Which sizes?": "S, M"});
+        assert!(p.decide(&item["id"], &json!("allow"), json!("window"), Some(&answers)));
+        assert_eq!(t.join().unwrap(), (json!("allow"), json!("window"), answers));
+    }
+
+    #[test]
+    fn features_a_bare_allow_is_refused_for_a_question() {
+        let (p, t, item) = park_in_background(question(), 5.0);
+        let id = &item["id"];
+        // The Stream Deck and impctl can only send this.
+        assert!(!p.decide(id, &json!("allow"), json!("deck"), None));
+        // Only the first of two questions answered.
+        assert!(!p.decide(id, &json!("allow"), json!("window"), Some(&json!({"Which colour?": "Red"}))));
+        // The second answer blank.
+        assert!(!p.decide(
+            id,
+            &json!("allow"),
+            json!("window"),
+            Some(&json!({"Which colour?": "Red", "Which sizes?": "  "}))
+        ));
+        assert!(p.decide(id, &json!("deny"), json!("window"), None));
+        assert_eq!(t.join().unwrap(), (json!("deny"), json!("window"), Value::Null));
+    }
+
+    #[test]
+    fn features_pass_releases_it_to_the_terminal_at_once() {
+        let (p, t, item) = park_in_background(question(), 30.0);
+        let started = Instant::now();
+        assert!(p.decide(&item["id"], &json!("pass"), json!("window"), None));
+        let got = t.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(got.0, Value::Null);
+        assert!(p.waiting().is_empty());
+    }
+
+    #[test]
+    fn features_a_malformed_question_cannot_be_allowed() {
+        let mut bad = question();
+        bad.insert("tool_input".into(), json!({"questions": "nope"}));
+        let (p, t, item) = park_in_background(bad, 5.0);
+        assert!(item.get("questions").is_none());
+        assert!(!p.decide(&item["id"], &json!("allow"), json!("window"), Some(&json!({"x": "y"}))));
+        p.decide(&item["id"], &json!("pass"), json!("window"), None);
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn features_other_tools_are_unchanged() {
+        let bash = json!({"session_id": "s", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let (p, t, item) = park_in_background(bash, 5.0);
+        assert!(item.get("questions").is_none());
+        assert!(p.decide(&item["id"], &json!("allow"), json!("window"), None));
+        assert_eq!(t.join().unwrap(), (json!("allow"), json!("window"), Value::Null));
+    }
+}

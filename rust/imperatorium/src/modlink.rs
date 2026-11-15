@@ -471,3 +471,106 @@ mod tests {
         );
     }
 }
+
+/// What test_modlink.py pinned down for the link itself.
+#[cfg(test)]
+mod python_tests {
+    use super::*;
+
+    fn temp(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("imp-modlink-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn obj(v: Value) -> Obj {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn the_token_is_made_once_and_kept() {
+        let dir = temp("token");
+        let first = ModLink::new(load_token(&dir).unwrap());
+        let again = ModLink::new(load_token(&dir).unwrap());
+        assert_eq!(again.token, first.token);
+        assert!(first.token.chars().count() >= 32);
+        assert!(first.authentic(Some(&first.token)));
+        assert!(!first.authentic(Some("nope")));
+        assert!(!first.authentic(None));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_beat_makes_a_mod_live_until_it_stops() {
+        let link = ModLink::new("t".repeat(40));
+        assert!(!link.live("s", 1000.0));
+        link.beat(&obj(json!({"session_id": "s", "busy": true})), 1000.0);
+        assert!(link.live("s", 1000.0));
+        assert_eq!(link.state("s", 1000.0).unwrap()["busy"], true);
+        assert!(!link.live("s", 1000.0 + LIVE_FOR + 1.0));
+        assert!(link.state("s", 1000.0 + LIVE_FOR + 1.0).is_none());
+    }
+
+    #[test]
+    fn a_prompt_is_handed_out_once_accepted() {
+        let link = ModLink::new("t".repeat(40));
+        let pid = link.offer("s", "do it", true, 1000.0);
+        let beat = |acks: Value, at: f64| link.beat(&obj(json!({"session_id": "s", "acks": acks})), at);
+        let got = beat(json!([]), 1000.0);
+        assert_eq!(got, [json!({"id": pid, "text": "do it", "as_user": true})]);
+        // Claimed: not handed out again on the next beat...
+        assert!(beat(json!([]), 1001.0).is_empty());
+        // ...unless the mod never accepted it (it reloaded mid-beat).
+        assert_eq!(beat(json!([]), 1000.0 + CLAIM_FOR + 1.0).len(), 1);
+        // Accepted: pending, never handed out again, however long it waits.
+        beat(json!([{"id": pid, "outcome": "accepted"}]), 1040.0);
+        assert!(beat(json!([]), 1040.0 + 10.0 * CLAIM_FOR).is_empty());
+        assert_eq!(link.pending("s").len(), 1);
+        // Its turn started: settled.
+        beat(json!([{"id": pid, "outcome": "submitted"}]), 1400.0);
+        assert!(link.pending("s").is_empty());
+        assert_eq!(link.settled("s")[0]["outcome"], "submitted");
+    }
+
+    #[test]
+    fn a_dropped_prompt_says_why() {
+        let link = ModLink::new("t".repeat(40));
+        let pid = link.offer("s", "x", false, 1000.0);
+        link.beat(&obj(json!({"session_id": "s"})), 1000.0);
+        link.beat(
+            &obj(json!({"session_id": "s", "acks": [{"id": pid, "outcome": "dropped",
+                "reason": "the session was stopped and nobody has sent input since"}]})),
+            1001.0,
+        );
+        assert!(link.pending("s").is_empty());
+        assert!(link.settled("s")[0]["reason"].as_str().unwrap().contains("stopped"));
+        assert_eq!(link.settled("s")[0]["outcome"], "dropped");
+    }
+
+    #[test]
+    fn the_settled_record_is_bounded() {
+        let link = ModLink::new("t".repeat(40));
+        for i in 0..(SETTLED_KEEP + 5) {
+            let pid = link.offer("s", &format!("p{i}"), false, 1000.0);
+            link.beat(&obj(json!({"session_id": "s", "acks": [{"id": pid, "outcome": "submitted"}]})), 1000.0);
+        }
+        assert_eq!(link.settled("s").len(), SETTLED_KEEP);
+    }
+
+    #[test]
+    fn usage_becomes_a_statusline_payload() {
+        let got = statusline_payload(&json!({
+            "context": {"tokens": 5000, "window": 200000, "percent": 2.5},
+            "rateLimits": [{"kind": "five_hour", "percentUsed": 40, "resetsAt": "2026-11-03T20:00:00Z"},
+                           {"kind": "seven_day", "percentUsed": "junk"}],
+            "cost": {"usd": 1.5}, "model": "Opus 5.5"}));
+        assert_eq!(got["context_window"], json!({"used_percentage": 2.5, "context_window_size": 200000}));
+        assert_eq!(got["cost"], json!({"total_cost_usd": 1.5}));
+        assert_eq!(got["model"], json!({"display_name": "Opus 5.5"}));
+        assert_eq!(got["rate_limits"]["five_hour"]["used_percentage"], 40);
+        assert_eq!(got["rate_limits"]["five_hour"]["resets_at"].as_f64(), Some(1793736000.0));
+        assert!(got["rate_limits"].get("seven_day").is_none());
+        assert_eq!(statusline_payload(&Value::Null)["rate_limits"], json!({}));
+    }
+}

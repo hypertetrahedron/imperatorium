@@ -702,3 +702,39 @@ mod tests {
         assert_eq!(r.reason, "policy error (TypeError)");
     }
 }
+
+/// test_policy.py's direct calls (its `decide` calls are replayed from the
+/// Python goldens by tests/policy_tests.rs).
+#[cfg(test)]
+mod py_ported {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn is_sensitive_handles_both_separators_and_junk() {
+        assert!(is_sensitive(Some(&json!("a/.env"))));
+        assert!(is_sensitive(Some(&json!("a\\.env"))));
+        assert!(!is_sensitive(Some(&json!(""))));
+        assert!(!is_sensitive(None));
+        assert!(!is_sensitive(Some(&Value::Null)));
+        assert!(!is_sensitive(Some(&json!("environment.md"))));
+    }
+}
+
+/// test_rename.py: the policy code is protected under either name.
+#[cfg(test)]
+mod core_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_policy_code_is_protected_under_either_name() {
+        let on = json!({"enabled": true, "defaults": {}});
+        for path in ["imperatorium/policy.py", r"imperatorium\policy.py", "ccontrol/policy.py"] {
+            let req = json!({"tool_name": "Bash", "tool_input": {"command": format!("edit {path}")},
+                             "cwd": "/w/p"});
+            let r = decide(&req, &on);
+            assert_eq!((r.verdict, r.tier), (DENY, "self"), "{path}");
+        }
+    }
+}
