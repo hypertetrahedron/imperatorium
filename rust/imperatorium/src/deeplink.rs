@@ -41,8 +41,20 @@ pub fn build(cwd: &str, prompt: &str) -> Result<String, String> {
     Ok(url)
 }
 
+/// Tests only: when set, a deep link is appended to this file instead of
+/// being opened. The protocol handler would start a real Claude Code
+/// window on the desktop, and nothing on a test's PATH can stand in for it.
+pub const TEST_LOG_ENV: &str = "IMPERATORIUM_TEST_DEEPLINK_LOG";
+
 /// deeplink.open_url: hand it to the OS handler.
 pub fn open_url(url: &str) {
+    if let Some(log) = crate::paths::env_nonempty(TEST_LOG_ENV) {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+            let _ = writeln!(f, "{url}");
+        }
+        return;
+    }
     #[cfg(windows)]
     {
         // Through cmd, so the shell resolves the protocol handler; the empty
