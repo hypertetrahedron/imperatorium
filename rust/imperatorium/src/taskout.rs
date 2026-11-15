@@ -646,3 +646,271 @@ mod tests {
         assert_eq!(story(&entries), "looking\n> Grep x\n  x no match\n");
     }
 }
+
+/// test_taskout.py, ported: finding and reading the output files of what a
+/// session is waiting on.
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    const SID: &str = "11111111-2222-3333-4444-555555555555";
+    /// tasks_dir reads CLAUDE_CODE_TMPDIR; one test at a time sets it.
+    static ENV: Mutex<()> = Mutex::new(());
+
+    struct Rig {
+        root: PathBuf,
+        folder: PathBuf,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            static N: AtomicU32 = AtomicU32::new(0);
+            let root = std::env::temp_dir()
+                .join(format!("imp-taskout-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+            let _ = std::fs::remove_dir_all(&root);
+            let folder = root.join("claude").join("Y--proj").join(SID).join("tasks");
+            std::fs::create_dir_all(&folder).unwrap();
+            Rig { root, folder }
+        }
+
+        fn write(&self, id: &str, text: &str) -> PathBuf {
+            let p = self.folder.join(format!("{id}.output"));
+            std::fs::write(&p, text).unwrap();
+            p
+        }
+
+        fn agents(&self) -> PathBuf {
+            let a = self.root.join("claude").join("Y--proj").join(SID).join("subagents");
+            std::fs::create_dir_all(&a).unwrap();
+            a
+        }
+
+        fn agent(&self, id: &str, entries: &[Value], call: Option<&str>) -> PathBuf {
+            let path = self.agents().join(format!("agent-{id}.jsonl"));
+            let text: String = entries.iter().map(|e| format!("{e}\n")).collect();
+            std::fs::write(&path, text).unwrap();
+            if let Some(c) = call {
+                std::fs::write(self.agents().join(format!("agent-{id}.meta.json")),
+                               json!({"toolUseId": c, "description": "x"}).to_string()).unwrap();
+            }
+            path
+        }
+    }
+
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn now() -> f64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64()
+    }
+
+    fn with_tmpdir<T>(root: &Path, f: impl FnOnce() -> T) -> T {
+        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("CLAUDE_CODE_TMPDIR", root);
+        let out = f();
+        std::env::remove_var("CLAUDE_CODE_TMPDIR");
+        out
+    }
+
+    // -- Folder -------------------------------------------------------------
+
+    #[test]
+    fn found_by_session_id_whatever_the_project_slug() {
+        let r = Rig::new();
+        assert_eq!(with_tmpdir(&r.root, || tasks_dir(SID)), Some(r.folder.clone()));
+    }
+
+    #[test]
+    fn unknown_or_malformed_ids_find_nothing() {
+        let r = Rig::new();
+        let other = format!("{}{}", "0".repeat(8), &SID[8..]);
+        assert_eq!(with_tmpdir(&r.root, || tasks_dir(&other)), None);
+        assert_eq!(with_tmpdir(&r.root, || tasks_dir("../x")), None);
+    }
+
+    // -- Tail ---------------------------------------------------------------
+
+    #[test]
+    fn colour_codes_and_redrawn_lines_are_cleaned() {
+        let r = Rig::new();
+        let p = r.write("b1", "\x1b[32mok\x1b[0m\r\n10%\r50%\r100%\ndone\n");
+        let (text, size, mtime) = tail(&p, TAIL_BYTES);
+        assert_eq!(text, "ok\n100%\ndone\n");
+        assert!(size > 0);
+        assert!(!mtime.is_null());
+    }
+
+    #[test]
+    fn a_long_file_is_cut_at_a_line() {
+        let r = Rig::new();
+        let p = r.write("b1", &(0..1000).map(|i| format!("line {i}\n")).collect::<String>());
+        let (text, _, _) = tail(&p, 100);
+        assert!(text.starts_with("line "));
+        assert!(text.ends_with("line 999\n"));
+        assert!(text.len() <= 100);
+    }
+
+    #[test]
+    fn a_vanished_file_reads_as_empty() {
+        let r = Rig::new();
+        assert_eq!(tail(&r.folder.join("no.output"), TAIL_BYTES), (String::new(), 0, Value::Null));
+    }
+
+    #[test]
+    fn reading_leaves_the_writer_writing() {
+        let r = Rig::new();
+        let p = r.folder.join("b2.output");
+        let mut writer = std::fs::File::create(&p).unwrap();
+        writer.write_all(b"one\n").unwrap();
+        writer.flush().unwrap();
+        assert_eq!(tail(&p, TAIL_BYTES).0, "one\n");
+        writer.write_all(b"two\n").unwrap();
+        writer.flush().unwrap();
+        assert_eq!(tail(&p, TAIL_BYTES).0, "one\ntwo\n");
+    }
+
+    // -- Awaited ------------------------------------------------------------
+
+    fn brief(got: &[Value], keys: &[&str]) -> Vec<Vec<Value>> {
+        got.iter().map(|t| keys.iter().map(|k| t[*k].clone()).collect()).collect()
+    }
+
+    #[test]
+    fn scheduled_wakeups_are_listed_with_when_they_fire() {
+        let r = Rig::new();
+        let stat = json!({"wakeups": [
+            {"id": "wakeup", "label": "check the CI run", "started": 5, "fires_at": 600.0},
+            {"id": "cron:c1", "label": "nightly", "fires_at": 900.0, "recurring": true}]});
+        let got = awaited(&stat, Some(&r.folder), None);
+        assert_eq!(brief(&got, &["id", "kind", "text", "fires_at", "recurring"]), vec![
+            vec![json!("cron:c1"), json!("wakeup"), json!("nightly"), json!(900.0), json!(true)],
+            vec![json!("wakeup"), json!("wakeup"), json!("check the CI run"), json!(600.0), json!(false)],
+        ]);
+    }
+
+    #[test]
+    fn background_shells_and_monitors_by_their_ids() {
+        let r = Rig::new();
+        r.write("bshell", "building\n");
+        r.write("bmon", "event\n");
+        let stat = json!({"shells": [{"id": "bshell", "label": "make", "started": 1}],
+                          "monitors": [{"id": "bmon", "label": "watch", "started": 2}],
+                          "agents": [{"id": "aagent"}], "known_tasks": ["bshell", "bmon", "aagent"]});
+        let got = awaited(&stat, Some(&r.folder), None);
+        assert_eq!(brief(&got, &["id", "kind", "text"]), vec![
+            vec![json!("aagent"), json!("agent"), json!("")],
+            vec![json!("bshell"), json!("shell"), json!("building\n")],
+            vec![json!("bmon"), json!("monitor"), json!("event\n")],
+        ]);
+    }
+
+    #[test]
+    fn a_foreground_call_gets_the_file_no_record_names() {
+        let r = Rig::new();
+        r.write("bold", "finished long ago\n"); // a named, ended task
+        r.write("aagent", ""); // a subagent's
+        r.write("bfg", "compiling\n");
+        let stat = json!({"shells": [{"id": "toolu_1", "label": "cargo build", "foreground": true,
+                                      "started": now() - 1.0}],
+                          "known_tasks": ["bold"]});
+        let got = awaited(&stat, Some(&r.folder), None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(brief(&got, &["id", "text", "foreground"]), vec![vec![json!("bfg"), json!("compiling\n"), json!(true)]]);
+    }
+
+    #[test]
+    fn a_file_older_than_the_call_is_not_its_output() {
+        let r = Rig::new();
+        let p = r.write("bstale", "old\n");
+        let f = std::fs::OpenOptions::new().write(true).open(&p).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600)).unwrap();
+        drop(f);
+        let stat = json!({"shells": [{"id": "toolu_1", "label": "x", "foreground": true, "started": now() + 3600.0}]});
+        let got = awaited(&stat, Some(&r.folder), None);
+        assert_eq!(brief(&got, &["id", "text"]), vec![vec![json!("toolu_1"), json!("")]]);
+    }
+
+    #[test]
+    fn no_folder_still_lists_the_tasks() {
+        let stat = json!({"shells": [{"id": "b1", "label": "x"}]});
+        let got = awaited(&stat, None, None);
+        assert_eq!(got.iter().map(|t| t["text"].clone()).collect::<Vec<_>>(), [json!("")]);
+    }
+
+    // -- Subagents ----------------------------------------------------------
+
+    fn entry(kind: &str, blocks: Value, parent: Value) -> Value {
+        json!({"type": kind, "parentUuid": parent, "message": {"content": blocks}})
+    }
+
+    #[test]
+    fn folder_is_beside_the_transcript() {
+        let r = Rig::new();
+        let agents = r.agents();
+        let transcript = r.root.join("claude").join("Y--proj").join(format!("{SID}.jsonl"));
+        assert_eq!(subagents_dir(Some(&transcript)), Some(agents));
+        assert_eq!(subagents_dir(None), None);
+        assert_eq!(subagents_dir(Some(&r.root.join("none.jsonl"))), None);
+    }
+
+    #[test]
+    fn files_found_by_agent_id_and_by_the_call_that_started_them() {
+        let r = Rig::new();
+        let path = r.agent("a1", &[], Some("toolu_9"));
+        let want: std::collections::HashMap<String, PathBuf> =
+            [("a1".to_string(), path.clone()), ("toolu_9".to_string(), path)].into_iter().collect();
+        assert_eq!(agent_files(Some(&r.agents())), want);
+        assert!(agent_files(None).is_empty());
+    }
+
+    #[test]
+    fn story_tells_text_calls_and_failures_but_not_the_task() {
+        let p = json!("p");
+        let text = story(&[
+            entry("user", json!([{"type": "text", "text": "the task"}]), Value::Null),
+            entry("assistant", json!([{"type": "text", "text": "Looking.\n"},
+                                      {"type": "tool_use", "name": "Grep", "input": {"pattern": "foo"}}]), p.clone()),
+            entry("user", json!([{"type": "tool_result", "content": "fine"}]), p.clone()),
+            entry("assistant", json!([{"type": "tool_use", "name": "Bash", "input": {"command": "make\nmore"}}]), p.clone()),
+            entry("user", json!([{"type": "tool_result", "is_error": true,
+                                  "content": [{"type": "text", "text": "exit 2\nlong trace"}]}]), p),
+        ]);
+        assert_eq!(text, "Looking.\n> Grep foo\n> Bash make\n  x exit 2\n");
+    }
+
+    #[test]
+    fn a_cut_tail_drops_the_partial_first_line() {
+        // The transcript tail is AGENT_TAIL_BYTES; a first line longer than
+        // that is cut mid-way and dropped whole.
+        let r = Rig::new();
+        let big = "x".repeat(AGENT_TAIL_BYTES as usize + 1000);
+        let path = r.agent("a1", &[
+            entry("assistant", json!([{"type": "text", "text": big}]), json!("p")),
+            entry("assistant", json!([{"type": "text", "text": "last"}]), json!("p")),
+        ], None);
+        let (text, size, _) = agent_tail(&path);
+        assert_eq!(text, "last\n");
+        assert_eq!(size, std::fs::metadata(&path).unwrap().len());
+    }
+
+    #[test]
+    fn background_and_foreground_subagents_get_their_transcripts() {
+        let r = Rig::new();
+        let say = |t: &str| vec![entry("assistant", json!([{"type": "text", "text": t}]), json!("p"))];
+        r.agent("abg", &say("bg"), None);
+        r.agent("afg", &say("fg"), Some("toolu_1"));
+        let stat = json!({"agents": [{"id": "abg", "label": "review", "started": 1},
+                                     {"id": "toolu_1", "label": "explore", "foreground": true, "started": 2}]});
+        let got = awaited(&stat, None, Some(&r.agents()));
+        assert_eq!(brief(&got, &["id", "kind", "text", "foreground"]), vec![
+            vec![json!("abg"), json!("agent"), json!("bg\n"), json!(false)],
+            vec![json!("toolu_1"), json!("agent"), json!("fg\n"), json!(true)],
+        ]);
+    }
+}
