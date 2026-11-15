@@ -358,7 +358,7 @@ pub struct History {
 impl History {
     pub fn new() -> Self {
         History {
-            root: crate::sessions::projects_dir(),
+            root: crate::paths::projects_dir(),
             files: indexmap::IndexMap::new(),
             pinned: Default::default(),
         }

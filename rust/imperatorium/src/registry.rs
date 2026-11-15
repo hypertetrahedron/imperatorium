@@ -23,19 +23,6 @@ const ATTENTION_STATES: &[&str] = &["blocked", "failed"];
 pub const ACTIVE_STATUSES: &[&str] = &["busy", "shell"];
 const SETTLE_SECONDS: f64 = 3.0;
 
-fn claude_home() -> PathBuf {
-    match std::env::var("CLAUDE_CONFIG_DIR") {
-        Ok(d) if !d.is_empty() => PathBuf::from(d),
-        _ => {
-            #[cfg(windows)]
-            let home = std::env::var("USERPROFILE").unwrap_or_default();
-            #[cfg(not(windows))]
-            let home = std::env::var("HOME").unwrap_or_default();
-            PathBuf::from(home).join(".claude")
-        }
-    }
-}
-
 /// `claude agents --json --all`, or [] when it fails or takes over `timeout`.
 pub fn agents(timeout: Duration) -> Vec<Value> {
     let mut cmd = Command::new("claude");
@@ -85,7 +72,7 @@ pub fn agents(timeout: Duration) -> Vec<Value> {
 /// ~/.claude/sessions/*.json, keyed by sessionId.
 pub fn session_files() -> HashMap<String, Row> {
     let mut found = HashMap::new();
-    let Ok(rd) = std::fs::read_dir(claude_home().join("sessions")) else {
+    let Ok(rd) = std::fs::read_dir(crate::paths::claude_home().join("sessions")) else {
         return found;
     };
     for e in rd.flatten() {

@@ -653,7 +653,7 @@ pub fn transcript_path(sid: &str) -> Option<PathBuf> {
     if sid.len() != 36 || !sid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
         return None;
     }
-    let root = crate::sessions::projects_dir();
+    let root = crate::paths::projects_dir();
     let key = (root, sid.to_string());
     let memo = MEMO.get_or_init(Default::default);
     if let Some((at, known)) = memo.lk().get(&key) {

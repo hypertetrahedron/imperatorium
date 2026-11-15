@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
-use unicode_normalization::UnicodeNormalization;
 
 use crate::locks::LockExt;
 use crate::pyish::{py_regex, strip, truthy};
@@ -56,25 +55,6 @@ pub fn valid_uuid(s: &str) -> bool {
     })
 }
 
-fn nfc(s: &str) -> String {
-    s.nfc().collect()
-}
-
-/// `_get_projects_dir()`: CLAUDE_CONFIG_DIR or ~/.claude, NFC, then projects.
-pub fn projects_dir() -> PathBuf {
-    let base = match std::env::var("CLAUDE_CONFIG_DIR") {
-        Ok(d) if !d.is_empty() => nfc(&d),
-        _ => {
-            #[cfg(windows)]
-            let home = std::env::var("USERPROFILE").unwrap_or_default();
-            #[cfg(not(windows))]
-            let home = std::env::var("HOME").unwrap_or_default();
-            nfc(&Path::new(&home).join(".claude").to_string_lossy())
-        }
-    };
-    PathBuf::from(base).join("projects")
-}
-
 fn dirents(dir: &Path) -> Vec<PathBuf> {
     match fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
@@ -88,7 +68,7 @@ fn dirents(dir: &Path) -> Vec<PathBuf> {
 /// any project folder. Err for a file that is not UTF-8 (Python raises).
 fn read_session_file(session_id: &str) -> Result<Option<String>, String> {
     let name = format!("{session_id}.jsonl");
-    for dir in dirents(&projects_dir()) {
+    for dir in dirents(&crate::paths::projects_dir()) {
         let Ok(bytes) = fs::read(dir.join(&name)) else {
             continue;
         };
@@ -623,7 +603,7 @@ pub fn info_json(session_id: &str) -> Value {
         return Value::Null;
     }
     let name = format!("{session_id}.jsonl");
-    for dir in dirents(&projects_dir()).into_iter().filter(|d| d.is_dir()) {
+    for dir in dirents(&crate::paths::projects_dir()).into_iter().filter(|d| d.is_dir()) {
         if let Some(lite) = read_lite(&dir.join(&name)) {
             return info_from_lite(session_id, &lite).unwrap_or(Value::Null);
         }
@@ -644,7 +624,7 @@ pub fn titles_json(ids: &[String]) -> Value {
     type Seen = HashMap<PathBuf, (u64, Option<std::time::SystemTime>, String)>;
     static SEEN: std::sync::OnceLock<std::sync::Mutex<Seen>> = std::sync::OnceLock::new();
     let seen = SEEN.get_or_init(Default::default);
-    let dirs: Vec<PathBuf> = dirents(&projects_dir())
+    let dirs: Vec<PathBuf> = dirents(&crate::paths::projects_dir())
         .into_iter()
         .filter(|d| d.is_dir())
         .collect();
@@ -702,7 +682,7 @@ fn title_of(info: &Value) -> String {
 pub fn list_json() -> Value {
     let mut rows: Vec<Value> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
-    for dir in dirents(&projects_dir()).into_iter().filter(|d| d.is_dir()) {
+    for dir in dirents(&crate::paths::projects_dir()).into_iter().filter(|d| d.is_dir()) {
         for file in dirents(&dir) {
             let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
                 continue;

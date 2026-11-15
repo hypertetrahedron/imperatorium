@@ -76,11 +76,7 @@ pub fn provider_of(payload: &Map<String, Value>) -> Option<String> {
 
 /// `oauthAccount.organizationType` from ~/.claude.json, lower-cased.
 fn org_type() -> String {
-    #[cfg(windows)]
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    #[cfg(not(windows))]
-    let home = std::env::var("HOME").unwrap_or_default();
-    std::fs::read_to_string(PathBuf::from(home).join(".claude.json"))
+    std::fs::read_to_string(crate::paths::user_home().join(".claude.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| {

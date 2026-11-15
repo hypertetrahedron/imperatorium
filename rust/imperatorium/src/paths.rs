@@ -9,6 +9,31 @@ pub fn env_nonempty(name: &str) -> Option<String> {
     env::var(name).ok().filter(|v| !v.is_empty())
 }
 
+/// The user's home as the OS names it (USERPROFILE on Windows, HOME
+/// elsewhere); empty when unset, like `os.environ.get(...) or ""`.
+pub fn user_home() -> PathBuf {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    PathBuf::from(env::var(var).unwrap_or_default())
+}
+
+/// Claude Code's config folder: CLAUDE_CONFIG_DIR, else ~/.claude (Python's
+/// `registry`, `costs` and `sessionstat` do exactly this, no normalisation).
+pub fn claude_home() -> PathBuf {
+    match env_nonempty("CLAUDE_CONFIG_DIR") {
+        Some(d) => PathBuf::from(d),
+        None => user_home().join(".claude"),
+    }
+}
+
+/// `_get_projects_dir()` of the Agent SDK: the config folder, NFC-normalised
+/// (as the SDK does, so transcript folder names match), then `projects`.
+/// Only this one is normalised; `claude_home()` stays as given.
+pub fn projects_dir() -> PathBuf {
+    use unicode_normalization::UnicodeNormalization;
+    let base: String = claude_home().to_string_lossy().nfc().collect();
+    PathBuf::from(base).join("projects")
+}
+
 fn home_dir() -> PathBuf {
     #[cfg(windows)]
     let found = env_nonempty("USERPROFILE");

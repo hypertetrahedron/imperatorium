@@ -259,16 +259,12 @@ pub fn apply_mod(settings: &mut Map<String, Value>, uninstall: bool, mod_dir: &s
 }
 
 pub fn home_dir() -> PathBuf {
-    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    PathBuf::from(std::env::var(var).unwrap_or_default())
+    crate::paths::user_home()
 }
 
 /// install.settings_path: CLAUDE_CONFIG_DIR, else ~/.claude.
 pub fn settings_path() -> PathBuf {
-    match crate::paths::env_nonempty("CLAUDE_CONFIG_DIR") {
-        Some(d) => PathBuf::from(d).join("settings.json"),
-        None => home_dir().join(".claude").join("settings.json"),
-    }
+    crate::paths::claude_home().join("settings.json")
 }
 
 fn load_settings(path: &Path) -> Result<Map<String, Value>, String> {
