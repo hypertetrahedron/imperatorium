@@ -1,0 +1,1007 @@
+{"case": {"normalise": "(1) 42 42 x_y 　"}, "want": "1) 42 42 x_y"}
+{"case": {"normalise": "* x_y"}, "want": "x_y"}
+{"case": {"normalise": "(1) ﬁle Straße 42 tests"}, "want": "1) file strasse 42 tests"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "😀"}, "want": ""}
+{"case": {"normalise": "  ﬁle Fix x_y"}, "want": "le fix x_y"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "Build"}, "want": "build"}
+{"case": {"normalise": "İstanbul 42 　"}, "want": "stanbul 42"}
+{"case": {"normalise": "* Build tests a-b Fix"}, "want": "build tests a-b fix"}
+{"case": {"normalise": "✳ BUILD x \t"}, "want": "build x"}
+{"case": {"normalise": "✳ İstanbul Build"}, "want": "stanbul build"}
+{"case": {"normalise": "😀Fix build"}, "want": "fix build"}
+{"case": {"normalise": "✳ Straße tests Ω"}, "want": "strasse tests ω"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "café"}, "want": "café"}
+{"case": {"normalise": "Ω Ω x"}, "want": "x"}
+{"case": {"normalise": "✳ café BUILD İstanbul build"}, "want": "café build i̇stanbul build"}
+{"case": {"normalise": "... Fix x"}, "want": "fix x"}
+{"case": {"normalise": "✳ Build"}, "want": "build"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "a-b ﬁle \t"}, "want": "a-b file"}
+{"case": {"normalise": "* x_y café ΟΔΟΣ"}, "want": "x_y café οδοσ"}
+{"case": {"normalise": "  Straße Ω x"}, "want": "strasse ω x"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "... tests Fix café ﬁle"}, "want": "tests fix café file"}
+{"case": {"normalise": "  　 Straße the ΟΔΟΣ"}, "want": "strasse the οδοσ"}
+{"case": {"normalise": "* BUILD Fix İstanbul"}, "want": "build fix i̇stanbul"}
+{"case": {"normalise": "... build build build"}, "want": "build build build"}
+{"case": {"normalise": "* Build Fix µs µs"}, "want": "build fix μs μs"}
+{"case": {"normalise": "(1) 　"}, "want": "1)"}
+{"case": {"normalise": "(1) ΟΔΟΣ Ω ﬁle ΟΔΟΣ"}, "want": "1) οδοσ ω file οδοσ"}
+{"case": {"normalise": "... Build"}, "want": "build"}
+{"case": {"normalise": "* \t"}, "want": ""}
+{"case": {"normalise": "* a-b build x"}, "want": "a-b build x"}
+{"case": {"normalise": ""}, "want": ""}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "😀Build Ω"}, "want": "build ω"}
+{"case": {"normalise": "... a-b tests x_y"}, "want": "a-b tests x_y"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "⠋ a-b"}, "want": "a-b"}
+{"case": {"normalise": "😀build BUILD café café"}, "want": "build build café café"}
+{"case": {"normalise": ""}, "want": ""}
+{"case": {"normalise": "... 42 Build the"}, "want": "42 build the"}
+{"case": {"normalise": "tests"}, "want": "tests"}
+{"case": {"normalise": "·　 ΟΔΟΣ build µs"}, "want": "build μs"}
+{"case": {"normalise": "⠋ İstanbul x_y 　"}, "want": "stanbul x_y"}
+{"case": {"normalise": "⠋ the Fix a-b µs"}, "want": "the fix a-b μs"}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "build a-b build tests"}, "want": "build a-b build tests"}
+{"case": {"normalise": "·build"}, "want": "build"}
+{"case": {"normalise": "✳ \t µs the"}, "want": "s the"}
+{"case": {"normalise": "⠋ µs build"}, "want": "s build"}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "(1) Fix Ω Ω 　"}, "want": "1) fix ω ω"}
+{"case": {"normalise": "build build build Straße"}, "want": "build build build strasse"}
+{"case": {"normalise": "... İstanbul Ω 　"}, "want": "stanbul ω"}
+{"case": {"normalise": "(1) 42 \t build"}, "want": "1) 42 build"}
+{"case": {"normalise": "😀Fix tests build a-b"}, "want": "fix tests build a-b"}
+{"case": {"normalise": "Straße"}, "want": "strasse"}
+{"case": {"normalise": "(1) a-b BUILD Fix µs"}, "want": "1) a-b build fix μs"}
+{"case": {"normalise": "... café"}, "want": "café"}
+{"case": {"normalise": "😀İstanbul"}, "want": "stanbul"}
+{"case": {"normalise": "(1) Build İstanbul Ω"}, "want": "1) build i̇stanbul ω"}
+{"case": {"normalise": "... x"}, "want": "x"}
+{"case": {"normalise": "* Ω"}, "want": ""}
+{"case": {"normalise": "* İstanbul café ΟΔΟΣ ΟΔΟΣ"}, "want": "stanbul café οδοσ οδοσ"}
+{"case": {"normalise": "(1) the build"}, "want": "1) the build"}
+{"case": {"normalise": "... Straße"}, "want": "strasse"}
+{"case": {"normalise": "(1) BUILD café x"}, "want": "1) build café x"}
+{"case": {"normalise": "  a-b İstanbul 42 İstanbul"}, "want": "a-b i̇stanbul 42 i̇stanbul"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "... the BUILD 　 µs"}, "want": "the build μs"}
+{"case": {"normalise": "... Fix ΟΔΟΣ Ω 42"}, "want": "fix οδοσ ω 42"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "... ΟΔΟΣ"}, "want": ""}
+{"case": {"normalise": ""}, "want": ""}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "😀build café"}, "want": "build café"}
+{"case": {"normalise": "* BUILD ﬁle Fix"}, "want": "build file fix"}
+{"case": {"normalise": "(1) the ﬁle Build BUILD"}, "want": "1) the file build build"}
+{"case": {"normalise": "·x_y x_y ﬁle Ω"}, "want": "x_y x_y file ω"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "  ΟΔΟΣ 42 42"}, "want": "42 42"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "  　 x_y İstanbul 42"}, "want": "x_y i̇stanbul 42"}
+{"case": {"normalise": "·Straße"}, "want": "strasse"}
+{"case": {"normalise": "✳ Build"}, "want": "build"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "... İstanbul BUILD Fix µs"}, "want": "stanbul build fix μs"}
+{"case": {"normalise": "😀"}, "want": ""}
+{"case": {"normalise": "İstanbul \t x"}, "want": "stanbul x"}
+{"case": {"normalise": "... Fix café build"}, "want": "fix café build"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "⠋ İstanbul ΟΔΟΣ a-b ΟΔΟΣ"}, "want": "stanbul οδοσ a-b οδοσ"}
+{"case": {"normalise": "😀42 a-b 　 build"}, "want": "42 a-b build"}
+{"case": {"normalise": "* x_y \t tests"}, "want": "x_y tests"}
+{"case": {"normalise": "😀x_y"}, "want": "x_y"}
+{"case": {"normalise": "😀BUILD tests Ω café"}, "want": "build tests ω café"}
+{"case": {"normalise": "... \t"}, "want": ""}
+{"case": {"normalise": "😀　 a-b"}, "want": "a-b"}
+{"case": {"normalise": "* \t Straße x_y"}, "want": "strasse x_y"}
+{"case": {"normalise": "Ω Fix \t the"}, "want": "fix the"}
+{"case": {"normalise": "😀\t 　 Straße"}, "want": "strasse"}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "😀x Ω BUILD"}, "want": "x ω build"}
+{"case": {"normalise": "* a-b ΟΔΟΣ İstanbul"}, "want": "a-b οδοσ i̇stanbul"}
+{"case": {"normalise": "  x_y İstanbul Straße"}, "want": "x_y i̇stanbul strasse"}
+{"case": {"normalise": "* Fix BUILD ΟΔΟΣ"}, "want": "fix build οδοσ"}
+{"case": {"normalise": ""}, "want": ""}
+{"case": {"normalise": "* Build"}, "want": "build"}
+{"case": {"normalise": "İstanbul µs"}, "want": "stanbul μs"}
+{"case": {"normalise": "* a-b Straße a-b 　"}, "want": "a-b strasse a-b"}
+{"case": {"normalise": "✳ BUILD café x_y x"}, "want": "build café x_y x"}
+{"case": {"normalise": "x x_y ﬁle"}, "want": "x x_y file"}
+{"case": {"normalise": "😀\t"}, "want": ""}
+{"case": {"normalise": "* café \t 　 ΟΔΟΣ"}, "want": "café οδοσ"}
+{"case": {"normalise": "* ﬁle İstanbul"}, "want": "le i̇stanbul"}
+{"case": {"normalise": "·café"}, "want": "café"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "⠋ ΟΔΟΣ"}, "want": ""}
+{"case": {"normalise": "✳ Ω Straße"}, "want": "strasse"}
+{"case": {"normalise": "  \t ΟΔΟΣ café"}, "want": "café"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "✳ 　"}, "want": ""}
+{"case": {"normalise": "·Straße x_y"}, "want": "strasse x_y"}
+{"case": {"normalise": "·café build a-b Straße"}, "want": "café build a-b strasse"}
+{"case": {"normalise": ""}, "want": ""}
+{"case": {"normalise": "😀x_y 　 a-b ΟΔΟΣ"}, "want": "x_y a-b οδοσ"}
+{"case": {"normalise": "* Straße"}, "want": "strasse"}
+{"case": {"normalise": "* ﬁle"}, "want": "le"}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "42"}, "want": "42"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "·42 x x_y"}, "want": "42 x x_y"}
+{"case": {"normalise": "·café µs Fix"}, "want": "café μs fix"}
+{"case": {"normalise": "ﬁle"}, "want": "le"}
+{"case": {"normalise": "  µs µs Ω"}, "want": "s μs ω"}
+{"case": {"normalise": "* ﬁle Straße x_y Fix"}, "want": "le strasse x_y fix"}
+{"case": {"normalise": "·"}, "want": ""}
+{"case": {"normalise": "  café x_y 　 İstanbul"}, "want": "café x_y i̇stanbul"}
+{"case": {"normalise": "... Straße ﬁle"}, "want": "strasse file"}
+{"case": {"normalise": "  İstanbul"}, "want": "stanbul"}
+{"case": {"normalise": "😀x ﬁle"}, "want": "x file"}
+{"case": {"normalise": "  ﬁle"}, "want": "le"}
+{"case": {"normalise": "✳ tests a-b"}, "want": "tests a-b"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "·the Build BUILD tests"}, "want": "the build build tests"}
+{"case": {"normalise": "·Ω"}, "want": ""}
+{"case": {"normalise": "⠋ build Ω x_y a-b"}, "want": "build ω x_y a-b"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "  Fix Straße Straße Build"}, "want": "fix strasse strasse build"}
+{"case": {"normalise": "... Ω x_y the"}, "want": "x_y the"}
+{"case": {"normalise": "* Fix Straße BUILD"}, "want": "fix strasse build"}
+{"case": {"normalise": "... İstanbul \t"}, "want": "stanbul"}
+{"case": {"normalise": "😀x x_y 　 Straße"}, "want": "x x_y strasse"}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "😀the Ω ﬁle Ω"}, "want": "the ω file ω"}
+{"case": {"normalise": "(1) a-b"}, "want": "1) a-b"}
+{"case": {"normalise": "😀the x a-b x"}, "want": "the x a-b x"}
+{"case": {"normalise": "... Ω tests µs x_y"}, "want": "tests μs x_y"}
+{"case": {"normalise": "... BUILD \t tests"}, "want": "build tests"}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "　"}, "want": ""}
+{"case": {"normalise": "x"}, "want": "x"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "·the 　 İstanbul"}, "want": "the i̇stanbul"}
+{"case": {"normalise": "✳ x"}, "want": "x"}
+{"case": {"normalise": "(1) Build the"}, "want": "1) build the"}
+{"case": {"normalise": "😀"}, "want": ""}
+{"case": {"normalise": "(1) Build"}, "want": "1) build"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "  Straße café the"}, "want": "strasse café the"}
+{"case": {"normalise": "·ΟΔΟΣ Straße µs 42"}, "want": "strasse μs 42"}
+{"case": {"normalise": "⠋ 42 BUILD 　"}, "want": "42 build"}
+{"case": {"normalise": "  x_y ΟΔΟΣ"}, "want": "x_y οδοσ"}
+{"case": {"normalise": "... Build"}, "want": "build"}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "😀x_y µs"}, "want": "x_y μs"}
+{"case": {"normalise": "... 　 　"}, "want": ""}
+{"case": {"normalise": "* Build café"}, "want": "build café"}
+{"case": {"normalise": "* café the the Fix"}, "want": "café the the fix"}
+{"case": {"normalise": "... x Fix"}, "want": "x fix"}
+{"case": {"normalise": ""}, "want": ""}
+{"case": {"normalise": "* BUILD build build ﬁle"}, "want": "build build build file"}
+{"case": {"normalise": "😀µs"}, "want": "s"}
+{"case": {"normalise": "(1) µs café İstanbul"}, "want": "1) μs café i̇stanbul"}
+{"case": {"normalise": "·ΟΔΟΣ build Straße"}, "want": "build strasse"}
+{"case": {"normalise": "(1) café 42 x BUILD"}, "want": "1) café 42 x build"}
+{"case": {"normalise": "  µs"}, "want": "s"}
+{"case": {"normalise": "⠋ İstanbul tests \t ﬁle"}, "want": "stanbul tests file"}
+{"case": {"normalise": "  　 Straße"}, "want": "strasse"}
+{"case": {"normalise": "(1) build \t"}, "want": "1) build"}
+{"case": {"normalise": "✳ 　 　 a-b"}, "want": "a-b"}
+{"case": {"normalise": "(1) Fix build"}, "want": "1) fix build"}
+{"case": {"normalise": "... build"}, "want": "build"}
+{"case": {"normalise": "... İstanbul tests ΟΔΟΣ"}, "want": "stanbul tests οδοσ"}
+{"case": {"normalise": "* İstanbul µs"}, "want": "stanbul μs"}
+{"case": {"normalise": "✳ 42 　"}, "want": "42"}
+{"case": {"normalise": "... x_y tests 42"}, "want": "x_y tests 42"}
+{"case": {"normalise": "·Ω"}, "want": ""}
+{"case": {"normalise": "😀build"}, "want": "build"}
+{"case": {"normalise": "·Fix µs"}, "want": "fix μs"}
+{"case": {"normalise": "  Ω café 　 µs"}, "want": "café μs"}
+{"case": {"normalise": "  ΟΔΟΣ 　 　 ﬁle"}, "want": "le"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "(1) Fix Build"}, "want": "1) fix build"}
+{"case": {"normalise": "😀"}, "want": ""}
+{"case": {"normalise": "😀　"}, "want": ""}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "😀\t build"}, "want": "build"}
+{"case": {"normalise": "·"}, "want": ""}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "·"}, "want": ""}
+{"case": {"normalise": "Straße"}, "want": "strasse"}
+{"case": {"normalise": "  Build"}, "want": "build"}
+{"case": {"normalise": "(1) İstanbul 42 Ω µs"}, "want": "1) i̇stanbul 42 ω μs"}
+{"case": {"normalise": "·ΟΔΟΣ a-b"}, "want": "a-b"}
+{"case": {"normalise": "(1) build the x µs"}, "want": "1) build the x μs"}
+{"case": {"normalise": "build 42 \t"}, "want": "build 42"}
+{"case": {"normalise": "µs Fix Straße x"}, "want": "s fix strasse x"}
+{"case": {"normalise": "  Build"}, "want": "build"}
+{"case": {"normalise": "⠋ ﬁle İstanbul café"}, "want": "le i̇stanbul café"}
+{"case": {"normalise": "  x_y tests BUILD"}, "want": "x_y tests build"}
+{"case": {"normalise": "tests Straße tests"}, "want": "tests strasse tests"}
+{"case": {"normalise": "⠋ the"}, "want": "the"}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "·"}, "want": ""}
+{"case": {"normalise": "* µs"}, "want": "s"}
+{"case": {"normalise": "* Build a-b x_y Build"}, "want": "build a-b x_y build"}
+{"case": {"normalise": "(1) BUILD"}, "want": "1) build"}
+{"case": {"normalise": "  tests"}, "want": "tests"}
+{"case": {"normalise": "😀a-b BUILD a-b Ω"}, "want": "a-b build a-b ω"}
+{"case": {"normalise": "·build a-b Build Ω"}, "want": "build a-b build ω"}
+{"case": {"normalise": "ΟΔΟΣ"}, "want": ""}
+{"case": {"normalise": "  x_y BUILD the Build"}, "want": "x_y build the build"}
+{"case": {"normalise": "µs 42 Build"}, "want": "s 42 build"}
+{"case": {"normalise": "  ﬁle x ﬁle İstanbul"}, "want": "le x file i̇stanbul"}
+{"case": {"normalise": "⠋ x_y ΟΔΟΣ"}, "want": "x_y οδοσ"}
+{"case": {"normalise": "... \t the ΟΔΟΣ 　"}, "want": "the οδοσ"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "* ΟΔΟΣ"}, "want": ""}
+{"case": {"normalise": "✳ BUILD x_y"}, "want": "build x_y"}
+{"case": {"normalise": "✳ 42 build 　"}, "want": "42 build"}
+{"case": {"normalise": "😀tests Fix café x"}, "want": "tests fix café x"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "(1) the"}, "want": "1) the"}
+{"case": {"normalise": "😀x_y a-b ﬁle"}, "want": "x_y a-b file"}
+{"case": {"normalise": "... tests Ω"}, "want": "tests ω"}
+{"case": {"normalise": "✳ tests 42 build µs"}, "want": "tests 42 build μs"}
+{"case": {"normalise": "✳ Straße"}, "want": "strasse"}
+{"case": {"normalise": "  Straße 42 Fix"}, "want": "strasse 42 fix"}
+{"case": {"normalise": "  Build tests 　"}, "want": "build tests"}
+{"case": {"normalise": "✳ Fix café ΟΔΟΣ"}, "want": "fix café οδοσ"}
+{"case": {"normalise": "... \t tests İstanbul"}, "want": "tests i̇stanbul"}
+{"case": {"normalise": "  build BUILD café café"}, "want": "build build café café"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "·BUILD 　"}, "want": "build"}
+{"case": {"normalise": "(1) 42 Ω"}, "want": "1) 42 ω"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "⠋ Straße ΟΔΟΣ ﬁle ﬁle"}, "want": "strasse οδοσ file file"}
+{"case": {"normalise": "* the 42 　"}, "want": "the 42"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "  build İstanbul x"}, "want": "build i̇stanbul x"}
+{"case": {"normalise": "😀café"}, "want": "café"}
+{"case": {"normalise": "⠋ a-b İstanbul x"}, "want": "a-b i̇stanbul x"}
+{"case": {"normalise": "İstanbul Build x_y"}, "want": "stanbul build x_y"}
+{"case": {"normalise": "İstanbul café"}, "want": "stanbul café"}
+{"case": {"normalise": "·42 Straße"}, "want": "42 strasse"}
+{"case": {"normalise": "😀café x_y İstanbul"}, "want": "café x_y i̇stanbul"}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "⠋ \t tests"}, "want": "tests"}
+{"case": {"normalise": "😀µs"}, "want": "s"}
+{"case": {"normalise": "😀ΟΔΟΣ 　 café x_y"}, "want": "café x_y"}
+{"case": {"normalise": "* Fix café build ΟΔΟΣ"}, "want": "fix café build οδοσ"}
+{"case": {"normalise": "* 　 x İstanbul"}, "want": "x i̇stanbul"}
+{"case": {"normalise": "·"}, "want": ""}
+{"case": {"normalise": "·42 Straße"}, "want": "42 strasse"}
+{"case": {"normalise": "(1) Build"}, "want": "1) build"}
+{"case": {"normalise": "😀\t build \t BUILD"}, "want": "build build"}
+{"case": {"normalise": "⠋ ΟΔΟΣ Straße"}, "want": "strasse"}
+{"case": {"normalise": "µs Build"}, "want": "s build"}
+{"case": {"normalise": "·ﬁle"}, "want": "le"}
+{"case": {"normalise": "😀"}, "want": ""}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "  ΟΔΟΣ"}, "want": ""}
+{"case": {"normalise": "... 　 Fix ﬁle"}, "want": "fix file"}
+{"case": {"normalise": "* 42 the ΟΔΟΣ"}, "want": "42 the οδοσ"}
+{"case": {"normalise": "😀Straße 　 Ω"}, "want": "strasse ω"}
+{"case": {"normalise": "⠋ x_y ΟΔΟΣ"}, "want": "x_y οδοσ"}
+{"case": {"normalise": "... 　"}, "want": ""}
+{"case": {"normalise": "·"}, "want": ""}
+{"case": {"normalise": "Ω"}, "want": ""}
+{"case": {"normalise": "(1) Straße a-b µs x"}, "want": "1) strasse a-b μs x"}
+{"case": {"normalise": "  a-b 42"}, "want": "a-b 42"}
+{"case": {"normalise": "  Straße 　 Straße"}, "want": "strasse strasse"}
+{"case": {"normalise": "😀x_y x_y"}, "want": "x_y x_y"}
+{"case": {"normalise": "  Fix İstanbul the"}, "want": "fix i̇stanbul the"}
+{"case": {"normalise": "... x Ω İstanbul tests"}, "want": "x ω i̇stanbul tests"}
+{"case": {"normalise": "✳ Straße"}, "want": "strasse"}
+{"case": {"normalise": "(1) x_y"}, "want": "1) x_y"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "😀\t"}, "want": ""}
+{"case": {"normalise": "... Build build µs"}, "want": "build build μs"}
+{"case": {"normalise": "😀　 ﬁle Build"}, "want": "le build"}
+{"case": {"normalise": "  Straße build Straße x_y"}, "want": "strasse build strasse x_y"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "😀42 Fix tests Build"}, "want": "42 fix tests build"}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "·build"}, "want": "build"}
+{"case": {"normalise": "(1) x_y Ω ΟΔΟΣ"}, "want": "1) x_y ω οδοσ"}
+{"case": {"normalise": "·Build the tests Fix"}, "want": "build the tests fix"}
+{"case": {"normalise": "(1) tests İstanbul"}, "want": "1) tests i̇stanbul"}
+{"case": {"normalise": "(1) a-b"}, "want": "1) a-b"}
+{"case": {"normalise": "* tests"}, "want": "tests"}
+{"case": {"normalise": "İstanbul"}, "want": "stanbul"}
+{"case": {"normalise": "·Fix ﬁle \t"}, "want": "fix file"}
+{"case": {"normalise": "* Build café the Straße"}, "want": "build café the strasse"}
+{"case": {"normalise": "... BUILD x"}, "want": "build x"}
+{"case": {"normalise": "⠋ 42 x"}, "want": "42 x"}
+{"case": {"normalise": "✳ Build"}, "want": "build"}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "* ﬁle Build"}, "want": "le build"}
+{"case": {"normalise": "😀BUILD µs"}, "want": "build μs"}
+{"case": {"normalise": "😀"}, "want": ""}
+{"case": {"normalise": "😀tests"}, "want": "tests"}
+{"case": {"normalise": "⠋ BUILD"}, "want": "build"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "(1) build x_y the Fix"}, "want": "1) build x_y the fix"}
+{"case": {"normalise": "... BUILD x 　 build"}, "want": "build x build"}
+{"case": {"normalise": "⠋ café Build"}, "want": "café build"}
+{"case": {"normalise": "⠋ \t Fix"}, "want": "fix"}
+{"case": {"normalise": "⠋ the"}, "want": "the"}
+{"case": {"normalise": "(1) Ω Fix a-b the"}, "want": "1) ω fix a-b the"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "😀İstanbul a-b"}, "want": "stanbul a-b"}
+{"case": {"normalise": "tests x_y x_y \t"}, "want": "tests x_y x_y"}
+{"case": {"normalise": "⠋ ﬁle Straße x Build"}, "want": "le strasse x build"}
+{"case": {"normalise": "(1) BUILD Build BUILD a-b"}, "want": "1) build build build a-b"}
+{"case": {"normalise": "😀　"}, "want": ""}
+{"case": {"normalise": "(1) the café"}, "want": "1) the café"}
+{"case": {"normalise": "42 ﬁle İstanbul ΟΔΟΣ"}, "want": "42 file i̇stanbul οδοσ"}
+{"case": {"normalise": "a-b x x_y 42"}, "want": "a-b x x_y 42"}
+{"case": {"normalise": "... "}, "want": ""}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "⠋ \t 　 Build ΟΔΟΣ"}, "want": "build οδοσ"}
+{"case": {"normalise": "x the"}, "want": "x the"}
+{"case": {"normalise": "·x_y BUILD 　 a-b"}, "want": "x_y build a-b"}
+{"case": {"normalise": "✳ ﬁle Ω BUILD Build"}, "want": "le ω build build"}
+{"case": {"normalise": "⠋ 42 the İstanbul"}, "want": "42 the i̇stanbul"}
+{"case": {"normalise": "  µs café the"}, "want": "s café the"}
+{"case": {"normalise": "⠋ ΟΔΟΣ ΟΔΟΣ 42"}, "want": "42"}
+{"case": {"normalise": "😀"}, "want": ""}
+{"case": {"normalise": "x"}, "want": "x"}
+{"case": {"normalise": "😀build"}, "want": "build"}
+{"case": {"normalise": "  tests a-b x build"}, "want": "tests a-b x build"}
+{"case": {"normalise": "Build tests BUILD Straße"}, "want": "build tests build strasse"}
+{"case": {"normalise": "😀x"}, "want": "x"}
+{"case": {"normalise": "(1) "}, "want": "1)"}
+{"case": {"normalise": "* tests İstanbul"}, "want": "tests i̇stanbul"}
+{"case": {"normalise": "* "}, "want": ""}
+{"case": {"normalise": "⠋ 　 the İstanbul"}, "want": "the i̇stanbul"}
+{"case": {"normalise": "⠋ Ω café Ω"}, "want": "café ω"}
+{"case": {"normalise": "  "}, "want": ""}
+{"case": {"normalise": "* µs Build ﬁle"}, "want": "s build file"}
+{"case": {"normalise": "😀a-b"}, "want": "a-b"}
+{"case": {"normalise": "* café 42 tests"}, "want": "café 42 tests"}
+{"case": {"normalise": "(1) a-b ﬁle a-b"}, "want": "1) a-b file a-b"}
+{"case": {"normalise": "* Ω x build the"}, "want": "x build the"}
+{"case": {"normalise": "... BUILD Fix"}, "want": "build fix"}
+{"case": {"normalise": "😀BUILD"}, "want": "build"}
+{"case": {"normalise": "😀　 café BUILD"}, "want": "café build"}
+{"case": {"normalise": "✳ the ΟΔΟΣ"}, "want": "the οδοσ"}
+{"case": {"normalise": "·Build"}, "want": "build"}
+{"case": {"normalise": "✳ "}, "want": ""}
+{"case": {"normalise": "·42 build Ω"}, "want": "42 build ω"}
+{"case": {"normalise": "·x_y the"}, "want": "x_y the"}
+{"case": {"normalise": "... Build a-b the"}, "want": "build a-b the"}
+{"case": {"normalise": "* x_y"}, "want": "x_y"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "* x x"}, "want": "x x"}
+{"case": {"normalise": "(1) ΟΔΟΣ x_y \t BUILD"}, "want": "1) οδοσ x_y build"}
+{"case": {"normalise": "·Ω ΟΔΟΣ café"}, "want": "café"}
+{"case": {"normalise": "... 42 Ω ΟΔΟΣ Ω"}, "want": "42 ω οδοσ ω"}
+{"case": {"normalise": "😀Build Straße"}, "want": "build strasse"}
+{"case": {"normalise": "... µs café"}, "want": "s café"}
+{"case": {"normalise": "⠋ "}, "want": ""}
+{"case": {"normalise": "　 Fix tests"}, "want": "fix tests"}
+{"case": {"normalise": "✳ \t"}, "want": ""}
+{"case": {"normalise": "·"}, "want": ""}
+{"case": {"normalise": "·BUILD"}, "want": "build"}
+{"case": {"normalise": "✳ Straße Ω a-b"}, "want": "strasse ω a-b"}
+{"case": {"normalise": ""}, "want": ""}
+{"case": {"normalise": "   "}, "want": ""}
+{"case": {"normalise": "✳"}, "want": ""}
+{"case": {"normalise": "9 lives"}, "want": "9 lives"}
+{"case": {"normalise": "_a"}, "want": "a"}
+{"case": {"normalise": "été"}, "want": "té"}
+{"case": {"normalise": "A B"}, "want": "a b"}
+{"case": {"match": ["(1) İstanbul tests a-b", []]}, "want": null}
+{"case": {"match": ["✳ BUILD the ", [[293406, "* Ω"], [211727, "(1) µs"], [697518, "* build İstanbul x ΟΔΟΣ"], [501541, "... tests Fix Ω Straße"], [381990, "✳ BUILD the Ω"]]]}, "want": 381990}
+{"case": {"match": ["... a-b", [[929125, "... "], [24670, "İstanbul µs"]]]}, "want": null}
+{"case": {"match": ["* ", [[645146, "·Fix 　"], [741645, "* "], [657814, "\t x x build"]]]}, "want": null}
+{"case": {"match": ["⠋ BUILD tests a-b µs", [[1013272, "  "], [842876, "⠋ BUILD tests a-b µs"], [496020, "café"]]]}, "want": 842876}
+{"case": {"match": ["Ω Fix Build \t", [[545883, "Ω Fix Build \t"]]]}, "want": 545883}
+{"case": {"match": ["⠋ ﬁle", [[927100, "·µs Straße"], [929388, "café Ω"], [719904, "⠋ ﬁle"], [167216, "·a-b 　 tests µs"]]]}, "want": 719904}
+{"case": {"match": ["BUILD Ω", [[522577, "* µs"], [340773, "⠋ ΟΔΟΣ build build Straße"], [928635, "... "], [890195, "(1) a-b the ﬁle x"]]]}, "want": null}
+{"case": {"match": ["* Ο", [[775387, "  BUILD µs"], [750494, "·İstanbul"], [897612, "* ΟΔΟΣ 　 x ΟΔΟΣ"], [653255, "... ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["(1) ΟΔΟΣ BUILD BUILD x", []]}, "want": null}
+{"case": {"match": ["✳ ", [[662139, "  ΟΔΟΣ the ﬁle"], [747913, "✳ "]]]}, "want": null}
+{"case": {"match": ["  Fix \t", []]}, "want": null}
+{"case": {"match": ["  ", [[179548, "·"], [324221, "(1) Build Ω"], [756939, "  　"]]]}, "want": null}
+{"case": {"match": ["... x Straße ΟΔΟΣ", [[463729, "⠋ "]]]}, "want": null}
+{"case": {"match": ["　 　", [[927391, "　 　"], [150616, "... BUILD İstanbul Build"]]]}, "want": null}
+{"case": {"match": ["... ", [[586083, "build"], [7476, "... "]]]}, "want": null}
+{"case": {"match": ["  the café \t BUILD", [[1039811, "  the x µs"]]]}, "want": null}
+{"case": {"match": ["😀", [[197791, "... 42"], [599004, "Fix"]]]}, "want": null}
+{"case": {"match": ["... S", [[78284, "... Fix \t"], [325068, "✳ 42 Fix café build"], [1005861, "·"], [804111, "😀Build a-b"], [418666, "... Straße a-b Ω x"]]]}, "want": 418666}
+{"case": {"match": ["·µs tests BUILD", [[339341, "  x_y BUILD"]]]}, "want": null}
+{"case": {"match": ["·Straße BUILD İstanbul café", []]}, "want": null}
+{"case": {"match": ["* ", [[188832, "* "], [779299, "⠋ tests café ﬁle µs"], [110964, "⠋ µs"], [367356, "⠋ Fix Fix Ω"], [526985, "Straße İstanbul \t"]]]}, "want": null}
+{"case": {"match": ["✳ Straße 　 İstanbul x", [[336483, "✳ Straße 　 İstanbul x"]]]}, "want": 336483}
+{"case": {"match": ["µs", [[930897, "⠋ build Ω"], [993722, "·µs"], [550595, "Ω"], [955314, "µs"], [930749, "(1) x_y 　 Straße"]]]}, "want": null}
+{"case": {"match": ["·\t", [[439741, "  Build Ω \t 　"], [44625, "😀"], [553872, "(1) tests 　 the"]]]}, "want": null}
+{"case": {"match": ["✳ BUILD BUILD build ﬁle", [[344079, "... İstanbul café a-b \t"], [421629, "a-b"], [116447, "* ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["·x_y µs", []]}, "want": null}
+{"case": {"match": ["  a-b", [[217503, "😀"], [907595, "  a-b"], [293204, "* "]]]}, "want": 907595}
+{"case": {"match": ["⠋ ﬁle Straße", [[919384, "* "], [838829, "(1) "], [808246, "😀"]]]}, "want": null}
+{"case": {"match": ["  Ω", [[38592, "·tests"], [123109, "  Ω"]]]}, "want": null}
+{"case": {"match": ["✳ \t", []]}, "want": null}
+{"case": {"match": ["* x Ω Fix İstanbul", [[331775, "* x Ω Fix İstanbul"], [733855, "·café café"], [189450, "⠋ 　"], [489121, "BUILD"], [121660, "... µs tests"]]]}, "want": 331775}
+{"case": {"match": ["·x café", [[752585, "·x café"], [153377, "✳ x µs"], [859988, "  42 ΟΔΟΣ"], [531090, "✳ "], [363178, "😀Build a-b 　"]]]}, "want": 752585}
+{"case": {"match": ["  Build 42 build µs", [[998259, "✳ Build a-b Ω"], [208380, "  Build 42 build µs"]]]}, "want": 208380}
+{"case": {"match": ["·", [[1000877, "... Fix Build"], [15863, "  ΟΔΟΣ 　"], [938863, "... x BUILD İstanbul"], [107027, "✳ Straße 42 café build"], [828472, "·"]]]}, "want": null}
+{"case": {"match": ["(1) the Build Fix Ω", [[1037973, "a-b"], [76065, "·42"]]]}, "want": null}
+{"case": {"match": ["* µs ΟΔΟΣ x_y", [[868924, "* Straße the build 42"], [688062, "  x_y"], [1037837, "* µs ΟΔΟΣ x_y"]]]}, "want": 1037837}
+{"case": {"match": ["⠋ BUILD a-b Straße x", []]}, "want": null}
+{"case": {"match": ["✳ ", [[163372, "µs Fix"], [114183, "·\t \t \t"], [1021740, "✳ "]]]}, "want": null}
+{"case": {"match": ["* build", []]}, "want": null}
+{"case": {"match": ["😀x", [[537082, "... µs Build"], [258763, "  the café 　"], [473631, "⠋ Straße 42 ΟΔΟΣ Straße"], [849006, "😀ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["Straße a-", [[641943, "✳ Fix Build ΟΔΟΣ"], [835853, "✳ ﬁle tests x_y"], [648661, "Straße a-b tests"], [956394, "😀"]]]}, "want": 648661}
+{"case": {"match": ["... BUILD Build", [[117177, "  a-b café"], [685795, "😀　"], [1029236, "😀"], [413608, "... BUILD Build"]]]}, "want": 413608}
+{"case": {"match": ["... the ﬁle x_y Ω", [[375893, "  42 Straße"], [51977, "... the ﬁle x_y Ω"], [574140, "·Build Straße µs"]]]}, "want": 51977}
+{"case": {"match": ["✳ ", [[545127, "😀Fix µs x"]]]}, "want": null}
+{"case": {"match": ["... BUILD x µs Ω", [[622185, "·µs"], [1010129, "·café 　"], [58771, "·a-b"], [123633, "😀the build"], [223666, "... BUILD x µs Ω"]]]}, "want": 223666}
+{"case": {"match": ["  BUILD", []]}, "want": null}
+{"case": {"match": ["·ΟΔΟΣ", [[34118, "·ΟΔΟΣ"], [826595, "... the a-b"]]]}, "want": null}
+{"case": {"match": ["(1) Ω", [[669713, "café 　 \t Fix"], [863811, "(1) İstanbul build ﬁle"]]]}, "want": null}
+{"case": {"match": ["  \t Straße", [[710081, "  "], [466618, "·"], [876005, "✳ \t Straße"]]]}, "want": 876005}
+{"case": {"match": ["✳ BUILD", [[101715, "  \t ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["·　 x_y Ω", [[427403, "Ω café a-b"], [517602, "  x_y a-b Straße"], [576237, "⠋ İstanbul café Fix µs"]]]}, "want": null}
+{"case": {"match": ["(1) 　 ΟΔΟΣ", [[602168, "(1) 　 ΟΔΟΣ"], [503816, "  build a-b"], [244930, "... x 　"]]]}, "want": 602168}
+{"case": {"match": ["* x", [[395913, "* x"], [952183, "✳ ﬁle x x_y 42"]]]}, "want": 395913}
+{"case": {"match": ["... ΟΔΟΣ the µs 　", []]}, "want": null}
+{"case": {"match": ["(1) a-b ΟΔΟΣ", [[578296, "(1) a-b ΟΔΟΣ"]]]}, "want": 578296}
+{"case": {"match": ["* café", []]}, "want": null}
+{"case": {"match": ["·µs Straße", [[902989, "😀µs Straße ﬁle café"]]]}, "want": 902989}
+{"case": {"match": ["✳ ﬁle \t 　 BUILD", [[846100, "... BUILD Straße Build µs"], [21319, "⠋ BUILD tests tests BUILD"], [588035, "⠋ a-b build"], [285860, "BUILD x_y"], [159567, "  \t"]]]}, "want": null}
+{"case": {"match": ["😀　 µs", [[56971, "  \t Build"], [504381, "(1) µs café"]]]}, "want": null}
+{"case": {"match": ["✳ Fix Straße", [[79020, "😀"]]]}, "want": null}
+{"case": {"match": ["✳ µs a-b café Straße", [[1007801, "✳ µs"], [324346, "·the"], [995309, "✳ Fix"], [433372, "⠋ \t build x x_y"]]]}, "want": 1007801}
+{"case": {"match": ["(1", [[146291, "(1) build"], [727175, "(1) "], [584658, "😀"]]]}, "want": null}
+{"case": {"match": ["😀build Fix µs build", [[285742, "⠋ ΟΔΟΣ x Fix a-b"], [834093, "·build"], [806606, "😀the"], [114458, "✳ tests Fix"], [434324, "ﬁle"]]]}, "want": 834093}
+{"case": {"match": ["  x", [[1022782, "  x"]]]}, "want": 1022782}
+{"case": {"match": ["* the 　", []]}, "want": null}
+{"case": {"match": ["* c", [[551672, "·µs 42 Build x"], [184237, "* café"]]]}, "want": 184237}
+{"case": {"match": ["⠋ Build build", [[249825, "... x_y 　 BUILD 　"]]]}, "want": null}
+{"case": {"match": ["·the", [[534473, "·the"], [828707, "* build build x_y Build"]]]}, "want": 534473}
+{"case": {"match": ["  x", [[388744, "·"]]]}, "want": null}
+{"case": {"match": ["... 　 build", [[820305, "* café Ω"], [950751, "... 　 build a-b Fix"], [54555, "(1) "], [398878, "✳ ﬁle ΟΔΟΣ build"], [215573, "⠋ Build İstanbul İstanbul"]]]}, "want": null}
+{"case": {"match": ["* ΟΔΟΣ", []]}, "want": null}
+{"case": {"match": ["😀build build", [[711157, "* µs µs Straße"], [968637, "... build"], [1031256, "⠋ the Straße"], [321871, "·　"], [128747, "... x_y \t 　 42"]]]}, "want": 968637}
+{"case": {"match": ["(1) ", [[233771, ""], [966437, "... ﬁle ﬁle İstanbul 　"], [109927, "... 42 µs a-b"], [487636, "ΟΔΟΣ"], [989925, "(1) "]]]}, "want": 989925}
+{"case": {"match": ["... the", []]}, "want": null}
+{"case": {"match": ["* ", [[420681, "* "]]]}, "want": null}
+{"case": {"match": ["·µs", [[641934, "✳ Fix ﬁle İstanbul"], [15921, "⠋ the İstanbul"], [273237, "😀a-b BUILD"]]]}, "want": null}
+{"case": {"match": ["  \t", [[926823, "  \t 　 42"]]]}, "want": null}
+{"case": {"match": ["✳ ", [[533570, "😀ﬁle İstanbul"], [246539, "😀Ω ﬁle İstanbul tests"], [669959, "✳ "]]]}, "want": null}
+{"case": {"match": ["  ", [[1727, "(1) BUILD a-b 　"], [887983, "(1) "], [94308, "·a-b the ΟΔΟΣ"], [1017251, "\t 42"], [52722, "✳ the Build"]]]}, "want": null}
+{"case": {"match": ["·the build a-b a-b", [[204373, "😀"], [446897, "·the build a-b a-b"]]]}, "want": 446897}
+{"case": {"match": ["İstanbul a-b Ω build", [[527377, "·café"], [723103, "(1) ΟΔΟΣ Build"], [836164, "... ﬁle Straße"], [854302, "(1) Build the"]]]}, "want": null}
+{"case": {"match": ["... BUILD", [[167525, "✳ tests Ω"], [325720, "... BUILD"], [1032872, "⠋ "], [457374, "  Fix 　 BUILD"], [989254, "(1) Build Ω µs"]]]}, "want": 325720}
+{"case": {"match": ["✳ ", [[242054, "✳ x_y"]]]}, "want": null}
+{"case": {"match": ["... ", []]}, "want": null}
+{"case": {"match": ["", [[344405, ""], [304654, "😀tests 42 the İstanbul"]]]}, "want": null}
+{"case": {"match": ["✳ th", [[1039864, "(1) "], [37119, "✳ the a-b x_y Build"], [302309, "* µs Build x İstanbul"], [417659, "✳ the µs"]]]}, "want": null}
+{"case": {"match": ["✳ ", [[961057, "✳ "], [450188, "  x \t x_y"], [946396, "... \t x Fix x_y"]]]}, "want": null}
+{"case": {"match": ["⠋ \t", []]}, "want": null}
+{"case": {"match": ["build Fix BUILD 42", [[825411, "·the the"], [478814, "Straße a-b café"]]]}, "want": null}
+{"case": {"match": ["(1) İstanbul Straße İstanbul tests", [[644870, "(1) x"], [522424, "* Build x the"], [91151, "⠋ the"], [598021, "(1) Fix Ω build"], [779082, "  Straße café Build"]]]}, "want": null}
+{"case": {"match": ["* 　 x Ω café", []]}, "want": null}
+{"case": {"match": ["✳ 42 café", [[35531, "✳ 42 café"], [383562, "  42"]]]}, "want": 35531}
+{"case": {"match": ["✳ 　 İstanbul 　 Ω", [[914934, "... build 42 a-b \t"], [476750, "  Ω build Build tests"], [239870, "(1) café tests Build"]]]}, "want": null}
+{"case": {"match": ["  x BUILD", []]}, "want": null}
+{"case": {"match": ["  Ω", []]}, "want": null}
+{"case": {"match": ["(1) BUILD \t", [[1041941, "* the a-b 　"], [54123, "* build 　 İstanbul"]]]}, "want": null}
+{"case": {"match": ["... ΟΔΟΣ Straße the", [[570747, "⠋ "], [143116, "·Fix BUILD 　 İstanbul"], [553964, "(1) ﬁle a-b"]]]}, "want": null}
+{"case": {"match": ["* BUILD ΟΔΟΣ µs", [[485318, "😀42 　 Fix tests"], [369760, "  "], [78997, "\t ﬁle"]]]}, "want": null}
+{"case": {"match": ["BUILD", [[563429, "😀"], [565707, "·Ω ΟΔΟΣ tests"], [656806, "* ﬁle"], [26667, "✳ "]]]}, "want": null}
+{"case": {"match": ["(1) ", []]}, "want": null}
+{"case": {"match": ["  ﬁle", [[610708, "İstanbul café"], [655022, "·İstanbul café"], [886844, "(1) Fix 42"], [961987, "... x_y µs Build \t"], [233548, "·İstanbul"]]]}, "want": null}
+{"case": {"match": ["😀Fix Straße İstanbul the", [[709898, "⠋ µs µs café"], [807265, "·a-b"], [381971, "a-b"], [753469, ""]]]}, "want": null}
+{"case": {"match": ["ﬁle \t BUILD the", [[370235, "(1) \t Ω build Straße"], [437905, "ﬁle \t BUILD the"], [699429, "⠋ the 42"], [817374, "... \t"]]]}, "want": 437905}
+{"case": {"match": ["... BUILD Fix", [[968698, "... BUILD Fix"]]]}, "want": 968698}
+{"case": {"match": ["⠋ ", [[281721, "⠋ "]]]}, "want": null}
+{"case": {"match": ["42 tests x_y café", [[199159, "... 42 x_y Build x"], [856424, "  x_y BUILD"], [491370, "(1) 　 \t Build tests"], [23293, "... Ω the"]]]}, "want": null}
+{"case": {"match": ["😀Build 　 café build", [[910809, "😀µs 42 build"], [416708, "😀Build 　 café build"]]]}, "want": 416708}
+{"case": {"match": ["✳ Build a-b café", [[583137, "... "], [903843, "... µs build \t Straße"], [14039, "⠋ Straße 42 \t"], [1037711, "  \t 　 the 　"]]]}, "want": null}
+{"case": {"match": ["⠋ café Build", [[683995, "😀　 Fix"], [12879, "* build"], [254563, "... ﬁle \t"]]]}, "want": null}
+{"case": {"match": ["⠋ Fix", [[59999, "·"]]]}, "want": null}
+{"case": {"match": ["✳ Fix the 　 tests", [[171455, "(1) BUILD ﬁle"], [335103, "✳ Fix the 　 tests"], [401447, "... ﬁle x a-b"], [686721, "　"], [292441, "... build"]]]}, "want": 335103}
+{"case": {"match": ["  　 Ω Straße", [[304000, "✳ İstanbul a-b Fix"], [61742, "  　 Ω Straße"], [556753, "... "]]]}, "want": 61742}
+{"case": {"match": ["·ΟΔΟΣ 　 ﬁle", [[584606, "·ΟΔΟΣ 　 ﬁle"], [213844, "😀"]]]}, "want": 584606}
+{"case": {"match": ["⠋ the µs", [[759819, ""], [568980, "café"], [402169, "(1) x"]]]}, "want": null}
+{"case": {"match": ["⠋ ﬁle the", []]}, "want": null}
+{"case": {"match": ["* ΟΔΟΣ build the", []]}, "want": null}
+{"case": {"match": ["·the 　 Straße Build", [[887494, "·the 　 Straße Build"]]]}, "want": 887494}
+{"case": {"match": ["  ΟΔΟΣ Ω 　", [[210295, "✳ ﬁle build ﬁle \t"], [830083, "  ΟΔΟΣ Ω 　"], [783345, "😀"]]]}, "want": null}
+{"case": {"match": ["tests tests", [[29465, "* Fix x"], [930834, "  \t tests"], [985530, "⠋ Ω"], [838897, "·"]]]}, "want": 930834}
+{"case": {"match": ["  　 　", [[256323, "✳ Ω"], [907170, "·Straße \t"]]]}, "want": null}
+{"case": {"match": ["  BUILD", [[932575, "... a-b"], [687709, "... ΟΔΟΣ BUILD Ω a-b"], [591479, "✳ the"], [455422, "... İstanbul"]]]}, "want": 687709}
+{"case": {"match": ["·", [[700337, "ﬁle µs"], [530734, "* BUILD café Ω \t"], [637256, "·"]]]}, "want": null}
+{"case": {"match": ["⠋ ", [[288579, "(1) Fix build x Build"], [840234, "(1) 42"], [898297, "(1) BUILD İstanbul \t"], [416781, "* 42 \t"], [718813, "⠋ ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["✳ ", [[434095, "⠋ café 　 µs the"], [387138, "✳ "], [145836, "(1) BUILD \t"]]]}, "want": null}
+{"case": {"match": ["Build Straße Fix", []]}, "want": null}
+{"case": {"match": ["😀tests 42", [[169472, "✳ \t"], [365142, "⠋ "], [632737, "·"], [390948, "·\t 　 Build"]]]}, "want": null}
+{"case": {"match": ["  café Fix 42", [[663577, "  café Fix 42"], [499573, "... x_y ﬁle x_y"]]]}, "want": 663577}
+{"case": {"match": ["(1) build Straße", [[715170, "✳ build 42"], [638029, "😀BUILD Ω a-b"]]]}, "want": null}
+{"case": {"match": ["  build ΟΔΟΣ 42 ΟΔΟΣ", []]}, "want": null}
+{"case": {"match": ["⠋ İstanbul", [[443911, "✳ Build ΟΔΟΣ 42 tests"], [325914, "·café Fix Fix"], [928828, "⠋ ΟΔΟΣ ΟΔΟΣ ﬁle"], [142644, "✳ "]]]}, "want": null}
+{"case": {"match": ["⠋ a-b tests tests", [[192049, "the İstanbul"], [739334, "⠋ build Straße \t"], [38984, "·Ω café the"]]]}, "want": null}
+{"case": {"match": ["·BUILD", [[218593, "✳ ﬁle 42 ﬁle"], [335923, "the x_y Build"], [146729, "😀\t tests Build ﬁle"]]]}, "want": null}
+{"case": {"match": ["  ", [[353065, "  42"]]]}, "want": null}
+{"case": {"match": ["·µs Straße BUILD", [[520405, "(1) café µs"], [80841, "⠋ Build"], [134884, "✳ x_y x x Build"]]]}, "want": null}
+{"case": {"match": ["⠋ 　 Ω", [[488229, "·BUILD ΟΔΟΣ tests Ω"], [714665, "Ω İstanbul"]]]}, "want": null}
+{"case": {"match": ["⠋ build \t BUILD a-", [[122721, "⠋ build \t BUILD a-b"], [236856, "✳ "], [369940, "(1) tests"], [977935, "  tests a-b"], [31654, "* İstanbul a-b café Fix"]]]}, "want": 122721}
+{"case": {"match": ["* 42 a-b İstanbul", []]}, "want": null}
+{"case": {"match": ["😀42 µs BUIL", [[36529, "😀42 µs BUILD"], [1019499, "⠋ 　 Straße"]]]}, "want": 36529}
+{"case": {"match": ["😀", []]}, "want": null}
+{"case": {"match": ["⠋ İstanbul 　", [[430498, "⠋ İstanbul 　"]]]}, "want": 430498}
+{"case": {"match": ["... ", [[677125, "ΟΔΟΣ İstanbul Straße"], [165677, "😀x x_y 　 42"], [96861, "⠋ "]]]}, "want": null}
+{"case": {"match": ["(1) Ω build café build", [[146941, "(1) 　"], [601989, "... İstanbul Straße İstanbul x"], [1198, "(1) Ω build café build"]]]}, "want": 1198}
+{"case": {"match": ["(1) ", [[795422, "⠋ İstanbul x_y café"], [448793, "(1) "], [269761, "Straße \t ΟΔΟΣ"], [625353, "* \t \t 　 a-b"]]]}, "want": 448793}
+{"case": {"match": ["⠋ 42 ﬁle a-b", [[657061, "⠋ 42 ﬁle a-b"], [982743, "* "], [383280, "⠋ Build build Fix"]]]}, "want": 657061}
+{"case": {"match": ["* \t µs", []]}, "want": null}
+{"case": {"match": ["·", [[1006786, "(1) "], [490614, "·x_y İstanbul 　"], [731611, "⠋ the"]]]}, "want": null}
+{"case": {"match": ["  µs", [[83354, "  µs"], [31666, "✳ Build µs"], [119654, "... the"], [619046, "  ﬁle ﬁle"]]]}, "want": 83354}
+{"case": {"match": ["✳ café", [[195391, "✳ café"]]]}, "want": 195391}
+{"case": {"match": ["... ", [[882215, "... "], [473857, "(1) build a-b"], [105130, "... "], [964687, "... İstanbul x_y Straße ﬁle"], [893622, "·Build"]]]}, "want": null}
+{"case": {"match": ["·build", []]}, "want": null}
+{"case": {"match": ["✳ x build x Build", [[907455, "😀"], [53092, "... tests x"], [417955, "✳ x build x Build"]]]}, "want": 417955}
+{"case": {"match": ["✳ ", [[524166, "✳ "]]]}, "want": null}
+{"case": {"match": ["😀µs Fix", [[970033, "😀µs Fix"], [478210, "　 a-b"], [835074, "  "]]]}, "want": 970033}
+{"case": {"match": ["✳", [[164764, "✳ Fix"], [842939, "(1) Fix Fix µs Fix"]]]}, "want": null}
+{"case": {"match": ["a-b ΟΔΟΣ Ω Fix", [[823492, "😀Straße µs Ω"], [787715, "... Ω ΟΔΟΣ tests 42"], [1004747, "😀x_y x_y the \t"]]]}, "want": null}
+{"case": {"match": ["😀", [[172617, "... a-b"], [117952, "... Fix İstanbul Build"], [937601, "  build x"], [743802, "(1) "]]]}, "want": null}
+{"case": {"match": ["(1) Build İstanbul ﬁle", []]}, "want": null}
+{"case": {"match": ["  Straße 42 ΟΔΟΣ", []]}, "want": null}
+{"case": {"match": ["⠋ tests Fix x_y Build", [[579560, "😀"], [190916, "·x x_y a-b"]]]}, "want": null}
+{"case": {"match": ["... Straße 42 BUILD 　", [[256316, "* a-b µs tests"], [327525, "build"], [977744, "* "], [690338, "* "], [254145, "✳ "]]]}, "want": null}
+{"case": {"match": ["  　 build", [[134212, "·BUILD x_y İstanbul ΟΔΟΣ"], [153857, "... ﬁle"], [237302, "✳ "]]]}, "want": 134212}
+{"case": {"match": ["✳ Ω 42 café", [[980191, ""], [412341, "a-b the 　 42"], [896094, "* x µs"], [61899, "✳ Ω 42 café"], [157252, "(1) \t Straße ﬁle"]]]}, "want": 61899}
+{"case": {"match": ["⠋ ﬁle µs", [[143852, "* 　 ΟΔΟΣ Fix"]]]}, "want": null}
+{"case": {"match": ["·", []]}, "want": null}
+{"case": {"match": ["the 42 a-b build", [[696292, "the 42 a-b build"], [1006288, "(1) Fix ﬁle µs"]]]}, "want": 696292}
+{"case": {"match": ["* Ω Fix", [[655042, "(1) 　 café the"], [809807, "* Ω Fix \t"]]]}, "want": 809807}
+{"case": {"match": ["✳ ", [[288070, "✳ "], [603731, "... Straße build x_y"]]]}, "want": null}
+{"case": {"match": ["😀x tests", [[205139, "😀Build İstanbul"], [14945, "😀x tests"], [355413, "(1) BUILD \t µs build"], [427937, "·ΟΔΟΣ tests"], [777033, "  "]]]}, "want": 14945}
+{"case": {"match": ["✳ ﬁle", [[812900, "⠋ Straße 42 42 ΟΔΟΣ"], [401847, "·BUILD the 42 Ω"], [861962, "✳ "], [272314, "✳ ﬁle"]]]}, "want": 272314}
+{"case": {"match": ["(1) Fix 42 BUIL", [[1023634, "😀BUILD"], [945910, "·"], [629480, "✳ Straße x_y ΟΔΟΣ"], [234609, "😀Fix ΟΔΟΣ the a-b"], [898888, "(1) Fix 42 BUILD"]]]}, "want": 898888}
+{"case": {"match": ["(1) ", [[1047920, "✳ ﬁle x"], [345259, "⠋ x_y x_y BUILD"], [905532, "... µs build"], [808675, "  café café"], [963541, ""]]]}, "want": null}
+{"case": {"match": ["  \t İstanbul", [[171231, "İstanbul Ω tests BUILD"], [244610, "✳ Fix"], [154334, "a-b"]]]}, "want": 171231}
+{"case": {"match": ["* x Str", [[867321, "* x Straße 42 Fix"], [372850, "😀"]]]}, "want": 867321}
+{"case": {"match": ["⠋ a-b Straße café \t", [[309781, "⠋ a-b Straße café \t"]]]}, "want": 309781}
+{"case": {"match": ["·", [[70248, "⠋ the Fix"]]]}, "want": null}
+{"case": {"match": ["😀the ΟΔΟΣ", [[48584, "* Build Build Straße"], [376732, "😀the ΟΔΟΣ"]]]}, "want": 376732}
+{"case": {"match": ["* Ω BUILD Fix \t", []]}, "want": null}
+{"case": {"match": ["✳ µs x the x_y", [[393926, "😀42"], [993957, "⠋ Build café Straße"], [505191, "... \t"], [1036325, "✳ µs x the x_y"]]]}, "want": 1036325}
+{"case": {"match": ["✳ a", [[1029420, "* build"], [761303, "(1) café Fix Build ΟΔΟΣ"], [493704, "✳ a-b x"]]]}, "want": 493704}
+{"case": {"match": ["... ΟΔΟΣ 　 tests 42", [[25272, "... ΟΔΟΣ 　 tests 42"]]]}, "want": 25272}
+{"case": {"match": ["😀ΟΔΟΣ \t 　 \t", [[909773, "⠋ ﬁle a-b café"], [332470, "·the"], [466794, "(1) 42 ΟΔΟΣ tests"], [286991, "  café BUILD"], [317291, "😀"]]]}, "want": null}
+{"case": {"match": ["·build x a-b", []]}, "want": null}
+{"case": {"match": ["✳ x ΟΔΟΣ 42 build", [[775301, "✳ 42 x_y 42"]]]}, "want": null}
+{"case": {"match": ["✳ Straße", [[125770, "😀"]]]}, "want": null}
+{"case": {"match": ["✳ \t ﬁle BUILD", []]}, "want": null}
+{"case": {"match": ["* x Str", [[613320, "😀"], [23570, "* x Straße"], [885230, "⠋ build BUILD ﬁle the"], [228031, "😀x x_y"]]]}, "want": 23570}
+{"case": {"match": ["✳ ΟΔΟΣ Fix µs", []]}, "want": null}
+{"case": {"match": ["* café", [[360395, "* café"], [956098, "😀\t tests"], [275483, "* café \t"], [362499, "⠋ 　 Fix BUILD the"]]]}, "want": null}
+{"case": {"match": ["* Fix ﬁ", [[640087, "* build"], [104920, "* 42"], [286254, "* Fix ﬁle"], [632972, "* Build 　 İstanbul Straße"]]]}, "want": 286254}
+{"case": {"match": ["* ", [[755360, "* "]]]}, "want": null}
+{"case": {"match": ["😀a-b ﬁle build", [[309501, "😀\t the ﬁle \t"], [824724, "😀Build tests Straße 　"], [461001, "... "], [992708, "... "]]]}, "want": null}
+{"case": {"match": ["(1) x_y café BUILD Straße", [[239027, "... Fix"], [202792, "✳ x_y"], [751217, "⠋ a-b a-b ΟΔΟΣ tests"], [531317, "(1) x_y café BUILD Straße"], [613891, "... BUILD \t café tests"]]]}, "want": 531317}
+{"case": {"match": ["  a-b ﬁle Ω", [[575824, "⠋ ΟΔΟΣ x_y"], [519540, "😀ﬁle Ω"], [460029, "✳ "], [18205, "·Build x a-b \t"], [379144, "😀build \t"]]]}, "want": null}
+{"case": {"match": ["* build 42 ﬁle", [[650268, "·ﬁle Fix"], [931697, "⠋ ﬁle"], [178362, "😀tests"], [93071, "(1) "]]]}, "want": null}
+{"case": {"match": ["(1) Fix 　 x İstanbul", [[387305, "(1) Straße \t"], [1030698, "(1) Fix 　 x İstanbul"]]]}, "want": 1030698}
+{"case": {"match": ["😀µs BUILD", [[909491, "a-b"], [361156, "... ﬁle 42 Build"], [218764, "(1) x"], [367074, "... a-b ﬁle Build"]]]}, "want": null}
+{"case": {"match": ["✳ Straße Fix", [[747413, "  BUILD BUILD Ω"], [912387, "(1) Ω x 　"], [151241, "😀x \t Build ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["... ", [[55298, "... "], [827218, "⠋ Straße 42 Fix"], [1008876, "⠋ Fix the"], [410294, "·a-b Build 　"]]]}, "want": null}
+{"case": {"match": ["·a-b Straße", [[498481, "·a-b Straße"]]]}, "want": 498481}
+{"case": {"match": ["(1) BUILD B", [[166018, "(1) BUILD Build 　"]]]}, "want": 166018}
+{"case": {"match": ["✳ ", [[416993, "✳ Fix"], [722221, "... "], [349574, "* 42 café x_y"], [657357, "⠋ build Straße"]]]}, "want": null}
+{"case": {"match": ["😀", []]}, "want": null}
+{"case": {"match": ["😀Build 42 \t café", [[936280, "... 42 İstanbul ΟΔΟΣ 42"]]]}, "want": null}
+{"case": {"match": ["·İstanbul build x_y", [[786448, "  Build Fix Straße ΟΔΟΣ"], [86441, "😀ﬁle"], [654446, "😀tests Fix"], [989243, "·42 BUILD Fix"], [516147, "  Straße Ω"]]]}, "want": null}
+{"case": {"match": ["(1) x_y ΟΔΟΣ", [[886476, "  µs"], [7022, "(1) x_y ΟΔΟΣ"]]]}, "want": 7022}
+{"case": {"match": ["* x_y x", []]}, "want": null}
+{"case": {"match": ["✳ Build ΟΔΟΣ Fix", [[717026, "😀x_y µs \t"], [748892, "✳ a-b BUILD tests"], [449945, "(1) "], [774742, "·　"], [660164, "✳ Build ΟΔΟΣ Fix"]]]}, "want": 660164}
+{"case": {"match": ["ﬁle the \t", [[763401, "ﬁle the \t"], [803853, "(1) "]]]}, "want": 763401}
+{"case": {"match": ["⠋ x_y ﬁle Build build", [[488796, "😀"]]]}, "want": null}
+{"case": {"match": ["(1) 42 \t µs", [[301419, "😀a-b 42 x 　"]]]}, "want": null}
+{"case": {"match": ["✳ x_y Build 　 Straße", [[1033822, "✳ x_y Build 　 Straße"]]]}, "want": 1033822}
+{"case": {"match": ["  µs x Build ﬁle", [[576029, "  µs x Build ﬁle"]]]}, "want": 576029}
+{"case": {"match": ["... café BUILD", [[490106, "·42 build x 　"], [663080, "　 x 42 42"]]]}, "want": null}
+{"case": {"match": ["... \t ΟΔΟΣ build", [[243858, "😀x µs BUILD Fix"], [849266, "... \t ΟΔΟΣ build"], [946714, "✳ Fix ΟΔΟΣ"]]]}, "want": 849266}
+{"case": {"match": ["42 Build", [[706385, "😀ﬁle x_y Straße Ω"], [236104, "(1) tests ΟΔΟΣ"], [474068, "... "], [1031832, "  Ω build 　"], [598304, "⠋ tests \t build µs"]]]}, "want": null}
+{"case": {"match": ["😀", [[911203, "😀\t"]]]}, "want": null}
+{"case": {"match": ["  µs", [[578386, "  BUILD"], [200085, "✳ Fix x_y 42"]]]}, "want": null}
+{"case": {"match": ["...", [[342653, "... Build café"], [998207, "  ﬁle build Straße"], [163086, "... µs Ω Build"], [350992, "... Build ﬁle"], [165361, "  "]]]}, "want": null}
+{"case": {"match": ["  µs Fix a-b build", [[968111, "* "], [739802, "(1) Ω 42"], [433179, "⠋ 42 build Fix µs"]]]}, "want": null}
+{"case": {"match": ["✳ İstanbul", [[10282, "(1) "], [663064, "✳ İstanbul"], [246528, "⠋ 　 42 Build"]]]}, "want": 663064}
+{"case": {"match": ["⠋ tests Build ﬁle", [[365351, "·the"], [561047, "✳ a-b build"]]]}, "want": null}
+{"case": {"match": ["(1) tests", [[300824, "✳ Fix x_y"], [791673, "⠋ "], [966707, "(1) "]]]}, "want": 966707}
+{"case": {"match": ["café Straße x", [[823102, "😀x_y tests µs tests"], [29050, "café Straße x"], [553825, "😀build"]]]}, "want": 29050}
+{"case": {"match": ["... ΟΔΟΣ a-b Straße ﬁle", [[141630, "... ΟΔΟΣ a-b Straße ﬁle"], [984079, "(1) \t the Fix"], [308267, "✳ a-b İstanbul tests"], [251683, "·tests İstanbul Ω 42"]]]}, "want": 141630}
+{"case": {"match": ["·café a-b a-b", [[1008516, "... the \t Straße 　"], [457486, "  "], [684440, "·café a-b a-b"]]]}, "want": 684440}
+{"case": {"match": ["a-b tests x_y the", [[254199, "⠋ İstanbul x_y x_y"], [1015395, "  Ω 42 Fix"], [723119, "(1) BUILD"], [943438, "😀build"], [531556, "(1) "]]]}, "want": null}
+{"case": {"match": ["Ω ﬁle ", [[939558, "⠋ café a-b"], [540792, "Ω ﬁle a-b Straße"], [190800, "😀42"]]]}, "want": 540792}
+{"case": {"match": ["... 42 ΟΔΟΣ Straße", [[332306, ""]]]}, "want": null}
+{"case": {"match": ["✳ the Straße ﬁle tests", [[569228, "(1) build tests"], [767699, "✳ the Straße ﬁle tests"], [183843, "ﬁle build µs 　"], [116611, "x Straße Build"], [270447, "✳ café Ω a-b"]]]}, "want": 767699}
+{"case": {"match": ["⠋ Build 42 BUILD", []]}, "want": null}
+{"case": {"match": ["✳ build 　 　 42", [[79960, "(1) "]]]}, "want": null}
+{"case": {"match": ["(1) BUILD", [[490909, "x 42 ﬁle"], [668187, "·42 ΟΔΟΣ BUILD 42"], [939957, "(1) Fix tests"], [630479, "(1) \t x_y Build ﬁle"]]]}, "want": null}
+{"case": {"match": ["... build İstanbul the ΟΔΟΣ", [[959894, "... build İstanbul the ΟΔΟΣ"], [824450, "✳ 42 Fix"]]]}, "want": 959894}
+{"case": {"match": ["😀", [[473071, "  "], [224314, "\t \t build a-b"]]]}, "want": null}
+{"case": {"match": ["* ΟΔΟΣ 　 a-b BUILD", [[134735, "* ΟΔΟΣ 　 a-b BUILD"], [384663, "(1) BUILD café x BUILD"]]]}, "want": 134735}
+{"case": {"match": ["  tests İstan", [[771987, "  tests İstanbul µs Fix"], [279488, "·ΟΔΟΣ"], [1018651, "⠋ "], [706043, "  \t a-b İstanbul µs"]]]}, "want": 771987}
+{"case": {"match": ["* build tes", [[312560, "tests Ω \t"], [812328, "* build tests a-b"]]]}, "want": 812328}
+{"case": {"match": ["✳ ", []]}, "want": null}
+{"case": {"match": ["✳ x Ω test", [[90663, "(1) x_y"], [374258, "✳ Straße x_y"], [75915, "* 　 ﬁle ΟΔΟΣ"], [614351, "✳ x Ω tests"], [756178, "Straße Straße build"]]]}, "want": 614351}
+{"case": {"match": ["* 42 ΟΔΟΣ Fix", [[613236, "* ΟΔΟΣ µs ΟΔΟΣ"], [585737, "·"], [630044, "(1) "], [89328, "  the 　"]]]}, "want": null}
+{"case": {"match": ["(1) ", [[539138, "·"], [331292, "⠋ x_y \t 　"], [223185, "(1) tests Ω the a-b"], [882267, "(1) ﬁle"], [419088, "... "]]]}, "want": null}
+{"case": {"match": ["(1) ﬁle", []]}, "want": null}
+{"case": {"match": ["😀x_y BUILD \t Build", [[186911, "😀ΟΔΟΣ 　"], [229797, "café Build Fix \t"], [728272, "⠋ café tests"]]]}, "want": null}
+{"case": {"match": ["Ω x µs", [[250055, "(1) "], [266486, "　 42"], [90510, "⠋ ΟΔΟΣ 42"]]]}, "want": null}
+{"case": {"match": ["✳ a-b", [[324109, "✳ a-b"]]]}, "want": 324109}
+{"case": {"match": ["(1) a-b", [[242930, "(1) a-b"], [1045282, "(1) İstanbul Straße"]]]}, "want": 242930}
+{"case": {"match": ["  Straße tests Fix", [[853174, "  Straße tests Fix"]]]}, "want": 853174}
+{"case": {"match": ["😀", []]}, "want": null}
+{"case": {"match": ["  a-b µs Straße", [[389797, "(1) "], [724152, "(1) \t 42 \t µs"], [986985, "😀Build café"], [65177, "😀tests Build µs a-b"], [2131, "·ﬁle"]]]}, "want": null}
+{"case": {"match": ["✳ ", [[409436, "·"], [567420, "(1) ﬁle x_y x_y BUILD"], [1037398, "  a-b build"], [1035158, "* "], [243372, "  Build a-b ﬁle Build"]]]}, "want": null}
+{"case": {"match": ["... Fix", []]}, "want": null}
+{"case": {"match": ["... Straße ﬁle", [[308079, "😀tests ΟΔΟΣ"], [829792, "⠋ Straße tests BUILD x_y"], [760751, "... Straße ﬁle"]]]}, "want": 760751}
+{"case": {"match": ["  café Straße x_y", [[387745, "⠋ "], [90890, "  café Straße x_y"]]]}, "want": 90890}
+{"case": {"match": ["😀", [[692819, "✳ "], [784374, "😀İstanbul ΟΔΟΣ a-b x_y"], [64333, "😀"], [834695, "⠋ café 42 the Build"]]]}, "want": null}
+{"case": {"match": ["⠋ Build", [[209011, "✳ İstanbul build build the"], [329708, "⠋ İstanbul 　 ﬁle"], [613855, "✳ "], [676715, "✳ ΟΔΟΣ x_y µs café"]]]}, "want": null}
+{"case": {"match": ["  build", [[222048, "✳ Build Fix µs Fix"], [439786, "⠋ "], [281563, "* a-b the Straße Straße"]]]}, "want": 222048}
+{"case": {"match": ["µs", [[553136, "✳ "], [295533, "(1) \t 42 Ω İstanbul"], [796435, "·café Build µs the"], [222145, "µs"]]]}, "want": 222145}
+{"case": {"match": ["* BU", [[494369, "* BUILD x 42 BUILD"]]]}, "want": 494369}
+{"case": {"match": ["⠋ Fix", [[28715, "·"], [207717, "·Ω the café Build"]]]}, "want": null}
+{"case": {"match": ["* ", [[37352, "* "]]]}, "want": null}
+{"case": {"match": ["", []]}, "want": null}
+{"case": {"match": ["·x", []]}, "want": null}
+{"case": {"match": ["·", [[6609, "·ΟΔΟΣ Fix"], [916212, "* İstanbul the ﬁle"]]]}, "want": null}
+{"case": {"match": ["* the Ω \t Straße", [[460916, "·Build"], [100422, "⠋ µs build"]]]}, "want": null}
+{"case": {"match": ["Build ﬁle µs", [[291894, "⠋ Build the Fix build"], [39953, "* Fix tests"], [330326, "😀a-b build x_y"]]]}, "want": null}
+{"case": {"match": ["  ΟΔΟΣ x_y Ω \t", [[336431, "Fix x a-b"], [138589, "tests Straße"], [426467, "  ΟΔΟΣ x_y Ω \t"], [354016, "  BUILD x_y build"], [834253, "... ﬁle µs 　 café"]]]}, "want": 426467}
+{"case": {"match": ["* ", [[755274, "  µs µs"], [820689, "* "], [1036146, "⠋ café ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["·42 build Straße x", [[809388, "·42 build Straße x"], [741625, "  İstanbul build a-b"], [203706, "⠋ the tests a-b"], [732767, "* Ω build"], [759122, "  "]]]}, "want": 809388}
+{"case": {"match": ["✳ build", [[390870, "✳ build"]]]}, "want": 390870}
+{"case": {"match": ["⠋ ﬁle 42 the", []]}, "want": null}
+{"case": {"match": ["·a-b ﬁle x_y Build", []]}, "want": null}
+{"case": {"match": ["·µs", [[275375, "42"], [832613, "·build x"], [747326, "... Straße BUILD \t the"]]]}, "want": 747326}
+{"case": {"match": ["* ", [[652943, "😀"], [242001, "·\t"], [400031, "(1) "], [407579, "😀café \t"], [651116, "* "]]]}, "want": null}
+{"case": {"match": ["... BU", [[808925, "... BUILD Ω build Ω"], [988291, "·build İstanbul"], [66120, "* µs BUILD Fix build"]]]}, "want": null}
+{"case": {"match": ["✳ \t µs Ω", [[682160, "⠋ ΟΔΟΣ tests"], [248997, "·Fix Fix µs the"], [1032409, "😀BUILD \t 　"]]]}, "want": null}
+{"case": {"match": ["(1) café Ω café x_y", [[288210, "... İstanbul"], [91978, "(1) "]]]}, "want": 91978}
+{"case": {"match": ["the Straße 42 Straße", []]}, "want": null}
+{"case": {"match": ["·build café \t", []]}, "want": null}
+{"case": {"match": ["", []]}, "want": null}
+{"case": {"match": ["* \t", []]}, "want": null}
+{"case": {"match": ["(1) x_y İstanbul build", [[3828, "* "]]]}, "want": null}
+{"case": {"match": ["", [[587062, "·"], [1017842, "　 42 　"], [39310, "42"], [682988, "... a-b x Build"], [801819, "build x build"]]]}, "want": null}
+{"case": {"match": ["✳ Ω \t", [[671096, "... café"], [659688, "⠋ "]]]}, "want": null}
+{"case": {"match": ["", [[774061, "  "], [914959, "😀a-b x_y build İstanbul"], [164896, "café"], [194797, "·ΟΔΟΣ"], [1042636, "·ﬁle a-b café a-b"]]]}, "want": null}
+{"case": {"match": ["", [[734902, "😀x build 42 x"], [839334, "* "], [335735, ""]]]}, "want": null}
+{"case": {"match": ["✳ Fix", [[995983, "Ω 　"], [685575, "  "], [584251, "(1) İstanbul the 42"], [170996, "✳ Fix"], [855990, "⠋ "]]]}, "want": 170996}
+{"case": {"match": ["  a-b the Ω café", [[650917, "✳ Build"], [733762, "·x build Straße"], [492569, "  BUILD \t 42"]]]}, "want": null}
+{"case": {"match": ["😀　", [[144605, "café Ω"], [633623, "(1) µs ﬁle Ω"], [526307, "😀　"]]]}, "want": null}
+{"case": {"match": ["·", [[824691, "·"]]]}, "want": null}
+{"case": {"match": ["⠋ tests ΟΔΟΣ 42 µs", [[900706, "⠋ tests ΟΔΟΣ 42 µs"]]]}, "want": 900706}
+{"case": {"match": ["a-b", [[808543, "(1) İstanbul \t build"], [173901, "·x_y"], [932805, "  x x_y BUILD"]]]}, "want": null}
+{"case": {"match": ["✳ 42 café Ω x", [[262254, "⠋ \t µs x_y"], [142711, "✳ 42 café Ω x"], [612401, "Fix \t"], [572824, "😀Fix tests 42 a-b"]]]}, "want": 142711}
+{"case": {"match": ["😀", [[485594, "(1) "], [388419, "😀BUILD Build İstanbul build"], [441781, "😀"], [896253, "  x_y tests ﬁle build"]]]}, "want": null}
+{"case": {"match": ["✳ ", [[329408, "  ﬁle a-b"], [377644, "😀x x"], [727480, "😀Ω tests BUILD a-b"], [464794, "  "]]]}, "want": null}
+{"case": {"match": ["..", [[534217, "... Straße ﬁle \t"], [312453, "... BUILD"], [475933, "·"], [677911, "😀Ω"]]]}, "want": null}
+{"case": {"match": ["😀ΟΔΟΣ", [[68316, "😀ΟΔΟΣ"], [709552, "(1) tests ﬁle"], [83476, "😀\t x_y"], [186352, "(1) 　 x_y a-b"], [316425, "... "]]]}, "want": null}
+{"case": {"match": ["✳ ", [[86254, "* tests \t a-b 42"], [526981, "* µs"], [263792, "😀ﬁle İstanbul"], [491516, "⠋ BUILD 　 the"], [257160, "... "]]]}, "want": null}
+{"case": {"match": ["  tests", [[257962, "·42"], [666518, "a-b"], [1034404, "  Build the"], [370430, "... µs"]]]}, "want": null}
+{"case": {"match": ["(1) the ﬁle µs", []]}, "want": null}
+{"case": {"match": ["... the ΟΔΟΣ build x", [[124356, "⠋ "], [475118, "✳ Straße"], [401294, "... x ﬁle café"], [693523, "... the ΟΔΟΣ build x"]]]}, "want": 693523}
+{"case": {"match": ["(1) ", []]}, "want": null}
+{"case": {"match": ["* \t", [[282270, "·42 a-b tests Ω"], [70390, "😀café the a-b"], [801433, "... x"], [133562, "😀"], [377654, "(1) "]]]}, "want": null}
+{"case": {"match": ["... tests x_y Ω", []]}, "want": null}
+{"case": {"match": ["... tests Ω", [[576698, "✳ café BUILD İstanbul"], [207899, "(1) İstanbul"], [949399, "  x_y Straße"]]]}, "want": null}
+{"case": {"match": ["✳", [[790459, "the a-b 42 　"], [139407, "  ΟΔΟΣ tests µs"], [18096, "✳ "], [252055, "·"]]]}, "want": null}
+{"case": {"match": ["", [[770666, "😀tests \t"], [945502, "(1) café a-b 　 BUILD"], [988730, "BUILD tests"], [789933, "... ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["(1) 42 İstanbul x_y x_y", [[19849, "* tests x_y x BUILD"]]]}, "want": null}
+{"case": {"match": ["😀Fix x tests", [[105011, "... "], [164194, "😀Fix x tests"]]]}, "want": 164194}
+{"case": {"match": ["😀a-b 42", [[272334, "  \t İstanbul x \t"]]]}, "want": null}
+{"case": {"match": ["... BUILD build BUILD", []]}, "want": null}
+{"case": {"match": ["Straße 　 test", [[708339, "Straße 　 tests"], [332411, "... tests tests the tests"]]]}, "want": 708339}
+{"case": {"match": ["... \t İstanbul Build build", [[721816, "* µs x_y"]]]}, "want": null}
+{"case": {"match": ["  build BUILD Fix Ω", [[576702, "✳ Build build a-b x_y"], [428084, "✳ \t 　 x_y"]]]}, "want": null}
+{"case": {"match": ["", [[9097, "⠋ "], [795218, "·Straße"], [422221, "⠋ café x Fix x_y"], [224895, "* \t a-b"], [13887, "  "]]]}, "want": null}
+{"case": {"match": ["😀café Straße", []]}, "want": null}
+{"case": {"match": ["·ΟΔΟΣ 　 µs", [[586087, "✳ Straße"]]]}, "want": 586087}
+{"case": {"match": ["(1) the 42 Straße ﬁle", [[828095, "* İstanbul a-b"], [186786, "(1) the 42 Straße ﬁle"], [956977, "✳ \t 　"], [63270, "... ΟΔΟΣ"]]]}, "want": 186786}
+{"case": {"match": ["* ΟΔΟΣ", [[484806, "* ΟΔΟΣ"], [139897, "  Ω \t \t tests"], [836201, "😀tests x Ω"]]]}, "want": null}
+{"case": {"match": ["😀", [[17658, "  the the 42"], [99602, "İstanbul Build"], [160458, "·Fix ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["  café", [[480291, "  x_y BUILD"], [1017554, "  café x"]]]}, "want": 1017554}
+{"case": {"match": ["... x the ΟΔΟΣ", [[755269, "* ﬁle a-b build"], [1005559, "... x the ΟΔΟΣ"], [907833, "  x_y café x_y"]]]}, "want": 1005559}
+{"case": {"match": ["x 　 ﬁle 42", []]}, "want": null}
+{"case": {"match": ["　 µs", []]}, "want": null}
+{"case": {"match": ["(1) ﬁle", [[602932, "... x"], [812572, ""]]]}, "want": null}
+{"case": {"match": ["Ω Build x", [[162558, "Ω Build x_y build"]]]}, "want": 162558}
+{"case": {"match": ["42 tests", []]}, "want": null}
+{"case": {"match": ["  Ω", [[197611, "µs"], [984115, "  Ω"], [833181, "·Fix Build"]]]}, "want": null}
+{"case": {"match": ["the ﬁle", [[651298, "Straße BUILD"], [189507, "(1) the the tests"]]]}, "want": null}
+{"case": {"match": ["·İstanbul café x_y Fix", [[221516, "·İstanbul café x_y Fix"]]]}, "want": 221516}
+{"case": {"match": ["⠋ x_y", [[306146, "(1) "], [984641, "⠋ BUILD µs café"], [166665, "... x_y İstanbul x_y \t"], [725592, "✳ 　 Ω 42"], [880427, "·\t x_y \t µs"]]]}, "want": null}
+{"case": {"match": ["·the ﬁle Build", [[424100, "✳ build build İstanbul İstanbul"], [311782, "·build the Ω"], [280759, "·x İstanbul build ΟΔΟΣ"], [138526, "µs Build x 42"]]]}, "want": null}
+{"case": {"match": ["😀\t", [[658787, "😀\t"]]]}, "want": null}
+{"case": {"match": ["(1) ", []]}, "want": null}
+{"case": {"match": ["* µs ", [[171148, "the"], [444108, "😀ﬁle Ω tests"], [136366, "* µs café BUILD x_y"], [229599, ""], [70632, "✳ ΟΔΟΣ"]]]}, "want": 136366}
+{"case": {"match": ["(1) BUILD", [[891930, "(1) BUILD a-b"]]]}, "want": 891930}
+{"case": {"match": ["... Build", [[43160, "(1) Ω tests x_y BUILD"], [526415, "(1) Ω"], [1024262, "😀café"], [175091, "* build x"]]]}, "want": 175091}
+{"case": {"match": ["... İstanbul Ω İstanbul \t", [[662546, "* "], [866858, "... İstanbul Ω İstanbul \t"]]]}, "want": 866858}
+{"case": {"match": ["·ΟΔΟ", [[212675, "·ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["  ﬁle µs café 42", []]}, "want": null}
+{"case": {"match": ["... İstanbul BUILD Ω \t", [[525241, "BUILD x Straße 42"], [649860, "⠋ "], [185590, "tests"]]]}, "want": null}
+{"case": {"match": ["... Straß", [[597300, "⠋ Ω"], [293468, "... Straße"], [388865, "✳ x \t café"], [20424, "·Straße café"]]]}, "want": null}
+{"case": {"match": ["* \t ΟΔΟΣ Straße build", [[42023, "* \t ΟΔΟΣ Straße build"], [29560, "  "], [62642, "✳ x_y BUILD BUILD"], [710916, "* "]]]}, "want": 42023}
+{"case": {"match": ["·", [[219156, "* café the Ω"], [1012555, "İstanbul"]]]}, "want": null}
+{"case": {"match": ["a-b 42", [[100753, "(1) "], [589386, "(1) µs"], [838538, "(1) 42"], [646080, "⠋ BUILD 42"]]]}, "want": null}
+{"case": {"match": ["café x_y ﬁle", [[592933, "Build ΟΔΟΣ the"], [322379, "⠋ Fix BUILD ﬁle µs"], [439935, "  BUILD"], [712756, "(1) ΟΔΟΣ Straße x"], [182217, "café x_y ﬁle"]]]}, "want": 182217}
+{"case": {"match": ["..", [[1000299, "✳ BUILD BUILD build café"], [688348, "⠋ Build the"], [1040655, "😀BUILD"], [988098, "... "], [533666, "⠋ "]]]}, "want": null}
+{"case": {"match": ["... build", [[116599, "... build"]]]}, "want": 116599}
+{"case": {"match": ["　 build x İstanbul", [[558381, "　 build x İstanbul"]]]}, "want": 558381}
+{"case": {"match": ["·tests", [[273272, "·tests"], [438655, "⠋ İstanbul 42 a-b"]]]}, "want": 273272}
+{"case": {"match": ["😀x_y BUILD", [[825812, "😀x_y BUILD"]]]}, "want": 825812}
+{"case": {"match": ["... ", [[258762, "✳ Fix Fix ﬁle tests"], [551219, "·ﬁle Build café"], [707655, "⠋ BUILD 42 Fix"], [306554, "café Fix Straße"]]]}, "want": null}
+{"case": {"match": ["·\t the ΟΔΟΣ İstanbul", [[328711, "·\t the ΟΔΟΣ İstanbul"], [863917, "(1) Fix"], [869535, "⠋ Fix 42"], [1048532, "✳ "], [762746, "İstanbul café 42 Build"]]]}, "want": 328711}
+{"case": {"match": ["·µs build", []]}, "want": null}
+{"case": {"match": ["·", [[855477, "* ﬁle"], [116621, "(1) "]]]}, "want": null}
+{"case": {"match": ["·ΟΔΟΣ x_y café", [[230281, "(1) build Straße Fix"], [845366, "😀µs"]]]}, "want": null}
+{"case": {"match": ["Build", [[65862, "·café ﬁle"], [515643, "  42 　"], [885682, "⠋ x"]]]}, "want": null}
+{"case": {"match": ["(1) Build x_y", []]}, "want": null}
+{"case": {"match": ["* İstanbul x", [[547019, "(1) Build BUILD"], [42192, "* İstanbul x"], [783804, "* İstanbul"], [1036631, "BUILD \t tests"], [687874, "(1) \t Ω ﬁle"]]]}, "want": 42192}
+{"case": {"match": ["·Straße ﬁle café", [[46180, "µs"]]]}, "want": 46180}
+{"case": {"match": ["(1) ﬁle ΟΔΟΣ BUILD ΟΔΟΣ", [[410766, "Fix Fix \t"]]]}, "want": null}
+{"case": {"match": ["... x_y Straße", [[846762, "(1) Build"], [579711, "⠋ BUILD the \t"], [760838, "... x_y Straße"]]]}, "want": 760838}
+{"case": {"match": ["  ", [[149387, "(1) "], [137211, "  "], [407875, "... "]]]}, "want": null}
+{"case": {"match": ["✳ ΟΔΟΣ the \t", [[124216, "😀tests build tests ﬁle"], [287694, "(1) x"], [939907, "✳ ΟΔΟΣ the \t"]]]}, "want": 939907}
+{"case": {"match": ["... the Build 　", [[622376, "·a-b"], [519110, "... a-b x"], [275678, "... the Build 　"], [502518, "⠋ "], [513692, "* ΟΔΟΣ µs"]]]}, "want": 275678}
+{"case": {"match": ["  ", []]}, "want": null}
+{"case": {"match": ["✳ µs x_y Straße", []]}, "want": null}
+{"case": {"match": ["✳ µs", [[914934, "(1) tests x_y"], [124869, "⠋ ﬁle the Straße"], [971283, "✳ µs"], [877222, "⠋ build 42 Straße a-b"]]]}, "want": 971283}
+{"case": {"match": [" ", [[945162, "  "]]]}, "want": null}
+{"case": {"match": ["😀Fix µs ", [[832360, "😀Fix µs a-b"], [812125, "  Build x_y"], [971538, "😀the café Build café"], [330210, "* \t BUILD"], [936724, "·tests 　"]]]}, "want": 832360}
+{"case": {"match": ["build build µs build", [[903376, "  \t Fix"], [931412, "  "]]]}, "want": null}
+{"case": {"match": ["* ΟΔΟΣ µs Build µs", [[432215, "😀\t ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["(1) x BUILD Build ΟΔΟΣ", [[632257, "(1) x BUILD Build ΟΔΟΣ"], [776758, "... Build İstanbul tests café"]]]}, "want": 632257}
+{"case": {"match": ["Fix", [[578330, "Fix"]]]}, "want": 578330}
+{"case": {"match": ["·build x_y", [[134245, "... "], [170696, ""], [815964, "... ΟΔΟΣ İstanbul ΟΔΟΣ Fix"], [244724, "·build x_y"]]]}, "want": 244724}
+{"case": {"match": ["(1) 　 the \t", [[568395, "✳ İstanbul café µs"], [493609, "  BUILD"], [338286, "(1) µs Ω"], [803794, "(1) 　 the \t"]]]}, "want": 803794}
+{"case": {"match": ["Build café µs", []]}, "want": null}
+{"case": {"match": ["·BUILD café Ω Ω", [[142225, "😀Ω \t build"], [701588, "·BUILD café Ω Ω"]]]}, "want": 701588}
+{"case": {"match": ["... \t the 　 Ω", [[216141, "  build build a-b"], [546125, "... \t the 　 Ω"]]]}, "want": 546125}
+{"case": {"match": ["(1) ﬁle the BUILD tests", []]}, "want": null}
+{"case": {"match": ["* ΟΔΟΣ the a-b BUILD", [[2028, "  Ω \t"]]]}, "want": null}
+{"case": {"match": ["(1) \t build x İstanbul", []]}, "want": null}
+{"case": {"match": ["* ", [[759493, "(1) Fix"], [354228, "* \t café x"], [326000, "😀Fix x_y"]]]}, "want": null}
+{"case": {"match": ["✳ ", []]}, "want": null}
+{"case": {"match": ["  42", [[531719, "... "]]]}, "want": null}
+{"case": {"match": ["  a-b a-b", [[915751, "  a-b a-b"]]]}, "want": 915751}
+{"case": {"match": ["(1) Fix Ω µs Build", [[129935, "⠋ tests Straße"], [1026378, "... BUILD"], [252406, "(1) Fix Ω µs Build"], [755907, "⠋ "], [99216, "  the"]]]}, "want": 252406}
+{"case": {"match": ["⠋ İstanbul the", [[364103, "✳ İstanbul a-b ﬁle"], [114341, "⠋ 42 the Straße x_y"], [1001209, "⠋ the Build 　 café"]]]}, "want": null}
+{"case": {"match": ["  BU", [[545494, "  BUILD x_y a-b x_y"]]]}, "want": 545494}
+{"case": {"match": ["* Fix the", []]}, "want": null}
+{"case": {"match": ["😀build BUILD", [[664629, "😀Ω"]]]}, "want": null}
+{"case": {"match": ["✳ ", [[229074, "✳ "], [227980, "😀the BUILD 　 42"]]]}, "want": null}
+{"case": {"match": ["... ", []]}, "want": null}
+{"case": {"match": ["(1) a-b tests", []]}, "want": null}
+{"case": {"match": ["* ﬁle Fix Fix", [[176277, "* ﬁle Fix Fix"]]]}, "want": 176277}
+{"case": {"match": ["😀\t 　 BUILD", [[745002, "😀\t 　 BUILD"], [745356, "😀café"], [583738, "✳ x_y the the the"], [525699, "😀x a-b 42"], [1017876, "  42"]]]}, "want": 745002}
+{"case": {"match": ["⠋ \t µs build", [[126320, "* tests 42 BUILD"], [21675, "café"], [285288, "·tests Straße"], [1011278, "😀\t Fix tests 　"]]]}, "want": null}
+{"case": {"match": ["", [[284504, ""]]]}, "want": null}
+{"case": {"match": ["✳ ﬁle", []]}, "want": null}
+{"case": {"match": ["😀x x", [[365065, "(1) "], [870622, "  x build"], [363738, "  x"], [196290, "* ΟΔΟΣ Build 　 　"], [986576, "😀x x"]]]}, "want": 986576}
+{"case": {"match": ["✳ 　", [[930620, "😀BUILD"], [900665, "  \t build build the"], [605897, "　 a-b İstanbul BUILD"]]]}, "want": null}
+{"case": {"match": ["✳ t", [[655459, "✳ tests 42 ﬁle"]]]}, "want": 655459}
+{"case": {"match": ["✳ ", [[770657, ""], [445374, "✳ "], [510401, "* tests x_y \t"], [652824, "(1) 42 Ω Straße the"]]]}, "want": null}
+{"case": {"match": ["  a-b Straße µs Fix", [[769448, "(1) café"], [509169, "42"], [354570, "... ﬁle Ω İstanbul"], [725471, "😀a-b 42"]]]}, "want": null}
+{"case": {"match": ["  BUILD build Ω", []]}, "want": null}
+{"case": {"match": ["(1) x_y Fix", [[704391, "·\t"], [489930, "  ΟΔΟΣ BUILD a-b"], [567297, "😀\t \t İstanbul"], [250672, "✳ "]]]}, "want": null}
+{"case": {"match": ["42", [[157152, "(1) "], [666578, "(1) x_y ﬁle x"]]]}, "want": null}
+{"case": {"match": ["", [[567425, ""], [213079, "😀µs tests the"]]]}, "want": null}
+{"case": {"match": ["... ca", [[361971, "... café"]]]}, "want": 361971}
+{"case": {"match": ["✳ Straße x", [[476411, "✳ Straße x"], [276149, "✳ BUILD"]]]}, "want": 476411}
+{"case": {"match": ["✳ tests", [[124942, "✳ tests Straße"]]]}, "want": 124942}
+{"case": {"match": ["* build ﬁle a-b tests", []]}, "want": null}
+{"case": {"match": ["  Straße x_y Build", [[902831, "... \t"], [666709, "... Fix Build Straße"], [81882, "  Straße x_y Build"], [691825, "... café Build x"]]]}, "want": 81882}
+{"case": {"match": ["  Fix", [[1021564, "... café the"], [387099, "😀\t tests BUILD 　"], [333608, "😀ΟΔΟΣ"], [447942, "  Fix"]]]}, "want": 447942}
+{"case": {"match": ["(1) İstanbul Build ΟΔΟΣ İstanbul", [[924280, "😀\t"], [57367, "... "], [740313, "😀42"], [238980, "　 the ﬁle \t"], [607074, "... café BUILD"]]]}, "want": null}
+{"case": {"match": ["... ﬁle Fix 　 　", [[461229, "·Build the"], [221737, "... "], [942756, "... ﬁle Fix 　 　"]]]}, "want": 942756}
+{"case": {"match": ["* 42 a-b build the", []]}, "want": null}
+{"case": {"match": ["✳ ", [[899150, "⠋ BUILD Fix Build build"], [396478, "x"], [456780, "✳ \t İstanbul ΟΔΟΣ x_y"], [4037, "·42 a-b"]]]}, "want": null}
+{"case": {"match": ["⠋ 42 \t BUILD", []]}, "want": null}
+{"case": {"match": ["* x_", [[603280, "* x_y"]]]}, "want": 603280}
+{"case": {"match": ["(1) ", [[985947, "·Ω Ω"], [940324, "(1) "]]]}, "want": 940324}
+{"case": {"match": ["(1) build", []]}, "want": null}
+{"case": {"match": ["İstanbul BUILD", [[858619, "İstanbul BUILD"]]]}, "want": 858619}
+{"case": {"match": ["·café", [[241175, "✳ İstanbul the 42 x"], [606637, "✳ 　 a-b"], [493682, "·café"], [394001, "⠋ "], [929702, "⠋ Build x"]]]}, "want": 493682}
+{"case": {"match": ["(1) ﬁle Build", []]}, "want": null}
+{"case": {"match": ["... µs İstanbul", [[505634, "⠋ x_y Fix Straße"], [9998, "... µs İstanbul"], [159204, "✳ x_y ΟΔΟΣ \t ﬁle"]]]}, "want": 9998}
+{"case": {"match": ["* café", [[677782, "  Fix build Fix"], [670243, "😀"]]]}, "want": null}
+{"case": {"match": ["  café µs Ω µs", [[821608, "* \t"], [458694, "😀"], [304119, "... Straße µs"]]]}, "want": null}
+{"case": {"match": ["... Ω", [[1053, "... Ω"], [518157, "⠋ Fix 　 tests"], [93875, "x_y"], [334467, "... 42 ﬁle the"], [893438, "... BUILD"]]]}, "want": null}
+{"case": {"match": ["  tests the Ω BUILD", [[398959, "(1) \t BUILD ﬁle x"], [286883, "⠋ µs µs"], [492798, "⠋ x_y Build"], [951450, "... a-b İstanbul µs"]]]}, "want": null}
+{"case": {"match": ["😀µs", []]}, "want": null}
+{"case": {"match": ["Straße Build", [[835008, "·tests Fix İstanbul \t"], [834372, "  BUILD"], [129936, "Straße Build"], [936489, "(1) the x_y build ΟΔΟΣ"]]]}, "want": 129936}
+{"case": {"match": ["  x Build ﬁle", [[952551, ""], [661575, "·ΟΔΟΣ"], [229223, "  x Build ﬁle"]]]}, "want": 229223}
+{"case": {"match": ["😀ﬁle ΟΔΟΣ", [[1014373, "(1) Ω BUILD Build ΟΔΟΣ"], [268591, "😀ﬁle ΟΔΟΣ"], [367794, "  "], [191545, "* x_y İstanbul x"]]]}, "want": 268591}
+{"case": {"match": ["·a-b tes", [[787949, "·a-b tests 　"]]]}, "want": 787949}
+{"case": {"match": ["⠋ ", [[452931, "... "], [264696, "⠋ Straße café tests İstanbul"], [722166, "... \t ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["the ΟΔΟΣ", [[1044984, "(1) 　"], [258103, "the ΟΔΟΣ"], [942516, "  "], [578483, "  ΟΔΟΣ İstanbul"]]]}, "want": 258103}
+{"case": {"match": ["* ΟΔΟΣ Fix", [[878317, "* Fix"], [882039, "⠋ "], [793359, "✳ ΟΔΟΣ x 　 Fix"], [62382, "... the"]]]}, "want": 878317}
+{"case": {"match": ["* ΟΔΟΣ", [[1038013, "* ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["...", [[526796, "... Ω"], [197221, "😀ﬁle the ΟΔΟΣ café"]]]}, "want": null}
+{"case": {"match": ["* BUILD İstanbul", [[914629, "  x x build x_y"], [290573, "... 42 Straße Ω BUILD"], [688291, "* Ω"]]]}, "want": null}
+{"case": {"match": ["* \t 　", [[333428, "* \t 　"]]]}, "want": null}
+{"case": {"match": ["·Ω", [[795247, "·Ω"], [222577, "⠋ x_y"]]]}, "want": null}
+{"case": {"match": ["(1) x_y", [[923705, "(1) x_y"]]]}, "want": 923705}
+{"case": {"match": ["·ΟΔΟΣ İstanbul", [[48393, "·ΟΔΟΣ İstanbul"], [317962, "⠋ İstanbul 42 tests"], [172585, "✳ x_y µs"], [785217, "⠋ \t Fix"], [652301, "⠋ µs 　"]]]}, "want": 48393}
+{"case": {"match": ["·", [[560255, "·"], [1023176, "tests µs x_y BUILD"], [926257, "⠋ x_y Fix"]]]}, "want": null}
+{"case": {"match": ["* t", [[157582, "* tests İstanbul ΟΔΟΣ"]]]}, "want": 157582}
+{"case": {"match": ["... \t İstanbul", []]}, "want": null}
+{"case": {"match": ["* ", [[756163, "  ΟΔΟΣ a-b café the"], [738462, "✳ ΟΔΟΣ"], [792806, "  µs 42"], [145213, "😀ΟΔΟΣ x_y"], [333848, "  a-b 　 ﬁle"]]]}, "want": null}
+{"case": {"match": ["... ", [[1019539, "⠋ ﬁle"], [529616, "😀Fix"], [1041686, "  Build \t"], [631394, "·\t 　 \t ΟΔΟΣ"], [1029894, "⠋ \t Ω x_y"]]]}, "want": null}
+{"case": {"match": ["⠋ BUILD ﬁle ﬁle café", [[932308, "(1) café"], [806844, "·\t Fix Fix 42"], [731929, "... µs"], [826474, "·ﬁle"]]]}, "want": null}
+{"case": {"match": ["✳ ﬁle İ", [[907484, "✳ ﬁle İstanbul µs"]]]}, "want": 907484}
+{"case": {"match": ["... ", []]}, "want": null}
+{"case": {"match": ["(1) BUILD x Build", [[774963, "✳ a-b ΟΔΟΣ ΟΔΟΣ"], [852735, "  42 build café ﬁle"], [20088, "✳ café x x µs"]]]}, "want": null}
+{"case": {"match": ["　 　 \t", [[960939, "  "], [359726, "  \t Straße build"], [704354, "⠋ İstanbul build"], [239182, "　 　 \t"]]]}, "want": null}
+{"case": {"match": ["😀Ω µs", [[283665, "⠋ 　 ﬁle the"], [952050, "⠋ \t"]]]}, "want": null}
+{"case": {"match": ["... Build a-b İstanbul 42", [[921560, "✳ ﬁle build the"], [700443, "  Straße µs café"]]]}, "want": null}
+{"case": {"match": ["😀42 café", [[619250, "✳ ΟΔΟΣ 　 Fix"], [55529, "😀42 café"], [62013, "* \t café build Build"], [650739, "✳ the"]]]}, "want": 55529}
+{"case": {"match": ["... ", []]}, "want": null}
+{"case": {"match": ["(1) ΟΔΟΣ", []]}, "want": null}
+{"case": {"match": ["　 a-b \t BUILD", [[430483, "　 a-b \t BUILD"], [220561, "... "], [777292, "⠋ x_y ΟΔΟΣ Fix"]]]}, "want": 430483}
+{"case": {"match": ["a-b 42 µs", [[696292, "(1) µs BUILD a-b x"], [111878, "* "], [662566, "a-b 42 µs"]]]}, "want": 662566}
+{"case": {"match": ["✳ ΟΔΟΣ Fix", [[851077, "·ΟΔΟΣ Fix \t ΟΔΟΣ"], [868905, "build 　 x_y İstanbul"], [216187, "😀x µs"], [853181, "... BUILD ﬁle Straße \t"], [357229, "  BUILD 　 café Straße"]]]}, "want": 851077}
+{"case": {"match": ["(1", [[187185, "(1) ΟΔΟΣ ΟΔΟΣ"]]]}, "want": 187185}
+{"case": {"match": ["⠋ ", [[147532, "  　 x"], [604066, "⠋ "]]]}, "want": null}
+{"case": {"match": ["😀the build", [[229729, "Build \t"], [431502, "😀\t Ω a-b Fix"]]]}, "want": null}
+{"case": {"match": ["  　 Ω", []]}, "want": null}
+{"case": {"match": ["(1) µs ΟΔΟΣ", [[170808, "·"]]]}, "want": null}
+{"case": {"match": ["　", [[799523, ""], [868855, "　"]]]}, "want": null}
+{"case": {"match": ["·ﬁle ﬁle \t \t", [[200133, "·ﬁle ﬁle \t \t"]]]}, "want": 200133}
+{"case": {"match": ["* x", [[811333, "(1) µs café µs Build"], [642936, ""], [695877, "  "], [274859, "* x"], [702821, "... Build"]]]}, "want": 274859}
+{"case": {"match": ["... ", [[747020, "... "], [18619, "⠋ the µs tests ﬁle"]]]}, "want": null}
+{"case": {"match": ["·Build", [[543103, "·a-b"], [966895, "😀build a-b a-b"], [946506, "✳ "], [511336, "x_y a-b BUILD"], [253402, "😀µs"]]]}, "want": 966895}
+{"case": {"match": ["✳ İstanbul µs x", [[134343, "✳ ﬁle Build µs"], [957870, "... Straße a-b"], [537765, "* "]]]}, "want": null}
+{"case": {"match": ["✳ ", []]}, "want": null}
+{"case": {"match": ["·Straße 42", [[946467, "😀BUILD the µs"], [743403, "(1) "], [711136, "⠋ Build"], [968254, "·ΟΔΟΣ x BUILD"], [961779, "·Straße 42"]]]}, "want": 961779}
+{"case": {"match": ["(1) \t the café ΟΔΟΣ", [[332075, "(1) \t the café ΟΔΟΣ"], [413045, "* 　"], [466276, "·tests Fix café"]]]}, "want": 332075}
+{"case": {"match": ["·a-b ΟΔΟΣ Build", [[823857, "·Fix ﬁle x"]]]}, "want": null}
+{"case": {"match": ["✳ café café a-b", []]}, "want": null}
+{"case": {"match": ["(1) 42", [[395127, "(1) 42"]]]}, "want": 395127}
+{"case": {"match": ["  ΟΔΟΣ µs 42", [[250891, "  ΟΔΟΣ µs 42"]]]}, "want": 250891}
+{"case": {"match": ["x a-b µs", [[227399, "·Fix build Ω"], [868763, "... µs"]]]}, "want": null}
+{"case": {"match": ["  µs x_y µs Straße", [[779693, "Ω µs café"], [587935, "😀BUILD Straße ΟΔΟΣ"], [680679, "* 　"]]]}, "want": null}
+{"case": {"match": ["😀", [[663201, "😀"], [116404, "😀"], [501691, "a-b Fix İstanbul Straße"]]]}, "want": null}
+{"case": {"match": ["·Straße µs µs Build", [[80450, "✳ a-b café"], [181408, "✳ BUILD µs 　"], [145908, "  tests ΟΔΟΣ \t"], [280114, "* 　"], [95405, "·ﬁle Fix İstanbul Ω"]]]}, "want": null}
+{"case": {"match": ["... a-b \t x", [[943674, "(1) build"], [581187, "... ΟΔΟΣ tests"], [451231, "·"]]]}, "want": null}
+{"case": {"match": ["·BUILD 　 ΟΔΟΣ BUILD", [[734560, "... the"], [450898, "... Straße İstanbul Straße Build"], [818196, "  Build a-b"]]]}, "want": null}
+{"case": {"match": ["(1) a-b BUILD 　 Build", [[232206, "✳ build 　 build BUILD"]]]}, "want": null}
+{"case": {"match": ["  ", []]}, "want": null}
+{"case": {"match": ["😀x Ω Build", [[1006454, "⠋ "], [57268, "  "], [320508, "⠋ µs"], [750334, "(1) "], [356592, "⠋ x café"]]]}, "want": null}
+{"case": {"match": ["·Build a-b Build BUILD", [[524377, "·Build a-b Build BUILD"]]]}, "want": 524377}
+{"case": {"match": ["* x_y x \t a-b", [[70350, "·café"], [291400, "* x_y x \t a-b"]]]}, "want": 291400}
+{"case": {"match": ["  Build café ΟΔΟΣ ﬁle", [[1028132, "  the µs \t café"], [419012, "* "], [858808, "😀"], [648579, "... "]]]}, "want": null}
+{"case": {"match": ["⠋ \t Straße", [[580330, "⠋ \t Straße"]]]}, "want": 580330}
+{"case": {"match": ["⠋ the x 　 42", [[57984, "(1) "]]]}, "want": null}
+{"case": {"match": ["(1) Straße 42 \t", [[363969, "(1) Straße 42 \t"]]]}, "want": 363969}
+{"case": {"match": ["⠋ x_y Straße", [[277697, "... café build Build Straße"], [969776, "  build µs"], [729515, "* Ω"], [200547, "  Fix build x tests"], [464951, "😀Build café İstanbul x_y"]]]}, "want": null}
+{"case": {"match": ["⠋ Ω", [[313917, "* İstanbul"], [536921, "(1) x_y café"], [219445, "* \t Ω BUILD"], [333087, "(1) µs"], [412766, "  the 　 Build ﬁle"]]]}, "want": null}
+{"case": {"match": ["... ﬁl", [[1041119, "  Fix x_y 　"], [1008262, "... ﬁle"]]]}, "want": 1008262}
+{"case": {"match": ["Fix ΟΔ", [[741277, "⠋ "], [985260, "Fix ΟΔΟΣ"], [462368, "... x_y x tests"], [581114, "  Straße"]]]}, "want": 985260}
+{"case": {"match": ["✳ Build café", [[373665, "* "], [32896, "... BUILD café"], [332095, "... Straße x_y Straße Fix"]]]}, "want": 32896}
+{"case": {"match": ["✳ 42 the ΟΔΟΣ 　", []]}, "want": null}
+{"case": {"match": ["(1) 42", []]}, "want": null}
+{"case": {"match": ["✳ ", [[998761, "✳ "], [281730, "  build x tests"], [411774, "✳ µs"]]]}, "want": null}
+{"case": {"match": ["  x_y", []]}, "want": null}
+{"case": {"match": ["😀ΟΔΟΣ", [[813181, "😀ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["😀42 a-b", [[575507, "😀42 a-b"], [179928, "(1) BUILD"]]]}, "want": 575507}
+{"case": {"match": ["Straße", [[308911, "✳ 　"]]]}, "want": null}
+{"case": {"match": ["⠋ x_y 42 café", [[118720, "⠋ x_y 42 café"]]]}, "want": 118720}
+{"case": {"match": ["⠋ 42 x_y", [[520565, "(1) build Fix the µs"], [377148, "* 　 café"], [698493, "⠋ 42 x_y"]]]}, "want": 698493}
+{"case": {"match": ["  Fix build Straße", [[228687, "✳ Fix"], [304176, "😀"], [631624, "  BUILD Fix BUILD Ω"], [282136, "µs café ΟΔΟΣ Fix"]]]}, "want": 228687}
+{"case": {"match": ["😀42 　 BUILD", [[205111, "😀42 　 BUILD café"], [1008504, "  　 the"], [726089, "⠋ "], [487656, "* café BUILD"]]]}, "want": 205111}
+{"case": {"match": ["😀", [[704126, "  ΟΔΟΣ BUILD café"], [189662, "  　 x µs"], [30172, "  Straße build"], [263834, "😀"], [235327, "(1) ﬁle café"]]]}, "want": null}
+{"case": {"match": ["... a-b", [[978579, "⠋ Fix build Ω"], [161707, "* "], [233952, "... a-b"], [768678, "😀the İstanbul"]]]}, "want": 233952}
+{"case": {"match": ["  ΟΔΟΣ x_y 　 café", [[62854, "  Build İstanbul"]]]}, "want": null}
+{"case": {"match": ["(1) µs 　 tests the", [[52172, "(1) µs 　 tests the"]]]}, "want": 52172}
+{"case": {"match": ["... BUILD", []]}, "want": null}
+{"case": {"match": ["... Ω", []]}, "want": null}
+{"case": {"match": ["* Straße", []]}, "want": null}
+{"case": {"match": ["* x_y ΟΔΟΣ 　 µs", [[488270, "  Build x_y"], [946156, "* Build the"], [661494, "·"]]]}, "want": null}
+{"case": {"match": ["... x Fix 　 Fix", [[1027063, "·Straße ΟΔΟΣ"], [954425, "(1) the tests x_y 　"], [896739, "  tests İstanbul 　"], [188181, "... x Fix 　 Fix"]]]}, "want": 188181}
+{"case": {"match": ["✳ the", [[836659, "  x Straße"]]]}, "want": null}
+{"case": {"match": ["⠋ build Ω", [[510240, "* "], [398617, "* 42 ﬁle tests"], [176014, "(1) "], [596315, ""]]]}, "want": null}
+{"case": {"match": ["✳ 　 İstanbul ΟΔΟΣ", []]}, "want": null}
+{"case": {"match": ["* İst", [[982241, "  µs İstanbul µs"], [880150, "😀Build"], [950583, "* İstanbul"]]]}, "want": 950583}
+{"case": {"match": ["⠋ İstanbul 　", [[914130, "(1) x_y Straße Straße"], [13584, "😀ΟΔΟΣ Fix"], [856252, "·ΟΔΟΣ x İstanbul"]]]}, "want": null}
+{"case": {"match": ["✳ İstanbul", [[570771, "✳ İstanbul"]]]}, "want": 570771}
+{"case": {"match": ["·42 a-b", [[231932, "·42 a-b"], [351679, "⠋ "]]]}, "want": 231932}
+{"case": {"match": ["... a-b", []]}, "want": null}
+{"case": {"match": ["✳ café the Straße ﬁle", []]}, "want": null}
+{"case": {"match": ["✳ the", []]}, "want": null}
+{"case": {"match": ["* café ﬁle x_y", []]}, "want": null}
+{"case": {"match": ["·build", [[129010, "·build"]]]}, "want": 129010}
+{"case": {"match": ["·c", [[157094, "·Build ﬁle"], [514715, "✳ the x µs the"], [489209, "·ΟΔΟΣ"], [51703, "·café the Build Straße"]]]}, "want": 51703}
+{"case": {"match": ["... ", [[307953, "(1) Build Ω"], [1013335, "·a-b 42"], [1012803, "⠋ a-b Build ﬁle a-b"], [806235, "... a-b build"]]]}, "want": null}
+{"case": {"match": ["* \t ", [[440402, "  µs tests"], [983416, "　 build"], [229148, "😀42 the"], [108909, "✳ x_y"], [797900, "* \t 42 µs build"]]]}, "want": null}
+{"case": {"match": ["  the a-b x 42", [[689791, ""], [802527, "... BUILD ΟΔΟΣ"], [962853, ""], [896727, "(1) build"], [835808, "(1) tests ﬁle x_y"]]]}, "want": null}
+{"case": {"match": ["...", [[496826, "42 İstanbul the"], [100863, "* 42 \t the 42"], [548650, "😀"], [333365, "... µs"], [171600, "... 42 42 the BUILD"]]]}, "want": null}
+{"case": {"match": ["⠋ tests the 42 tests", [[429341, "⠋ tests the 42 tests"], [957065, ""], [106970, "  "], [156475, "... "], [840794, "... İstanbul build BUILD"]]]}, "want": 429341}
+{"case": {"match": ["(1) \t Straße x 42", [[389794, "... 42 x"], [479258, "·"], [832749, "(1) \t Straße x 42"], [220193, "the Ω"], [142583, "  \t the build"]]]}, "want": 832749}
+{"case": {"match": ["  build", [[936316, "✳ \t 　 42"], [813038, "  build"], [473328, "·"]]]}, "want": 813038}
+{"case": {"match": ["* café café ΟΔΟΣ", []]}, "want": null}
+{"case": {"match": ["✳ ", [[417901, "Ω BUILD µs µs"], [561597, "·"], [924655, "a-b Straße BUILD"], [538528, "... build"], [809817, "·build ﬁle café"]]]}, "want": null}
+{"case": {"match": ["⠋ 42 x_y Build the", [[1030320, "·İstanbul"], [171762, "⠋ 42 x_y Build the"], [625136, "😀x_y"], [971771, "(1) Build Ω"], [242979, "(1) \t x_y"]]]}, "want": 171762}
+{"case": {"match": ["  x_y", []]}, "want": null}
+{"case": {"match": ["... İstanbul", [[590233, "✳ x_y Build"], [567421, "... "]]]}, "want": null}
+{"case": {"match": ["build", [[570587, "·\t 42 build"]]]}, "want": null}
+{"case": {"match": ["... \t x ΟΔΟΣ Straße", [[463169, "  Straße café"], [37502, ""], [195442, "... \t x ΟΔΟΣ Straße"]]]}, "want": 195442}
+{"case": {"match": ["✳ tests", [[27026, "... café 　 Ω"], [768381, "... BUILD"], [776059, "✳ tests"], [1035110, "✳ ﬁle tests İstanbul Ω"], [695666, "... 　 tests 　 　"]]]}, "want": null}
+{"case": {"match": ["42 Ω café x", []]}, "want": null}
+{"case": {"match": ["  café 42 42 Fix", [[52177, "  café 42 42 Fix"]]]}, "want": 52177}
+{"case": {"match": ["(1) µs a-b café", []]}, "want": null}
+{"case": {"match": ["... ", []]}, "want": null}
+{"case": {"match": ["(1) \t the a-b", [[832703, "(1) \t the a-b"]]]}, "want": 832703}
+{"case": {"match": ["* x ΟΔΟΣ Straße tests", [[454352, "* x ΟΔΟΣ Straße tests"]]]}, "want": 454352}
+{"case": {"match": ["😀µs", [[103836, "... a-b Fix ﬁle x"]]]}, "want": null}
+{"case": {"match": ["·", []]}, "want": null}
+{"case": {"match": ["·", [[749373, "✳ build"], [884452, "  "], [599420, "(1) tests the"], [1012506, "😀"], [522116, "·the tests build"]]]}, "want": null}
+{"case": {"match": ["　 a-b café Build", [[501494, "·"], [864311, "... "]]]}, "want": null}
+{"case": {"match": ["⠋ a-b ΟΔΟΣ", [[732694, "  　 x a-b"], [778269, "⠋ a-b ΟΔΟΣ"]]]}, "want": 778269}
+{"case": {"match": ["😀ΟΔΟΣ Ω", [[336757, "  Straße İstanbul a-b"], [538281, "... build"]]]}, "want": null}
+{"case": {"match": ["✳ Straße Fix x \t", [[351720, "café x_y tests İstanbul"]]]}, "want": null}
+{"case": {"match": ["  Build", []]}, "want": null}
+{"case": {"match": ["  　 ﬁle", [[701128, "* "], [443763, "✳ ﬁle"], [405959, "... Straße the build"]]]}, "want": 443763}
+{"case": {"match": ["·　", [[390812, "(1) a-b a-b ΟΔΟΣ Ω"], [374718, "(1) 42 ﬁle Straße x_y"], [675361, "(1) İstanbul Fix"], [625010, "✳ ΟΔΟΣ build 　 µs"]]]}, "want": null}
+{"case": {"match": ["😀", [[88410, "😀"], [407001, "⠋ Build a-b"], [412635, "  ﬁle café café 42"], [203517, "... x_y Build x_y Fix"], [722037, "😀ﬁle x_y build"]]]}, "want": null}
+{"case": {"match": ["😀the", []]}, "want": null}
+{"case": {"match": ["(1) Build BUILD", [[935053, "😀"], [548922, "* 42 BUILD"], [957734, "(1) x_y Build"], [517419, "* Build BUILD build"], [1006066, "* Build"]]]}, "want": null}
+{"case": {"match": ["* ", []]}, "want": null}
+{"case": {"match": ["✳", [[772649, "... ΟΔΟΣ x \t 　"], [803210, "✳ İstanbul Ω"], [358638, "✳ "]]]}, "want": null}
+{"case": {"match": ["... Fix build ΟΔΟΣ Fix", [[265750, "\t"], [852392, "  café café 42 İstanbul"], [905796, "✳ tests 42 İstanbul"], [266739, "⠋ BUILD İstanbul Build 42"]]]}, "want": null}
+{"case": {"match": ["·", [[230685, "  Fix Build µs"], [328896, "·"]]]}, "want": null}
+{"case": {"match": ["✳ ", []]}, "want": null}
+{"case": {"match": ["* ", [[1019970, "✳ a-b Fix"], [679222, "⠋ the µs İstanbul"], [262784, "✳ build"]]]}, "want": null}
+{"case": {"match": ["⠋ Build x_y", [[142730, "·x build Build"]]]}, "want": null}
+{"case": {"match": ["⠋ 42 Ω 　", []]}, "want": null}
+{"case": {"match": ["  ", [[829539, ""], [840080, "😀café"], [879451, "😀"], [11950, "·tests Straße the"]]]}, "want": null}
+{"case": {"match": ["* Ω", [[748529, "·BUILD µs"], [337942, "(1) x_y the Build Straße"], [962028, "* Ω"], [50562, "⠋ Build a-b"]]]}, "want": null}
+{"case": {"match": ["⠋ ", [[327580, "⠋ "]]]}, "want": null}
+{"case": {"match": ["* Ω Fix", [[22107, "(1) "], [890034, "* "], [294734, "* Ω Fix"], [602920, "✳ 42 a-b"], [898561, "⠋ ﬁle x_y İstanbul Build"]]]}, "want": 294734}
+{"case": {"match": ["　 buil", [[337218, "(1) \t 42 build tests"], [181195, "* "], [112643, "　 build"]]]}, "want": 112643}
+{"case": {"match": ["  µs build x_y tests", []]}, "want": null}
+{"case": {"match": ["⠋ İstanb", [[392686, "⠋ 42 x_y"], [123980, "... \t x_y"], [844709, "⠋ İstanbul tests İstanbul a-b"], [971942, "✳ Fix 　"]]]}, "want": 844709}
+{"case": {"match": ["⠋ 42 a-b", [[357929, "⠋ 42 a-b"]]]}, "want": 357929}
+{"case": {"match": ["·\t", [[657067, "✳ µs"], [951951, ""], [181866, "⠋ 42 tests"], [589662, "✳ İstanbul \t Ω"], [75345, "  Straße ΟΔΟΣ"]]]}, "want": null}
+{"case": {"match": ["·x_y Ω Ω İ", [[611259, "·x_y Ω Ω İstanbul"], [418888, "(1) 　"], [118848, "\t 　 x"], [713609, "✳ 42"], [650343, "·Straße"]]]}, "want": null}
+{"case": {"match": ["·", [[143591, "·"], [508744, ""], [206820, "* Straße a-b"]]]}, "want": null}
+{"case": {"match": ["* café 42 µs", [[893899, "  Build"], [537601, "⠋ tests x"], [942544, "... "], [84824, "... Fix café the"]]]}, "want": null}
+{"case": {"match": ["(1) ", [[174419, "... 42 x_y BUILD"], [927364, "  a-b 　"]]]}, "want": null}
+{"case": {"match": ["✳ Straße ﬁle the İstanbul", []]}, "want": null}
+{"case": {"match": ["·Fix µs 42 x_y", [[966609, "Straße Straße x_y"], [559417, "😀build tests"]]]}, "want": null}
+{"case": {"match": ["✳ 42 \t", [[843593, "✳ 　"], [38934, "... 　 ΟΔΟΣ tests"], [347453, "✳ 42 \t"], [228178, "the Straße"]]]}, "want": 347453}
+{"case": {"match": ["⠋ 42", [[368213, "⠋ 42"]]]}, "want": 368213}
+{"case": {"match": ["(1) x_y \t", [[93102, "  café"]]]}, "want": null}
+{"case": {"match": ["⠋ x_y café", []]}, "want": null}
+{"case": {"match": ["  İstanbul", [[280689, "·café BUILD BUILD Ω"], [517065, "* ΟΔΟΣ build µs"], [838622, "... the"], [526477, "😀build Straße"]]]}, "want": null}
+{"case": {"match": ["... Fix a-b Ω \t", [[349607, "... Fix a-b Ω \t"]]]}, "want": 349607}
+{"case": {"match": ["😀Straße İstanbul B", [[927497, "😀Straße İstanbul Build ΟΔΟΣ"]]]}, "want": 927497}
+{"case": {"match": ["* ", [[37591, "·Fix"], [545383, "* "], [330244, ""]]]}, "want": null}
+{"case": {"match": ["·İstanbul ΟΔΟΣ", [[614585, "✳ "], [211764, "⠋ \t µs 　 BUILD"]]]}, "want": null}

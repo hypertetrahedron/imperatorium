@@ -1,0 +1,62 @@
+{
+ "aaaaaaaa-1111-4111-8111-111111111111.json": {
+  "pid": "<pid>",
+  "sessionId": "aaaaaaaa-1111-4111-8111-111111111111",
+  "cwd": "<tmp>\\work",
+  "name": "twin-idle",
+  "kind": "interactive",
+  "status": "idle",
+  "messagingSocketPath": "\\\\.\\pipe\\imp-twin-<tag>-idle",
+  "startedAt": "<now ms>"
+ },
+ "bbbbbbbb-2222-4222-8222-222222222222.json": {
+  "pid": "<pid>",
+  "sessionId": "bbbbbbbb-2222-4222-8222-222222222222",
+  "cwd": "<tmp>\\work",
+  "name": "twin-busy",
+  "kind": "interactive",
+  "status": "busy",
+  "messagingSocketPath": "\\\\.\\pipe\\imp-twin-<tag>-busy",
+  "startedAt": "<now ms>"
+ },
+ "cccccccc-3333-4333-8333-333333333333.json": {
+  "pid": "<pid>",
+  "sessionId": "cccccccc-3333-4333-8333-333333333333",
+  "cwd": "<tmp>\\work",
+  "name": "twin-gone",
+  "kind": "interactive",
+  "status": "idle",
+  "messagingSocketPath": "\\\\.\\pipe\\imp-twin-<tag>-nobody",
+  "startedAt": "<now ms>"
+ },
+ "dddddddd-4444-4444-8444-444444444444.json": {
+  "pid": "<pid>",
+  "sessionId": "dddddddd-4444-4444-8444-444444444444",
+  "cwd": "<tmp>\\work",
+  "name": "twin-waits",
+  "kind": "interactive",
+  "status": "idle",
+  "messagingSocketPath": "\\\\.\\pipe\\imp-twin-<tag>-waits",
+  "startedAt": "<now ms>"
+ },
+ "eeeeeeee-5555-4555-8555-555555555555.json": {
+  "pid": "<pid>",
+  "sessionId": "eeeeeeee-5555-4555-8555-555555555555",
+  "cwd": "<tmp>\\work",
+  "name": "twin-late",
+  "kind": "interactive",
+  "status": "idle",
+  "messagingSocketPath": "\\\\.\\pipe\\imp-twin-<tag>-late",
+  "startedAt": "<now ms>"
+ },
+ "ffffffff-6666-4666-8666-666666666666.json": {
+  "pid": "<pid>",
+  "sessionId": "ffffffff-6666-4666-8666-666666666666",
+  "cwd": "<tmp>\\work",
+  "name": "twin-bg",
+  "kind": "background",
+  "status": "busy",
+  "messagingSocketPath": "\\\\.\\pipe\\imp-twin-<tag>-nobody",
+  "startedAt": "<now ms>"
+ }
+}
