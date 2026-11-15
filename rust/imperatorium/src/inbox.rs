@@ -169,12 +169,13 @@ mod core_tests {
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("start powershell");
         let path = format!(r"\\.\pipe\{name}");
         // Until the pipe exists, opening it fails and nothing is consumed.
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        // A cold PowerShell on a fresh CI runner can take most of a minute.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(90);
         let mut last = String::new();
         let mut sent = false;
         while std::time::Instant::now() < end {
@@ -185,7 +186,18 @@ mod core_tests {
                 }
                 Err(e) => last = e,
             }
+            // A server that has already gone will never open the pipe: say why.
+            if let Ok(Some(status)) = server.try_wait() {
+                let mut err = String::new();
+                if let Some(mut e) = server.stderr.take() {
+                    let _ = std::io::Read::read_to_string(&mut e, &mut err);
+                }
+                panic!("the pipe server exited ({status}) before a client connected: {err}");
+            }
             std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if !sent {
+            let _ = server.kill();
         }
         assert!(sent, "never delivered: {last}");
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
