@@ -67,9 +67,21 @@ jobs:
     needs: validate
     uses: ./.github/workflows/check.yml
 
+  # Builds, then Authenticode-signs both exes with Azure Artifact Signing
+  # (docs/releasing.md, "Code signing"). Azure trusts this job through OIDC
+  # - a federated credential for the `release` environment, no secret - so
+  # only a run in that environment (v* tags) can sign. A stable tag is never
+  # published unsigned; a preview is signed when signing is set up (the
+  # AZURE_CLIENT_ID repository variable), and says so when it is not.
   windows:
     needs: [validate, check]
     runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write       # azure/login (OIDC)
+    env:
+      SIGNER: "CN=Lester Wilhelm, O=Lester Wilhelm, L=Sandy Springs, S=ga, C=US"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust ${{ env.RUST_TOOLCHAIN }}
@@ -99,6 +111,65 @@ jobs:
         run: |
           mkdir -p win
           cp rust/target/release/imperatorium.exe /c/vk/release/imperatorium-voice.exe win/
+      - name: Is code signing set up?
+        id: signing
+        shell: bash
+        env:
+          CLIENT: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          if [ -n "$CLIENT" ]; then echo "sign=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "sign=false" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_NAME" != *-* ]]; then
+            echo "::error::a stable release is never published unsigned: set the AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID repository variables (docs/releasing.md, Code signing)"
+            exit 1
+          fi
+          echo "::warning::code signing is not set up (no AZURE_CLIENT_ID variable): this preview's Windows binaries are unsigned"
+      - name: Azure login (OIDC, no secret)
+        if: steps.signing.outputs.sign == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign imperatorium.exe and imperatorium-voice.exe (Azure Artifact Signing)
+        if: steps.signing.outputs.sign == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: Imperatorium
+          certificate-profile-name: ImperatoriumPublic
+          files: |
+            ${{ github.workspace }}\win\imperatorium.exe
+            ${{ github.workspace }}\win\imperatorium-voice.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Imperatorium
+          description-url: https://github.com/${{ github.repository }}
+          # Only the Azure CLI's sign-in, the one azure/login just made.
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Check the signatures
+        if: steps.signing.outputs.sign == 'true'
+        shell: pwsh
+        run: |
+          # Valid, timestamped, and ours - not merely signed by someone.
+          $bad = @()
+          foreach ($f in 'win\imperatorium.exe', 'win\imperatorium-voice.exe') {
+            $sig = Get-AuthenticodeSignature -LiteralPath $f
+            $who = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '(none)' }
+            Write-Host "${f}: $($sig.Status), signer $who, timestamped $([bool]$sig.TimeStamperCertificate)"
+            if ($sig.Status -ne 'Valid' -or $who -ne $env:SIGNER -or -not $sig.TimeStamperCertificate) { $bad += $f }
+          }
+          if ($bad) { throw "not validly signed by $($env:SIGNER): $($bad -join ', ')" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows
@@ -258,6 +329,9 @@ jobs:
           path: dist
       - name: Install script, dry run, and signed update check
         shell: pwsh
+        env:
+          SIGNING: ${{ vars.AZURE_CLIENT_ID }}
+          SIGNER: "CN=Lester Wilhelm, O=Lester Wilhelm, L=Sandy Springs, S=ga, C=US"
         run: |
           $ErrorActionPreference = 'Stop'
           $port = 18765
@@ -281,6 +355,13 @@ jobs:
             $got = (& $exe version) -join "`n"
             Write-Host "imperatorium version: $got"
             if ($got -notlike "*$want*") { throw "expected version $want, got: $got" }
+            # What the installer downloaded is the signed file, not a copy
+            # from before signing.
+            if ($env:SIGNING) {
+              $sig = Get-AuthenticodeSignature -LiteralPath $exe
+              Write-Host "installed exe: $($sig.Status), signer $($sig.SignerCertificate.Subject)"
+              if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -ne $env:SIGNER) { throw 'the installed exe is not validly signed' }
+            }
             & $exe update --check --from $base
             if ($LASTEXITCODE) { throw "update --check exited $LASTEXITCODE" }
           } finally {
