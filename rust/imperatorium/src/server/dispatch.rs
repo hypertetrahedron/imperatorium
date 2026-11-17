@@ -77,6 +77,7 @@ impl Shared {
         session_id: Option<&str>,
         cwd: Option<String>,
         close: bool,
+        permission_mode: Option<&str>,
     ) -> Value {
         let row = session_id.and_then(|s| self.row(s));
         if let Some(r) = row.as_ref().filter(|r| truthy(r.get("remote"))) {
@@ -97,7 +98,7 @@ impl Shared {
             return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
         }
         let sid = uuid4();
-        let mut got = match crate::launch::new_session(cwd.as_deref(), &sid) {
+        let mut got = match crate::launch::new_session(cwd.as_deref(), &sid, permission_mode) {
             Ok(g) => g,
             Err(e) => return json!({"ok": false, "error": e}),
         };
@@ -1023,6 +1024,63 @@ impl Shared {
         store.add_event_json(e);
         self.invalidate();
         json!({"ok": true, "action": "typed", "cleaned": changed, "session": sid, "session_name": name})
+    }
+
+    /// Stop: end the session's running turn, as Esc at its terminal does.
+    /// Through its mod when it has one that can (a clean `$.turn.abort`);
+    /// otherwise Esc is pressed in its console, never twice within a few
+    /// seconds (Esc Esc there opens the rewind menu). Only while it works:
+    /// at an idle prompt Esc has nothing to stop. Local sessions only.
+    pub(super) fn stop_turn(&self, store: &crate::store::Store, session_id: Option<&Value>) -> Value {
+        let id = session_id.filter(|v| truthy(Some(v))).map(crate::pyish::py_str);
+        let Some(row) = id.and_then(|i| self.row(&i)) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        if truthy(row.get("remote")) {
+            return json!({"ok": false, "error": format!("stopping a session on {} is not supported yet",
+                crate::pyish::py_str(row.get("host").unwrap_or(&Value::Null)))});
+        }
+        let sid = row.get("sessionId").and_then(Value::as_str).unwrap_or("").to_string();
+        let now = Self::now();
+        let link = self.modlink.as_ref();
+        let state = link.and_then(|l| l.state(&sid, now));
+        let working = matches!(row.get("status").and_then(Value::as_str), Some("busy") | Some("shell"))
+            || row.get("state").and_then(Value::as_str) == Some("working")
+            || state.as_ref().is_some_and(|s| truthy(s.get("busy")));
+        if !working {
+            return json!({"ok": false, "error": "it is not working on anything"});
+        }
+        let event = |via: &str| json!({"kind": "stop", "session_id": sid,
+            "cwd": row.get("cwd").cloned().unwrap_or(Value::Null), "summary": format!("asked to stop (via {via})")});
+        if let (Some(l), Some(s)) = (link, state.as_ref()) {
+            if crate::modlink::can_stop(s.get("mod_version")) {
+                let stop = l.request_stop(&sid, now);
+                store.add_event_json(event("mod"));
+                return json!({"ok": true, "via": "mod", "stop_id": stop});
+            }
+        }
+        let Some(pid) = row.get("pid").and_then(Value::as_u64) else {
+            return json!({"ok": false, "error": "it has no terminal here to press Esc in"});
+        };
+        if row.get("hc").and_then(|h| h.get("address")).is_some_and(|a| truthy(Some(a))) {
+            return json!({"ok": false, "error": "stopping a herdr-core session is not supported yet"});
+        }
+        match crate::closing::press_escape(pid as u32) {
+            Ok(()) => {
+                store.add_event_json(event("console"));
+                self.invalidate();
+                json!({"ok": true, "via": "console"})
+            }
+            Err(e) => json!({"ok": false, "error": e}),
+        }
+    }
+
+    /// What came of the session's last stop through its mod, once it says.
+    pub(super) fn stop_result(&self, session_id: &str) -> Value {
+        match self.modlink.as_ref().and_then(|l| l.stop_result(session_id)) {
+            Some(r) => json!({"ok": true, "result": r}),
+            None => json!({"ok": true, "result": null}),
+        }
     }
 
     /// Control.dismiss_session: take a session with no process off the list.

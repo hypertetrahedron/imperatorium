@@ -24,6 +24,23 @@ pub const LIVE_FOR: f64 = 8.0;
 /// A prompt handed out and never accepted is offered again after this.
 pub const CLAIM_FOR: f64 = 30.0;
 pub const SETTLED_KEEP: usize = 20;
+/// A stop the mod has not taken by then is dropped: handed out later it
+/// would end a turn the person never meant to stop.
+pub const STOP_FOR: f64 = 10.0;
+/// A stop handed out and not answered is handed out again after this.
+pub const STOP_CLAIM_FOR: f64 = 3.0;
+/// The first mod that ends a turn when its beat's reply says `stop`.
+pub const STOP_SINCE: (u64, u64, u64) = (0, 3, 0);
+
+/// Pure: whether a mod of `version` ("0.3.0") can stop a turn.
+pub fn can_stop(version: Option<&Value>) -> bool {
+    let v = version.and_then(Value::as_str).unwrap_or("");
+    let mut parts = v.split(['.', '-']).map(|p| p.parse::<u64>().ok());
+    match (parts.next().flatten(), parts.next().flatten(), parts.next().flatten()) {
+        (Some(a), Some(b), c) => (a, b, c.unwrap_or(0)) >= STOP_SINCE,
+        _ => false,
+    }
+}
 
 type Obj = Map<String, Value>;
 
@@ -255,6 +272,10 @@ struct Inner {
     mods: HashMap<String, Obj>,
     outbox: IndexMap<String, Vec<Obj>>,
     settled: HashMap<String, Vec<Obj>>,
+    /// The stop asked for each session: (id, asked at, handed out at).
+    stops: HashMap<String, (String, f64, Option<f64>)>,
+    /// What came of each session's last stop: {id, outcome, reason, at}.
+    stopped: HashMap<String, Obj>,
 }
 
 pub struct ModLink {
@@ -316,6 +337,15 @@ impl ModLink {
         for ack in acks.into_iter().flatten() {
             settle(&mut inner, &sid, ack, now);
         }
+        for s in beat.get("stopped").and_then(Value::as_array).into_iter().flatten() {
+            let Some(id) = s.get("id").and_then(Value::as_str) else { continue };
+            if inner.stops.get(&sid).is_some_and(|(want, _, _)| want == id) {
+                inner.stops.remove(&sid);
+            }
+            let mut got = s.as_object().cloned().unwrap_or_default();
+            got.insert("at".into(), json!(now));
+            inner.stopped.insert(sid.clone(), got);
+        }
         let mut give = vec![];
         for item in inner.outbox.get_mut(&sid).into_iter().flatten() {
             if truthy(item.get("accepted_at")) {
@@ -334,6 +364,37 @@ impl ModLink {
             give.push(json!({"id": item["id"], "text": item["text"], "as_user": truthy(item.get("as_user"))}));
         }
         give
+    }
+
+    /// Ask the session's mod to end its running turn; the stop's id. A
+    /// newer ask replaces one not yet answered.
+    pub fn request_stop(&self, sid: &str, now: f64) -> String {
+        let mut raw = [0u8; 6];
+        getrandom::getrandom(&mut raw).expect("random bytes");
+        let id: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        self.inner.lk().stops.insert(sid.to_string(), (id.clone(), now, None));
+        id
+    }
+
+    /// The stop to hand the session's mod with this beat's reply, if one is
+    /// waiting and fresh; again when the last hand-out went unanswered.
+    pub fn take_stop(&self, sid: &str, now: f64) -> Option<String> {
+        let mut inner = self.inner.lk();
+        let (id, at, claimed) = inner.stops.get(sid).cloned()?;
+        if now - at > STOP_FOR {
+            inner.stops.remove(sid);
+            return None;
+        }
+        if claimed.is_some_and(|c| now - c < STOP_CLAIM_FOR) {
+            return None;
+        }
+        inner.stops.insert(sid.to_string(), (id.clone(), at, Some(now)));
+        Some(id)
+    }
+
+    /// What the mod said came of the session's last stop.
+    pub fn stop_result(&self, sid: &str) -> Option<Obj> {
+        self.inner.lk().stopped.get(sid).cloned()
     }
 
     pub fn forget(&self, sid: &str) {
@@ -531,6 +592,32 @@ mod python_tests {
         beat(json!([{"id": pid, "outcome": "submitted"}]), 1400.0);
         assert!(link.pending("s").is_empty());
         assert_eq!(link.settled("s")[0]["outcome"], "submitted");
+    }
+
+    #[test]
+    fn a_stop_is_handed_out_until_answered_and_never_late() {
+        let link = ModLink::new("t".into());
+        let id = link.request_stop("s", 100.0);
+        assert_eq!(link.take_stop("s", 100.5).as_deref(), Some(id.as_str()));
+        // Handed out: not again at once, again if unanswered.
+        assert_eq!(link.take_stop("s", 101.0), None);
+        assert_eq!(link.take_stop("s", 104.0).as_deref(), Some(id.as_str()));
+        link.beat(&obj(json!({"session_id": "s", "stopped": [{"id": id, "outcome": "aborted"}]})), 105.0);
+        assert_eq!(link.take_stop("s", 110.0), None);
+        assert_eq!(link.stop_result("s").unwrap()["outcome"], "aborted");
+        // Never taken in time: dropped, not handed out late.
+        link.request_stop("s", 200.0);
+        assert_eq!(link.take_stop("s", 211.0), None);
+        assert_eq!(link.take_stop("s", 212.0), None);
+    }
+
+    #[test]
+    fn only_a_new_enough_mod_can_stop() {
+        assert!(can_stop(Some(&json!("0.3.0"))));
+        assert!(can_stop(Some(&json!("1.0"))));
+        assert!(!can_stop(Some(&json!("0.2.0"))));
+        assert!(!can_stop(Some(&json!("x"))));
+        assert!(!can_stop(None));
     }
 
     #[test]

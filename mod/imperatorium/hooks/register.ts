@@ -9,6 +9,10 @@
 // `as_user` and is submitted as their own words; anything else is submitted
 // framed under this mod's name.
 //
+// A reply can also ask it to stop the running turn (the window's Stop, or
+// Esc there): it cancels the main loop's turn with `$.turn.abort`, as Esc at
+// the terminal does, and says on its next beat what came of it.
+//
 // It also answers `tool.check` from the dispatcher's permission policy
 // (POST /api/mod/check), for the calls the session's rules and mode would put
 // to the person. Anything unsure, slow or broken leaves the session's own
@@ -20,7 +24,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 type Engine = EngineInterface
 
-const MOD_VERSION = '0.2.0'
+const MOD_VERSION = '0.3.0'
 const BEAT_MS = 2000
 // How long a permission check waits for the dispatcher before leaving the
 // decision to the session: a tool call should never wait on it for long.
@@ -31,7 +35,9 @@ const PERSON_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
 type Offered = { id: string; text: string; as_user: boolean }
 type Ack = { id: string; outcome: 'accepted' | 'submitted' | 'dropped'; reason?: string }
-type BeatReply = { ok?: boolean; deliver?: Offered[]; status?: string | null }
+type BeatReply = { ok?: boolean; deliver?: Offered[]; status?: string | null; stop?: string | null }
+// What came of a stop the dispatcher asked for, by its id.
+type Stopped = { id: string; outcome: 'aborted' | 'idle' | 'failed'; reason?: string }
 type CheckReply = { verdict?: string; reason?: string }
 
 // The module's state. A reload starts it over: the dispatcher re-offers a
@@ -42,6 +48,10 @@ let sessionId = ''
 let cwd = ''
 let busy = false
 let turnStarted: number | null = null
+// The main loop's running turn, the id `$.turn.abort` takes.
+let turnId: string | null = null
+let stopped: Stopped[] = []
+const stopsSeen = new Set<string>()
 let interactive = false
 let surfaces: readonly string[] = []
 let version = ''
@@ -144,6 +154,8 @@ async function beatOnce($: Engine) {
   {
     const sending = acks
     acks = []
+    const reporting = stopped
+    stopped = []
     const body: Record<string, unknown> = {
       session_id: sessionId,
       cwd,
@@ -155,6 +167,7 @@ async function beatOnce($: Engine) {
       mod_version: MOD_VERSION,
       acks: sending,
     }
+    if (reporting.length) body.stopped = reporting
     if (usageDirty && usage) {
       body.usage = usage
       usageDirty = false
@@ -163,6 +176,7 @@ async function beatOnce($: Engine) {
     if (!reply || !reply.ok) {
       // Not delivered: keep the acks and the usage for the next beat.
       acks = sending.concat(acks)
+      stopped = reporting.concat(stopped)
       if (body.usage) usageDirty = true
       failures += 1
       if (failures >= 3) show($, undefined)
@@ -170,8 +184,25 @@ async function beatOnce($: Engine) {
     }
     failures = 0
     show($, reply.status ? 'Imperatorium · ' + reply.status : undefined)
+    if (reply.stop) stop($, reply.stop)
     for (const offered of reply.deliver || []) deliver($, offered)
   }
+}
+
+// Ends the main loop's running turn, once per request: its tools stop, as
+// with Esc at the terminal. Nothing running is said, not an error.
+function stop($: Engine, id: string) {
+  if (stopsSeen.has(id)) return
+  stopsSeen.add(id)
+  if (!busy || !turnId) {
+    stopped.push({ id, outcome: 'idle' })
+    void beat($)
+    return
+  }
+  $.turn.abort({ turnId }).then(
+    () => { stopped.push({ id, outcome: 'aborted' }); void beat($) },
+    (error: unknown) => { stopped.push({ id, outcome: 'failed', reason: String(error) }); void beat($) },
+  )
 }
 
 function deliver($: Engine, offered: Offered) {
@@ -253,6 +284,7 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       busy = true
+      turnId = e.turnId
       turnStarted = await $.clock.now()
       void beat($)
     }
@@ -263,6 +295,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (e.agentId === undefined) {
       busy = false
+      turnId = null
       turnStarted = null
       await measure($)
       void beat($)

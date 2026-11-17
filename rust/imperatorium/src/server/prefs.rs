@@ -204,12 +204,12 @@ pub(super) fn get<'a>(config: &'a Value, key: &str) -> Option<&'a Value> {
 }
 
 const HIGHLIGHTS: &[&str] = &[
-    "code", "diffs", "prose", "tools", "signals", "mute", "guides", "shape",
+    "code", "diffs", "prose", "tools", "signals", "mute", "guides", "shape", "prompts",
 ];
 
 const COLORS: &[&str] = &[
     "keyword", "string", "comment", "number", "function", "variable", "added", "removed", "path",
-    "command", "ref", "quantity", "tool", "error", "success", "warning", "question", "guide",
+    "command", "ref", "quantity", "tool", "error", "success", "warning", "question", "guide", "prompt",
 ];
 
 /// settings.look: what the pages draw with.

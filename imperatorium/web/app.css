@@ -32,6 +32,8 @@
   --line:#ccd1d9; --warn:#9f4500; --warnbg:#fbeee3; --ok:#00736f; --busy:#2863ab;
   --sel:#dde9f9; --code:#e8ebef; --fail:#af2843; --done:#8a929d; --onaccent:#fff;
   --comp:#7a3fb0; --compbg:#f2eafa;
+  /* The tile's MCP Line: no state uses it, so it never reads as a task. */
+  --mcp:#93206e;
   /* The model mix, after claude-lens: an ironbow ramp in cost order, darkest
      cheapest. --iron-other is a model with no known price, off the ramp. */
   --iron-1:#33206b; --iron-2:#93206e; --iron-3:#cc3a17; --iron-4:#b87b00; --iron-other:#8a8880;
@@ -41,20 +43,20 @@
   --hl-function:#2863ab; --hl-variable:#93206e; --hl-added:#00736f; --hl-removed:#af2843;
   --hl-path:#2863ab; --hl-command:#7a3fb0; --hl-ref:#7a5a00; --hl-quantity:#8a4f00;
   --hl-tool:#2863ab; --hl-error:#af2843; --hl-success:#00736f; --hl-warning:#9f4500;
-  --hl-question:#2863ab; --hl-guide:#c4cad3;
+  --hl-question:#2863ab; --hl-guide:#c4cad3; --hl-prompt:#9a6700;
 }
 @media (prefers-color-scheme: dark){
   :root{ --bg:#0f1318; --panel:#1a1e25; --side:#14191e; --ink:#e4e8ed;
          --muted:#a5abb4; --line:#30363e; --warn:#f7ab5d; --warnbg:#2e2112;
          --ok:#6fcabf; --busy:#79b6f4; --sel:#202f42; --code:#0a0e12;
          --fail:#f2808b; --done:#6c737d; --onaccent:#0f1318;
-         --comp:#c79bff; --compbg:#251b33;
+         --comp:#c79bff; --compbg:#251b33; --mcp:#f08cc8;
          --iron-1:#7551e0; --iron-2:#a52a86; --iron-3:#ef6a1a; --iron-4:#ffcf4d; --iron-other:#6f6d66;
          --hl-keyword:#c79bff; --hl-string:#6fcabf; --hl-comment:#8b929c; --hl-number:#f7ab5d;
          --hl-function:#79b6f4; --hl-variable:#f08cc8; --hl-added:#6fcabf; --hl-removed:#f2808b;
          --hl-path:#79b6f4; --hl-command:#c79bff; --hl-ref:#e3c46a; --hl-quantity:#e3c46a;
          --hl-tool:#79b6f4; --hl-error:#f2808b; --hl-success:#6fcabf; --hl-warning:#f7ab5d;
-         --hl-question:#79b6f4; --hl-guide:#353c45}
+         --hl-question:#79b6f4; --hl-guide:#353c45; --hl-prompt:#e8b84f}
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -73,7 +75,40 @@ button,input,select,textarea{font-family:inherit;font-variant-numeric:inherit}
 button.tiny{background:transparent;border:1px solid var(--line);color:var(--muted);
   border-radius:4px;padding:1px 6px;font-size:12px;font-family:inherit;text-transform:none;
   letter-spacing:0}
-#picker{padding:0 10px 8px;border-bottom:1px solid var(--line)}
+/* The sidebar's ☰ menu: New session, History, Insights. */
+#sidemenu>summary{padding:1px 5px;display:flex;align-items:center;text-transform:none;letter-spacing:0}
+#sidemenu>summary::after{content:none}
+#sidemenu>summary svg{stroke:currentColor;fill:none;stroke-width:1.6}
+#sidemenu .pop{min-width:170px}
+#sidemenu .pop>button.on{box-shadow:inset 2px 0 0 var(--busy);background:var(--sel)}
+/* History and Insights: pop-ups over the window, like the New Session
+   dialog, so the chat behind them is one Esc away. */
+.popup{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;justify-content:center;
+  align-items:flex-start;padding-top:6vh;z-index:25}
+.popup[hidden]{display:none}
+.popup .box{width:min(980px,94vw);max-height:86vh;background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.3);overflow:hidden;display:flex;flex-direction:column}
+.popup .pophd{display:flex;align-items:baseline;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);
+  background:var(--panel)}
+.popup .pophd span{font-weight:600}
+.popup .pophd small{flex:1;min-width:0;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.popup .panel{flex:1;min-height:0;overflow-y:auto}
+/* The New Session dialog. */
+#newbox{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;justify-content:center;
+  align-items:flex-start;padding-top:10vh;z-index:25}
+#newbox[hidden]{display:none}
+#newbox .box{width:min(560px,92vw);background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.3);overflow:hidden;display:flex;flex-direction:column}
+#newbox .nbh{font-weight:600;padding:10px 12px 6px}
+#newbox #find{margin:0 12px;width:auto}
+#newbox #projects{max-height:42vh;margin:6px 6px 0;padding:0 6px}
+#newbox .p .badge{font-size:12px;margin-left:4px}
+#newbox .nbopts{display:flex;align-items:center;gap:8px;padding:10px 12px 0;font-size:13px;border-top:1px solid var(--line);margin-top:6px}
+#newbox .nbopts select{flex:1;min-width:0;font-size:13px;padding:3px 5px}
+#newbox .nbnote{font-size:12px;color:var(--warn);padding:4px 12px 0;min-height:1em}
+#newbox .nbnote:empty{display:none}
+#newbox .nbbar{display:flex;gap:6px;padding:10px 12px}
+#newbox .keys{padding:6px 12px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)}
 #find{width:100%;background:var(--panel);color:var(--ink);border:1px solid var(--line);
   border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit}
 #find:focus{outline:none;border-color:var(--busy)}
@@ -105,11 +140,20 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .kids .s.attn,.kids .s.fail,.kids .s.comp{padding-left:8px}
 .s .m{display:flex;align-items:center;gap:6px}
 .s .m .det{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
-.s .m .acts{display:flex;flex:none;gap:3px}
+.s .t1 .acts{display:flex;flex:none;gap:3px;margin-left:6px;align-self:flex-start}
 /* Only the selected tile is open: a click opens it (no longer the pointer
    passing over), and its pin, close and task list are there. */
 .s:not(.on) :is(.m,.stl,.x,.tk){display:none}
 .s.on .why{display:none}
+/* The MCP Line: the open tile's MCP servers, part of its summary (aligned
+   with the Meta Line, no row padding) and coloured apart from the tasks. */
+.s .mcpl{display:flex;align-items:baseline;gap:6px;font-size:12px;margin-top:2px;min-width:0;cursor:pointer}
+.s .mcpl:empty{display:none}
+.s .mcpl .mk{flex:none;font:600 12px var(--mono);letter-spacing:.04em;color:var(--mcp);
+  border:1px solid var(--mcp);border-radius:3px;padding:0 4px;line-height:15px}
+.s .mcpl .ml{flex:1;min-width:0;color:var(--mcp);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s .mcpl:hover .ml{text-decoration:underline}
+.s:not(.on) .mcpl{display:none}
 /* What the session has going, folded at the foot of the open tile. */
 .s .tk{margin-top:5px;border-top:1px solid var(--line);padding-top:3px}
 .s .tkh{display:flex;align-items:center;gap:6px;width:100%;background:transparent;border:0;
@@ -191,9 +235,9 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
    one waiting on tasks it started, a running task in the open tile's list
    and its fresh-output mark (the matrix's step line has its own .spin).
    A scheduled wakeup is not running yet, so its row stays still. */
-.dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:pulse 1.2s ease-in-out infinite}
+.dot.d-busy,.dot.d-idle,.s .tki .live{animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.25}}
-@media (prefers-reduced-motion: reduce){.dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:none}}
+@media (prefers-reduced-motion: reduce){.dot.d-busy,.dot.d-idle,.s .tki .live{animation:none}}
 .s.fail{border-left:3px solid var(--fail);padding-left:10px}
 
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -201,6 +245,11 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 #title{font-weight:600}
 #title,#sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #sub{color:var(--muted);font-size:12px}
+/* The branch and worktree lead the subtitle, so where work goes is plain. */
+#sub .hbr{color:var(--ink);font:600 12px var(--mono);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+#sub .hwt{color:var(--ok);font-weight:600}
+#sub .hwt.main{color:var(--muted);font-weight:400}
+#sub .hwt svg{width:10px;height:12px;vertical-align:-1px}
 #sessionpane{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
 #log{flex:1;overflow-y:auto;padding:14px 16px;position:relative}
 /* Show Most Recent and the cold-cache button: a zero-height strip stuck to
@@ -247,11 +296,24 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 details.cmp{margin:3px 0}
 details.cmp>summary{cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;color:var(--muted);font-size:12.5px}
-details.cmp>summary::before{content:"▸ ";font-size:10px}
-details.cmp[open]>summary::before{content:"▾ "}
+details.cmp>summary::before,details.tgroup>summary::before{content:"▸ ";font-size:10px}
+details.cmp[open]>summary::before,details.tgroup[open]>summary::before{content:"▾ "}
 details.cmp[open]>summary .ln{display:none}
 details.cmp>summary .k{font:12px var(--mono);color:var(--busy);margin-right:5px}
 details.cmp>summary .k.err{color:var(--warn)}
+/* View > Group tool calls: a run of calls and results as one line that opens. */
+details.tgroup{margin:4px 0}
+details.tgroup>summary{cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;color:var(--muted);font-size:12.5px}
+details.tgroup>summary::-webkit-details-marker{display:none}
+details.tgroup>summary .k{font:12px var(--mono);color:var(--busy);margin-right:6px}
+details.tgroup>summary .gf{color:var(--warn);margin-left:8px}
+details.tgroup>.gb{border-left:2px solid var(--line);padding:2px 0 2px 10px;margin:3px 0 6px 3px}
+/* A prompt just sent, until the conversation has it. */
+.turn.pend .pnote{margin-left:8px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)}
+.turn.pend.failed .pnote{color:var(--fail)}
+.turn.pend .who button{margin-left:6px;padding:0 5px;font-size:12px;line-height:1.3}
+.turn.pend:not(.failed)>:not(.who){opacity:.8}
 .turn.flash{outline:2px solid var(--busy);outline-offset:4px;border-radius:2px}
 .turn.cur-find{outline:2px solid var(--warn);outline-offset:4px;border-radius:2px}
 #current{border-bottom:1px solid var(--line);background:var(--panel);padding:8px 16px;
@@ -327,6 +389,23 @@ blockquote{border-left:3px solid var(--line);margin:6px 0;padding:0 0 0 10px;
 .askq li.on::marker{content:"\2713  "}
 .askq .qans{margin:2px 0 4px;font-size:13px}
 .askq .qwait{font-size:12.5px;color:var(--warn);margin-top:4px}
+/* Several questions: one page at a time, picked by its tab (AskUserQuestion
+   carries at most four). */
+.askq input.ar{position:absolute;opacity:0;pointer-events:none}
+.askq .asktabs{display:flex;gap:4px;flex-wrap:wrap;margin:4px 0 2px}
+.askq .asktabs label{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:9px;
+  padding:0 7px;cursor:pointer;user-select:none}
+.askq .asktabs label:hover{color:var(--ink)}
+.askq.many .askp{display:none}
+.askq input.ar:nth-of-type(1):checked~.askp:nth-of-type(1),
+.askq input.ar:nth-of-type(2):checked~.askp:nth-of-type(2),
+.askq input.ar:nth-of-type(3):checked~.askp:nth-of-type(3),
+.askq input.ar:nth-of-type(4):checked~.askp:nth-of-type(4){display:block}
+.askq input.ar:nth-of-type(1):checked~.asktabs label:nth-of-type(1),
+.askq input.ar:nth-of-type(2):checked~.asktabs label:nth-of-type(2),
+.askq input.ar:nth-of-type(3):checked~.asktabs label:nth-of-type(3),
+.askq input.ar:nth-of-type(4):checked~.asktabs label:nth-of-type(4){color:var(--ink);border-color:var(--busy);font-weight:600}
+.askq input.ar:focus-visible~.asktabs{outline:1px dotted var(--busy);outline-offset:2px}
 .think{color:var(--muted);font-style:italic;white-space:pre-wrap;margin:5px 0}
 /* Highlighting. Every mark is in the page; html.hl-<name> (Settings >
    Highlighting) shows it. Colours are the --hl-* above. */
@@ -342,7 +421,7 @@ html.hl-diffs .dl-h{color:var(--hl-path)}
 html.hl-diffs .dl-f{font-weight:600}
 pre.code.tdiff{max-height:260px;overflow:auto;margin:2px 0 7px}
 html:not(.hl-diffs) pre.tdiff{display:none}
-html.hl-prose .pth:not(.tp){color:var(--hl-path);cursor:copy;text-decoration:underline dotted 1px;text-underline-offset:3px}
+html.hl-prose .pth:not(.tp){color:var(--hl-path);cursor:pointer;text-decoration:underline dotted 1px;text-underline-offset:3px}
 html.hl-prose code.cmd{color:var(--hl-command)}
 html.hl-prose .ref{color:var(--hl-ref)}
 html.hl-prose .qty{color:var(--hl-quantity);font-weight:600}
@@ -362,6 +441,12 @@ html.hl-signals.hl-shape .sg-warn{text-decoration:underline dotted 1.5px;text-un
 html.hl-signals .turn:not(.you-turn) .ask,html.hl-signals .rp .ask{
   background:color-mix(in srgb,var(--hl-question) 13%,transparent);box-shadow:inset 3px 0 var(--hl-question);
   padding:1px 4px 1px 7px;border-radius:3px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+/* Settings > Highlighting > Your prompts: a tinted band behind each of your
+   turns (and a prompt just sent), so they stand out when scrolling. */
+html.hl-prompts .turn.you-turn{background:color-mix(in srgb,var(--hl-prompt) 10%,transparent);
+  box-shadow:inset 3px 0 var(--hl-prompt);padding:6px 12px 7px 13px;border-radius:4px;
+  max-width:calc(var(--prose) + 25px)}
+html.hl-prompts .turn.you-turn>.who.you{color:color-mix(in srgb,var(--hl-prompt) 70%,var(--ink))}
 html.hl-mute .turn.sys,html.hl-mute .res.quiet{opacity:.55;transition:opacity .15s}
 html.hl-mute .turn.sys:hover,html.hl-mute .res.quiet:hover{opacity:1}
 html.hl-guides .ig{background:linear-gradient(to right,var(--hl-guide) 0 1px,transparent 1px)}
@@ -651,6 +736,8 @@ details.menu .cap{padding:2px 9px;font-size:12px;text-transform:uppercase;letter
 .card small{color:var(--muted)}
 button.sm{padding:3px 9px;font-size:12px}
 button.danger{background:var(--fail)}
+/* Stop: only while the session works, and plainly the way out. */
+#stop{color:var(--onaccent);border-color:var(--fail);font-weight:600}
 .hits{font-size:12.5px}
 .hit{padding:8px 0;border-bottom:1px solid var(--line)}
 .hit .tt{font-weight:600}
@@ -685,7 +772,22 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
 #decide .qo button small{color:var(--muted);margin-left:6px}
 #decide .qo input{padding:4px 8px;font-size:12.5px;border:1px solid var(--line);border-radius:5px;
   background:var(--panel);color:var(--ink)}
-#decide .qa{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+#decide .qa{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center}
+/* One question at a time, as in Claude Code's dialog: tabs, then the page. */
+#decide .dqq:focus{outline:none}
+#decide .qtabs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:6px 0 2px}
+#decide .qtab,#decide .qnav{background:transparent;color:var(--muted);border:1px solid transparent;
+  border-radius:4px;padding:1px 7px;font-size:12.5px}
+#decide .qtab:hover,#decide .qnav:hover{color:var(--ink);border-color:var(--line)}
+#decide .qtab.on{color:var(--ink);background:var(--panel);border-color:var(--busy);font-weight:600}
+#decide .qtab .qbox{margin-right:4px}
+#decide .qo button .qn{display:inline-block;min-width:1.6em;color:var(--muted);font-variant-numeric:tabular-nums}
+#decide .qrev .qr{display:flex;gap:10px;padding:3px 6px;border-radius:4px;cursor:pointer;max-width:44em}
+#decide .qrev .qr:hover,#decide .qrev .qr:focus{background:var(--panel);outline:none}
+#decide .qrq{flex:1;min-width:0}
+#decide .qra{font-weight:600}
+#decide .qra.none{color:var(--warn);font-weight:400;font-style:italic}
+#decide .qkeys{margin-left:auto;font-size:12px;color:var(--muted)}
 
 /* -- unread, warnings, jump palette, find, review, cost chart ------------ */
 .badge.new{color:var(--busy);border-color:var(--busy);font-weight:600}
@@ -693,6 +795,17 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
 .fam .newn{color:var(--busy);font-weight:400;font-size:12px}
 #heavy{font-size:12px;color:var(--warn);margin-top:6px}
 #heavy div::before{content:"⚠ "}
+/* The Path Menu: what a click on a path in the chat offers. */
+#pathmenu{position:fixed;z-index:30;min-width:170px;max-width:min(440px,92vw);display:flex;flex-direction:column;
+  padding:4px;background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  box-shadow:0 4px 14px rgba(0,0,0,.22);font-size:12.5px}
+#pathmenu[hidden]{display:none}
+#pathmenu .cap{font:12px var(--mono);color:var(--muted);padding:3px 8px 5px;border-bottom:1px solid var(--line);
+  margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#pathmenu button{background:transparent;color:var(--ink);border:0;border-radius:4px;text-align:left;
+  padding:4px 8px;font-size:12.5px;cursor:pointer}
+#pathmenu button:hover:not([disabled]),#pathmenu button:focus{background:var(--sel);outline:none}
+#pathmenu button[disabled]{color:var(--muted);cursor:default}
 #jumpbox,#quickbox{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;justify-content:center;
   align-items:flex-start;padding-top:12vh;z-index:20}
 #jumpbox .box,#quickbox .box{width:min(520px,92vw);background:var(--panel);border:1px solid var(--line);

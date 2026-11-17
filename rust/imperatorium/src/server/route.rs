@@ -147,6 +147,8 @@ impl Shared {
             "/api/notify",
             "/api/settings",
             "/api/remote/refresh",
+            "/api/open_path",
+            "/api/stop",
         ];
         if API.contains(&path) && object.is_none() {
             return (400, Body::Json(json!({"error": "expected an object"})));
@@ -256,6 +258,40 @@ impl Shared {
                 // The mods' own microphone (voice.Recorder) is herdr-only.
                 (200, Body::Json(json!({"ok": false, "error": "dictation from the herdr mods is not ported yet"})))
             }
+            "/api/stop" => {
+                // Esc for the session: only from the window, which a page
+                // elsewhere cannot pretend to be.
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window"})));
+                }
+                let Some(store) = &self.store else {
+                    return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
+                };
+                (200, Body::Json(self.stop_turn(store, p.get("session_id"))))
+            }
+            "/api/open_path" => {
+                // A path the chat names: opened with its program, or shown in
+                // its folder. Only from the window (a page elsewhere could
+                // otherwise open files here), and only a local session's.
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window"})));
+                }
+                let raw = p.get("path").and_then(Value::as_str).unwrap_or("");
+                let sid = p.get("session_id").and_then(Value::as_str).unwrap_or("");
+                let row = if sid.is_empty() { None } else { self.row(sid) };
+                if let Some(r) = row.as_ref().filter(|r| truthy(r.get("remote"))) {
+                    return (200, Body::Json(json!({"ok": false, "error": format!("that file is on {}, not this machine",
+                        crate::pyish::py_str(r.get("host").unwrap_or(&Value::Null)))})));
+                }
+                let cwd = row.as_ref().and_then(|r| r.get("cwd").and_then(Value::as_str)).map(std::path::PathBuf::from);
+                let home = crate::paths::user_home();
+                let reveal = truthy(p.get("reveal"));
+                (200, Body::Json(match crate::opener::resolve(raw, cwd.as_deref(), Some(&home))
+                    .and_then(|path| crate::opener::open(&path, reveal).map(|how| (path, how))) {
+                    Ok((path, how)) => json!({"ok": true, "how": how, "path": path.to_string_lossy()}),
+                    Err(e) => json!({"ok": false, "error": e}),
+                }))
+            }
             "/api/open_window" => {
                 let (route, size) = match p.get("page").and_then(Value::as_str) {
                     Some("matrix") => ("/matrix", "1100,720"),
@@ -331,7 +367,8 @@ impl Shared {
                         text("cwd"),
                     ),
                     "/api/new" => {
-                        self.new_session(store, sid.as_deref(), text("cwd"), truthy(p.get("close")))
+                        self.new_session(store, sid.as_deref(), text("cwd"), truthy(p.get("close")),
+                                         text("permission_mode").as_deref())
                     }
                     _ => self.close_session(store, sid.as_deref()),
                 };
@@ -542,6 +579,7 @@ impl Shared {
             ("GET", "/api/awaited") => (200, Body::Json(self.api_awaited(&arg("session")))),
             ("GET", "/api/timeline") => (200, self.api_timeline(&arg("session"), &arg("sig"))),
             ("GET", "/api/subagent") => (200, Body::Json(self.api_subagent(&arg("session"), &arg("agent")))),
+            ("GET", "/api/stop") => (200, Body::Json(self.stop_result(&arg("session")))),
             ("GET", "/api/processes") => (200, Body::Json(self.api_processes(&arg("session")))),
             ("GET", "/api/errors") => {
                 let raw = arg("days");

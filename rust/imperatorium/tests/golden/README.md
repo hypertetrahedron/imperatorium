@@ -30,6 +30,9 @@ Edited since: `settings_twin/steps.jsonl`'s settings help and restart texts
 scripts, to match `assets/settings_fields.json`. Also there: the new
 `chat.conversation_cache_mb` field (2026-11-15), inserted after
 `chat.matrix_status` in every settings answer, as the schema has it.
+The `highlight.prompts` and `highlight.colors.prompt` fields (2026-11-17)
+likewise, after `highlight.shape` and `highlight.colors.guide`, and
+`prompts` in `/api/health`'s `look.hl`.
 `hooks_blackbox/cases.jsonl` (2026-11-15, user decision): a policy whose
 `park` sets no `wait_seconds` now holds the request until it is answered,
 so the `background_wait_seconds`-only case parks with `wait` 604800 (and

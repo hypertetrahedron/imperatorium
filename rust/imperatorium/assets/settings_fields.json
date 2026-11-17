@@ -509,6 +509,15 @@
    "help": "Errors are also underlined, passes bold and warnings dotted, so they read the same without telling the colours apart."
   },
   {
+   "key": "highlight.prompts",
+   "section": "highlight",
+   "label": "Your prompts",
+   "type": "bool",
+   "default": true,
+   "applies": "live",
+   "help": "Your messages in the chat get a tinted band down their left edge, so they stand out from Claude's text when scrolling."
+  },
+  {
    "key": "highlight.colors.keyword",
    "section": "colors",
    "label": "Keywords",
@@ -687,6 +696,16 @@
    "default": "",
    "applies": "live",
    "help": ""
+  },
+  {
+   "key": "highlight.colors.prompt",
+   "section": "colors",
+   "label": "Your prompts",
+   "type": "color",
+   "name": "prompt",
+   "default": "",
+   "applies": "live",
+   "help": "The band behind your messages in the chat."
   }
  ],
  "sections": [

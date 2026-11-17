@@ -27,6 +27,14 @@ The first release of the native build: 0.4.0.
 - Code-signed Windows binaries. `imperatorium.exe` and `imperatorium-voice.exe`
   carry an Authenticode signature (Azure Artifact Signing, publisher Lester
   Wilhelm), so Windows and antivirus software can tell where they came from.
+- Your prompts stand out in the chat: a tinted band, which Settings >
+  Highlighting turns off and Settings > Highlight colours recolours.
+- View > Group tool calls (off by default) folds each run of tool calls and
+  their results into one line that opens on its own.
+- A prompt you send shows in the chat at once, marked as sending, then sent
+  and waiting for Claude (or not sent, and why), until the conversation has it.
+- A file opened from a path in the chat, or its folder, comes to the front
+  instead of opening behind other windows.
 - `imperatorium update --version X.Y.Z` installs a specific release, newer or
   older, and `imperatorium update --rollback` returns to the previous binary.
 - `imperatorium uninstall --purge` removes the config and state folders as well

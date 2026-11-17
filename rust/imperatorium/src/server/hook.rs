@@ -310,7 +310,21 @@ impl Shared {
         {
             self.invalidate();
         }
-        json!({"ok": true, "deliver": give, "status": self.mod_status_line(link, &sid)})
+        if let (Some(store), Some(stopped)) = (&self.store, beat.get("stopped").and_then(Value::as_array)) {
+            for s in stopped {
+                let outcome = s.get("outcome").and_then(Value::as_str).unwrap_or("");
+                let reason = s.get("reason").and_then(Value::as_str).unwrap_or("");
+                store.add_event_json(json!({"kind": "stopped", "session_id": sid,
+                    "cwd": beat.get("cwd").cloned().unwrap_or(Value::Null),
+                    "summary": crate::pyish::take(&format!("{outcome}{}{reason}", if reason.is_empty() { "" } else { ": " }), 280)}));
+            }
+        }
+        let mut reply = json!({"ok": true, "deliver": give, "status": self.mod_status_line(link, &sid)});
+        // Only when one waits: a beat's reply is otherwise as it always was.
+        if let Some(stop) = link.take_stop(&sid, now) {
+            reply["stop"] = json!(stop);
+        }
+        reply
     }
 
     /// Control.mod_status_line: who else is waiting on you, and what is
