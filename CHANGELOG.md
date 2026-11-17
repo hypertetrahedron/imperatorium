@@ -24,6 +24,9 @@ The first release of the native build: 0.4.0.
   (`manifest.json.sig`) that the binary checks before it updates; an unsigned
   or wrongly signed manifest is refused. Release files also carry build
   provenance attestations.
+- Code-signed Windows binaries. `imperatorium.exe` and `imperatorium-voice.exe`
+  carry an Authenticode signature (Azure Artifact Signing, publisher Lester
+  Wilhelm), so Windows and antivirus software can tell where they came from.
 - `imperatorium update --version X.Y.Z` installs a specific release, newer or
   older, and `imperatorium update --rollback` returns to the previous binary.
 - `imperatorium uninstall --purge` removes the config and state folders as well

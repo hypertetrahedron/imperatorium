@@ -327,13 +327,71 @@ stays the single source.
 
 Unsigned Windows binaries that install scheduled tasks and replace themselves
 are exactly what antivirus heuristics flag, and corporate machines (one of the
-current users) may block them. Before promoting the project widely, sign
-`imperatorium.exe` and `imperatorium-voice.exe` in `release.yml`. Options, in
-the order to try them: **SignPath Foundation** (free for open-source
-projects), **Azure Artifact Signing** (formerly Trusted Signing; inexpensive,
-but check its eligibility rules for individuals in your country), or a
-conventional OV certificate on a hardware token. macOS signing and
-notarisation (Apple Developer, $99/yr) can wait until macOS is supported.
+current users) may block them. So both Windows binaries, `imperatorium.exe`
+and `imperatorium-voice.exe`, are Authenticode-signed with **Azure Artifact
+Signing** (formerly Trusted Signing), set up 2026-11-16:
+
+| | |
+|---|---|
+| Account | `Imperatorium` (resource group `Imperatorium`, East US, endpoint `https://eus.codesigning.azure.net/`) |
+| Certificate profile | `ImperatoriumPublic` (Public Trust, tied to the maintainer's identity validation) |
+| Subject | `CN=Lester Wilhelm, O=Lester Wilhelm, L=Sandy Springs, S=ga, C=US` |
+| Timestamp | `http://timestamp.acs.microsoft.com` (SHA-256), so signatures outlive the short-lived certificates |
+
+**In releases**, `release.yml`'s `windows` job signs both files right after
+building them and before they are uploaded, so `release-package` records the
+signed files' SHA-256 in the manifest. It then checks each one: status
+`Valid`, the subject above, a timestamp. `smoke-windows` checks the exe the
+installer actually downloaded the same way. Azure trusts the job through
+**OIDC** (`azure/login`, then `azure/artifact-signing-action`, both pinned by
+SHA): no secret is stored. The federated credential is for the `release`
+environment, so only a run in that environment can sign.
+
+A **stable** tag fails the build if signing is not set up; a **preview** is
+signed when it is, and otherwise publishes unsigned with a warning.
+
+**On this machine**, `rust\release\sign.ps1 [files]` signs through the
+maintainer's script (`C:\Tools\signing\sign.ps1`, or the path in
+`IMPERATORIUM_SIGN_SCRIPT`), which authenticates with the Azure CLI's
+sign-in, then checks each file as the workflow does. With no files it signs
+`rust\target\release\imperatorium.exe`; `-VerifyOnly` only checks.
+`build.ps1 -Sign` signs before packaging. Sign a build before the live deploy
+copies it in, and before anything records its hash. If signing fails with an
+authentication error, sign in again:
+
+    & "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd" login --tenant 18b17d67-bd7b-45bc-abb0-5cc440040688
+
+**One-time setup for the workflow** (an Entra app with no secret, trusted
+only for this repository's `release` environment, allowed only to sign with
+this account; then three repository variables):
+
+```powershell
+$az  = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
+$sub = "28fe4e0d-7e64-413e-b2db-6a78ff32359a"
+$acct = "/subscriptions/$sub/resourceGroups/Imperatorium/providers/Microsoft.CodeSigning/codeSigningAccounts/Imperatorium"
+$app = & $az ad app create --display-name "imperatorium-release-signing" --query appId -o tsv
+& $az ad sp create --id $app | Out-Null
+@{ name = "release-environment"; issuer = "https://token.actions.githubusercontent.com"
+   subject = "repo:hypertetrahedron/imperatorium:environment:release"
+   audiences = @("api://AzureADTokenExchange") } | ConvertTo-Json | Set-Content fic.json
+& $az ad app federated-credential create --id $app --parameters fic.json
+& $az role assignment create --assignee $app --role "Artifact Signing Certificate Profile Signer" `
+    --scope "$acct/certificateProfiles/ImperatoriumPublic"
+# The release environment, deployable from v* tags only:
+gh api -X PUT repos/hypertetrahedron/imperatorium/environments/release `
+    -F "deployment_branch_policy[protected_branches]=false" -F "deployment_branch_policy[custom_branch_policies]=true"
+gh api -X POST repos/hypertetrahedron/imperatorium/environments/release/deployment-branch-policies -f name="v*" -f type=tag
+gh variable set AZURE_CLIENT_ID --body $app
+gh variable set AZURE_TENANT_ID --body "18b17d67-bd7b-45bc-abb0-5cc440040688"
+gh variable set AZURE_SUBSCRIPTION_ID --body $sub
+```
+
+(The role name was checked against this subscription on 2026-11-16.) The app can do
+nothing but sign with this profile, and only a workflow job running in the
+`release` environment (v* tags) can get a token for it.
+
+macOS signing and notarisation (Apple Developer, $99/yr) can wait until
+macOS is supported.
 
 ### Updates
 
@@ -407,5 +465,5 @@ Before the first stable (0.4.0):
 - [x] `state_version` and forward migrations with backup (checked by `serve --live`; no migrations yet)
 - [x] `update --rollback` and `update --version` (rollback restores the main binary; the voice worker stays as it is)
 - [x] Build provenance attestations; actions pinned by SHA
-- [ ] Windows code signing (or a stated reason to ship unsigned) - the maintainer is getting a certificate
+- [ ] Windows code signing - signing works on this machine and `release.yml` signs with it (2026-11-16, Azure Artifact Signing; see Code signing); Azure app, federated credential, role, `release` environment and variables set up 2026-11-16; left: a preview tag to see it sign on the runner
 - [x] macOS marked experimental in notes and installer

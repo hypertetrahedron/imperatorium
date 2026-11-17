@@ -16,6 +16,10 @@
     <out>\TEST-PUBKEY.txt, and whoever tests the release sets
     IMPERATORIUM_RELEASE_PUBKEY to it, or their binary refuses the manifest.
 
+    With -Sign the Windows binaries are Authenticode-signed (sign.ps1, Azure
+    Artifact Signing) before packaging, so the manifest's SHA-256 is the
+    signed file's.
+
 .EXAMPLE
     powershell -File rust\release\build.ps1 -Version 0.3.1-preview.1
 #>
@@ -23,7 +27,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Out = '',
     [switch]$Voice,
-    [string]$Notes = ''
+    [string]$Notes = '',
+    [switch]$Sign
 )
 $ErrorActionPreference = 'Stop'
 $rust = Split-Path -Parent $PSScriptRoot
@@ -61,6 +66,12 @@ try {
     Remove-Item Env:\IMPERATORIUM_BUILD_VERSION -ErrorAction SilentlyContinue
 }
 $exe = "$rust\target\release\imperatorium.exe"
+if ($Sign) {
+    $win = @($exe)
+    if ($Voice) { $win += Join-Path $env:USERPROFILE '.ivk\release\imperatorium-voice.exe' }
+    & (Join-Path $PSScriptRoot 'sign.ps1') @win
+    if (-not $?) { throw 'signing failed' }
+}
 $throwaway = $false
 if (-not $env:IMPERATORIUM_SIGNING_KEY) {
     $key = (& $exe release-keygen) -join "`n" | ConvertFrom-Json
