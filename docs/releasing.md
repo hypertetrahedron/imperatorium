@@ -371,8 +371,10 @@ $sub = "28fe4e0d-7e64-413e-b2db-6a78ff32359a"
 $acct = "/subscriptions/$sub/resourceGroups/Imperatorium/providers/Microsoft.CodeSigning/codeSigningAccounts/Imperatorium"
 $app = & $az ad app create --display-name "imperatorium-release-signing" --query appId -o tsv
 & $az ad sp create --id $app | Out-Null
-@{ name = "release-environment"; issuer = "https://token.actions.githubusercontent.com"
-   subject = "repo:hypertetrahedron/imperatorium:environment:release"
+# The subject as this repository's OIDC tokens carry it: owner and repo with
+# their numeric IDs (GitHub's ID-based format), not the bare names.
+@{ name = "release-environment-ids"; issuer = "https://token.actions.githubusercontent.com"
+   subject = "repo:hypertetrahedron@34225769/imperatorium@1391341367:environment:release"
    audiences = @("api://AzureADTokenExchange") } | ConvertTo-Json | Set-Content fic.json
 & $az ad app federated-credential create --id $app --parameters fic.json
 & $az role assignment create --assignee $app --role "Artifact Signing Certificate Profile Signer" `
@@ -386,7 +388,10 @@ gh variable set AZURE_TENANT_ID --body "18b17d67-bd7b-45bc-abb0-5cc440040688"
 gh variable set AZURE_SUBSCRIPTION_ID --body $sub
 ```
 
-(The role name was checked against this subscription on 2026-11-16.) The app can do
+(The role name was checked against this subscription on 2026-11-16.) The first preview's login failed with AADSTS700213 while the
+credential named the repository without its IDs: a token's subject is in the
+`azure/login` step's log ("subject claim"), and the credential must match it
+exactly. The app can do
 nothing but sign with this profile, and only a workflow job running in the
 `release` environment (v* tags) can get a token for it.
 

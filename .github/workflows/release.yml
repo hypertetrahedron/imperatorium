@@ -303,6 +303,13 @@ jobs:
           set -euo pipefail
           port=18765
           export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          # A stand-in `claude` that only answers --version: the installer
+          # refuses a machine without Claude Code (rightly), and the runner has
+          # none. This tests the installer and the signed update, not Claude.
+          mkdir -p "$RUNNER_TEMP/standin"
+          printf '#!/bin/sh\necho "2.1.326 (Claude Code)"\n' > "$RUNNER_TEMP/standin/claude"
+          chmod +x "$RUNNER_TEMP/standin/claude"
+          export PATH="$RUNNER_TEMP/standin:$PATH"
           (cd dist && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
           server=$!
           for _ in $(seq 1 50); do
@@ -339,6 +346,11 @@ jobs:
           # Keep everything the script writes inside the runner's temp folder.
           $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'localappdata'
           New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+          # A stand-in `claude` that only answers --version (see smoke-linux).
+          $standin = Join-Path $env:RUNNER_TEMP 'standin'
+          New-Item -ItemType Directory -Force $standin | Out-Null
+          Set-Content -Path (Join-Path $standin 'claude.cmd') -Value '@echo 2.1.326 (Claude Code)' -Encoding ascii
+          $env:PATH = "$standin;$env:PATH"
           $server = Start-Process python -ArgumentList '-m', 'http.server', "$port", '--bind', '127.0.0.1', '--directory', 'dist' -PassThru -WindowStyle Hidden
           try {
             $up = $false
