@@ -15,7 +15,7 @@ the Chat Matrix; everything else is filled in by the script).
   area. A **Panel**, **Card** or **Bar** is a block inside a region. A
   **Badge**, **Button** or **Line** is a small part.
 - In conversation use the shortest name that is unique ("the Meta Line",
-  "the Find Bar"); give the path only when it is ambiguous.
+  "the Find Window"); give the path only when it is ambiguous.
 - A new part gets a name here in the same change that adds it.
 
 ## Main window (Imperatorium)
@@ -28,6 +28,8 @@ the Chat Matrix; everything else is filled in by the script).
     - New Session Item `#new` (opens the New Session Dialog)
     - History Item `[data-view=history]` (opens the History Pop-up)
     - Insights Item `[data-view=insights]` (opens the Insights Pop-up)
+    - Project Changes Item `[data-view=project]` (opens the Project Changes
+      Pop-up; the View Menu has one too)
 - **Usage Meter** `#meter.meters`: Limit Bars (`.row`, in one grid `.rows` so
   every bar is the same length), Reset Tick, Percentage (`.pct`), Meter Tip
   (`.tip`, on hover: the window's name, use, reset time, time elapsed),
@@ -82,20 +84,22 @@ the Chat Matrix; everything else is filled in by the script).
   Header Controls on the right
   - Session Title `#title`
   - Session Subtitle `#sub`: Branch Badge (`.hbr`), Worktree Tag (`.hwt`,
-    or "main checkout"), then the window title and folder
+    or "main checkout"), then the folder (not the window title, which the
+    tile shows)
   - **Header Controls** `#headctl`, left to right:
     - Tab Picker `#tabpick`: Conversation, Changes, Activity, Worktrees
     - **New / Fork Menu** `#launch`: New, New+close, Fork, Fork in bg
-    - **View Menu** `#viewmenu`: Copy Resume Button (`#copybtn`), Current
+    - **View Menu** `#viewmenu`: Show Window (`#showbtn`, for a running
+      session on this machine), Copy Resume Button (`#copybtn`), Current
       Prompt Button (`#curbtn`), Display Shapes (`#shape`) with Group Tool
       Calls (`[data-group]`, off by default) under the Tool results row,
       and under them Display Times (`[data-times]`, off by default: each
       block of the chat shows when it was written, as a Block Time `.bt`).
       Its button is lit while any kind of text is not shown in full or tool
       calls are grouped
-    - Find Bar `#findbar` (below), shown on the Conversation tab only
+    - Find `#findbar` (below): the Find Button, shown on the Conversation tab only
     - Session Actions `#acts`: the ones that stay buttons - Resume,
-      Resume in bg, Show Window. Between the two pairs of arrows, to keep
+      Resume in bg. Between the two pairs of arrows, to keep
       them apart
     - Prompt Jump `#jump` (below), shown on the Conversation tab only
 - **Session Pane** `#sessionpane`
@@ -141,12 +145,28 @@ the Chat Matrix; everything else is filled in by the script).
 - **Insights Pop-up** `#insightbox`, likewise, holding the Insights Pane `#insightpane`
   - Cost Card `#costs`: Cost Chart (`svg.chart`) and Cost Tables
   - Tool Failures Card `#errs`
+- **Project Changes Pop-up** `#projbox`, likewise: Project Picker `#pjpick`,
+  Refresh `#pjrefresh`, and the Project Pane `#projpane`
+  - Overlaps Card: one Overlap `.pjov` per file more than one line of work
+    changes, opening to each line's diff of it (`.pjdiffs`)
+  - Line Cards `.pjline` (edged `.meets` when they hold an overlap): one
+    per line of work - the main checkout, each worktree, each branch ahead
+    of its base without one - with Session Chips `.pjs`, the File List
+    `.pjfiles` (a File Row `.pjf` opens its diff `.pjfd`; `.shared` when
+    another line changes it too) and, for a background session's worktree,
+    Merge / Push + open PR / Discard
 - In the Header Controls (above), from what was the Chat Strip:
-  - **Find Bar** `#findbar`
-    - Find Input `#cfind`
-    - Find Filter `#cfilter`
-    - Match Count `#cfcount`
-    - Previous / Next Match `#cfprev` / `#cfnext`
+  - **Find** `#findbar`
+    - **Find Button** `#findbtn`: opens and closes the Find Window (ctrl+F
+      opens it too); lit while it is open
+    - **Find Window** `#findpop`: floats under the button and leaves the
+      chat usable; closing it (its close, Esc, or the button again) clears
+      the find
+      - Find Input `#cfind`
+      - Find Filter `#cfilter`
+      - Match Count `#cfcount`
+      - Previous / Next Match `#cfprev` / `#cfnext`
+      - Close Find `#cfclose`
   - **Prompt Jump** `#jump`: Previous / Next Prompt `#jprev` / `#jnext`
 - **Prompt Dock** `#ask`
   - **Prompt Box** `#prompt`

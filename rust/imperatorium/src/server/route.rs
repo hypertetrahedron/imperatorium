@@ -598,6 +598,24 @@ impl Shared {
                 };
                 (200, Body::Json(body))
             }
+            ("GET", "/api/project_changes") => {
+                let project = arg("project");
+                let body = if self.known_project(&project) {
+                    crate::overview::project_changes(&project)
+                } else {
+                    json!({"ok": false, "error": format!("not a known project: {project}")})
+                };
+                (200, Body::Json(body))
+            }
+            ("GET", "/api/project_file_diff") => {
+                let project = arg("project");
+                let body = if self.known_project(&project) {
+                    crate::overview::file_diff(&project, &arg("kind"), &arg("at"), &arg("file"))
+                } else {
+                    json!({"ok": false, "error": format!("not a known project: {project}")})
+                };
+                (200, Body::Json(body))
+            }
             ("GET", "/api/worktree_diff") => {
                 let project = arg("project");
                 let body = if self.known_project(&project) {

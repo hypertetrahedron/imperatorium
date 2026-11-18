@@ -33,6 +33,19 @@ The first release of the native build: 0.4.0.
   their results into one line that opens on its own.
 - A prompt you send shows in the chat at once, marked as sending, then sent
   and waiting for Claude (or not sent, and why), until the conversation has it.
+  Prompts that come back joined in one turn (a stopped one leaves no reply
+  between them) each count, so none is left marked as waiting.
+- Project changes (☰ menu, or View): every line of work in a project at
+  once - the main checkout, each worktree, and each branch ahead of its base
+  that no worktree has - with the sessions working in each, what is not
+  committed, how far ahead and behind, the PR, and the files each touches.
+  Files changed in more than one of them come first, each opening to every
+  line's diff of it, so a coming merge conflict shows before the merge. Two
+  lines only count what each changed since they parted, so a branch made
+  from another's unmerged work does not flag the commits they share.
+- A session cleared with `/clear` opens its new conversation in the window,
+  with the prompt box ready for the first prompt. Another session's clear does
+  not take you away from a prompt you are typing.
 - A file opened from a path in the chat, or its folder, comes to the front
   instead of opening behind other windows.
 - `imperatorium update --version X.Y.Z` installs a specific release, newer or
@@ -45,6 +58,15 @@ The first release of the native build: 0.4.0.
   newer one wrote instead of misreading it, which is what makes a rollback safe.
 
 ### Changed
+
+- Find in the chat is one Find button on the session header. It opens a
+  small window with the find box, what to search, the match count and the
+  earlier/later arrows, which leaves room on the header row. ctrl+F opens it
+  too; Esc, its close or the button again closes it and clears the find.
+- Show Window is in the session header's View menu instead of a button of its
+  own.
+- The line under the session's name no longer repeats its window title (the
+  gist of its prompt); the tile shows it, and so does Show Current Prompt.
 
 - The install scripts do their work in one function called on the last line, so
   a download that is cut short runs nothing.
