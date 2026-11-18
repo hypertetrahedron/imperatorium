@@ -165,14 +165,47 @@ pub fn resume(
     }
 }
 
+/// The permission modes `claude --permission-mode` takes; the New Session
+/// dialog offers these.
+pub const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
+
+/// Pure: a fresh session's command line, starting in `permission_mode`
+/// (none or "default": Claude Code's own default). Anything else is refused.
+pub fn new_command(session_id: &str, permission_mode: Option<&str>) -> Result<Vec<String>, String> {
+    let mut cmd: Vec<String> = vec!["claude".into(), "--session-id".into(), session_id.into()];
+    match permission_mode.filter(|m| !m.is_empty() && *m != "default") {
+        None => {}
+        Some(m) if PERMISSION_MODES.contains(&m) => cmd.extend(["--permission-mode".into(), m.to_string()]),
+        Some(m) => return Err(format!("unknown permission mode: {m}")),
+    }
+    Ok(cmd)
+}
+
 /// history.new_session: a fresh `claude` in a new tab, given its id up front
 /// so the window can select it as soon as it appears.
-pub fn new_session(cwd: Option<&str>, session_id: &str) -> Result<Value, String> {
+pub fn new_session(cwd: Option<&str>, session_id: &str, permission_mode: Option<&str>) -> Result<Value, String> {
     let cwd = dir_ok(cwd)?;
-    let cmd: Vec<String> = vec!["claude".into(), "--session-id".into(), session_id.into()];
+    let cmd = new_command(session_id, permission_mode)?;
     popen(&terminal_command(cwd, &cmd)?, cwd)?;
     Ok(
         json!({"ok": true, "action": "new", "where": "window", "command": cmd.join(" "),
               "session_id": session_id}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_session_starts_in_the_mode_asked_for() {
+        assert_eq!(new_command("s1", None).unwrap(), ["claude", "--session-id", "s1"]);
+        assert_eq!(new_command("s1", Some("default")).unwrap(), ["claude", "--session-id", "s1"]);
+        assert_eq!(new_command("s1", Some("plan")).unwrap(),
+                   ["claude", "--session-id", "s1", "--permission-mode", "plan"]);
+        assert_eq!(new_command("s1", Some("bypassPermissions")).unwrap()[4], "bypassPermissions");
+        // Never an argument of its own choosing on claude's command line.
+        assert!(new_command("s1", Some("--dangerously-skip-permissions")).is_err());
+        assert!(new_command("s1", Some("plan --x")).is_err());
+    }
 }

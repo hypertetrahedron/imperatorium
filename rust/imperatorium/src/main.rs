@@ -45,6 +45,7 @@ mod matrix;
 mod modlink;
 mod models;
 mod notify;
+mod opener;
 mod paths;
 mod proc;
 mod pending;

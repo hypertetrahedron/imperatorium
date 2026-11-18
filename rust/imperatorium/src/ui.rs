@@ -143,7 +143,7 @@ pub fn font(name: &str) -> Option<&'static [u8]> {
 
 const FONT_BASE: &[(&str, f64)] = &[("chat", 14.0), ("matrix", 13.0)];
 const HIGHLIGHTS_ON: &[&str] = &[
-    "code", "diffs", "prose", "tools", "signals", "mute", "guides", "shape",
+    "code", "diffs", "prose", "tools", "signals", "mute", "guides", "shape", "prompts",
 ];
 
 /// Python's `$`: the end, or just before a final newline.
@@ -267,7 +267,7 @@ mod tests {
             look_head(&Value::Null),
             "<style id=lookvars>html:root{--chatz:1.0;--matrixz:1.0}</style><script>document.documentElement\
              .classList.add(\"hl-code\",\"hl-diffs\",\"hl-prose\",\"hl-tools\",\"hl-signals\",\"hl-mute\",\
-             \"hl-guides\",\"hl-shape\")</script>"
+             \"hl-guides\",\"hl-shape\",\"hl-prompts\")</script>"
         );
         let l = json!({"fonts": {"chat": 15, "matrix": 13}, "hl": {"code": true, "mute": false},
                        "colors": {"error": "#FF0000", "Bad": "#000000"}});

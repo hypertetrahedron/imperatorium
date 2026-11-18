@@ -464,7 +464,7 @@ const CMD_RE = new RegExp("^(?:\\$\\s+)?(?:\\S*[\\\\/])?(?:git|gh|python3?|py|pi
   "(?:\\.exe)?(?:\\s|$)|^[A-Z][a-z]+-[A-Z]\\w+");
 
 const pathSpan = (p, extra) =>
-  `<span class="pth${extra ? " " + extra : ""}" data-copy="${attr(p)}" title="click to copy">${esc(p)}</span>`;
+  `<span class="pth${extra ? " " + extra : ""}" data-copy="${attr(p)}" title="click to open, show in its folder or copy">${esc(p)}</span>`;
 function markWith(s, hold, sigs){
   s = s.replace(PATH_RE, m => hold(pathSpan(m)));
   s = s.replace(REF_RE, m => hold(`<span class="ref">${esc(m)}</span>`));
@@ -656,10 +656,15 @@ function answersOf(text){
   while ((m = re.exec(String(text || "")))) out.set(m[1], m[2]);
   return out;
 }
+// Several questions show one at a time, as the terminal's dialog does: a tab
+// per question (☒ once answered) picks the page, with radio inputs and CSS
+// only, so a redraw of the log needs nothing kept (2026-11-16).
 function askHtml(b){
   const result = toolResults.get(b.id);
   const got = answersOf(result);
-  const qs = b.questions.map(q => {
+  const many = b.questions.length > 1;
+  const rid = "aq-" + String(b.id || Math.random()).replace(/[^\w-]/g, "");
+  const qs = b.questions.map((q, k) => {
     const ans = got.get(q.question);
     // One choice is the answer whole (a label can hold ", "); several are
     // the labels joined with ", ", so each is looked for in it.
@@ -667,17 +672,21 @@ function askHtml(b){
       ? q.options.map(o => o.label).filter(l => (", " + ans + ", ").includes(", " + l + ", "))
       : [String(ans)]);
     const known = q.options.some(o => picked.has(o.label));
-    return `<div class="qt">${q.header ? `<span class="chip">${esc(q.header)}</span>` : ""}${esc(q.question)}${
+    return `<section class="askp"><div class="qt">${q.header && !many ? `<span class="chip">${esc(q.header)}</span>` : ""}${esc(q.question)}${
       q.multiSelect ? " <small>(choose any)</small>" : ""}</div><ul>${q.options.map(o =>
       `<li${picked.has(o.label) ? ' class="on"' : ""}>${esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ""}</li>`).join("")}</ul>${
-      ans != null && !known ? `<div class="qans">answered: ${esc(ans)}</div>` : ""}`;
+      ans != null && !known ? `<div class="qans">answered: ${esc(ans)}</div>` : ""}</section>`;
   }).join("");
+  const tabs = !many ? "" : b.questions.map((q, k) => `<input type="radio" class="ar" name="${rid}" id="${rid}-${k}"${
+      k ? "" : " checked"}>`).join("") +
+    `<div class="asktabs">${b.questions.map((q, k) => `<label for="${rid}-${k}" title="${esc(q.question)}">${
+      got.has(q.question) ? "&#9746;" : "&#9744;"} ${esc(q.header || "Question " + (k + 1))}</label>`).join("")}</div>`;
   const parked = pendingNow.some(p => p.tool === "AskUserQuestion" && p.session_id === b.session &&
                                       JSON.stringify(p.questions || []) === JSON.stringify(b.questions));
   const wait = result != null ? ""
     : parked ? `<div class="qwait">waiting for your answer - answer it in the box at the top</div>`
     : `<div class="qwait">waiting for your answer in the session's terminal (or already answered there)</div>`;
-  return `<div class="askq"><div class="qh">AskUserQuestion</div>${qs}${wait}</div>`;
+  return `<div class="askq${many ? " many" : ""}"><div class="qh">AskUserQuestion</div>${tabs}${qs}${wait}</div>`;
 }
 function toolHtml(b){
   if (b.questions && b.questions.length) return askHtml(b);
@@ -708,7 +717,7 @@ function emph(s){
 // Then paths, references, signals and amounts are marked (see highlighting);
 // a code span that is a path or a command says so.
 const codeSpan = c => PATH_ONLY.test(c)
-  ? `<code class="pth" data-copy="${attr(c)}" title="click to copy">${esc(c)}</code>`
+  ? `<code class="pth" data-copy="${attr(c)}" title="click to open, show in its folder or copy">${esc(c)}</code>`
   : `<code${CMD_RE.test(c) ? ' class="cmd"' : ""}>${esc(c)}</code>`;
 function inline(s){
   const {hold, back} = holder();

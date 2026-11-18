@@ -187,7 +187,7 @@ describe("Highlighting", () => {
   it("prose marks", () => {
     const html = render(cat("See imperatorium/ui.py:120 and C:\\Users\\x\\a.txt, commit a265fcf, #42, ",
                             "run `git status`, `docs/ui-names.md`, 1.5k tokens for $0.42 in 3s."));
-    assertIn(cat('<span class="pth" data-copy="imperatorium/ui.py:120" title="click to copy">',
+    assertIn(cat('<span class="pth" data-copy="imperatorium/ui.py:120" title="click to open, show in its folder or copy">',
                  "imperatorium/ui.py:120</span>"), html);
     assertIn('data-copy="C:\\Users\\x\\a.txt"', html);
     assertIn('<span class="ref">a265fcf</span>', html);

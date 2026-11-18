@@ -181,14 +181,17 @@ function tile(s, short){
   const spend = open && statusFor === key(s) && statusData ? statusData.spend : null;
   const details = `<div class="m"><span class="det">${tileDetails(s, now, spend).map(p =>
     `<span class="${p.cls || ""}" title="${esc(p.title)}">${esc(p.text)}</span>`).join(" · ")}${
-    s.host ? " · " + esc(s.host) : ""}${prBadge(s.pr)}</span><span class="acts">${acts}</span></div>`;
+    s.host ? " · " + esc(s.host) : ""}${prBadge(s.pr)}</span></div>`;
   return `<div class="s${open ? " on" : ""}${mark}${isUnread(s) ? " unread" : ""}" data-k="${esc(key(s))}">
     <div class="t1"><span class="dot ${dot}" title="${esc(label)}"></span><span class="n" title="${esc(nameOf(s))}">${
       s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""}${s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${
       pinned ? `<span class="pin">★</span>` : ""}</span>${
       plain ? "" : `<span class="why" title="${esc(label)}">${esc(label)}</span>`}<span class="sig">${
-      tileSignals(s, now, open)}</span></div><div class="stl st-${dot}" title="${esc(label)}">${
-      esc(label)}</div>${lines}${details}${open ? `<div class="tk"></div>` : ""}
+      tileSignals(s, now, open)}</span>${
+      // Pin and close sit in the open tile's top right corner (2026-11-16);
+      // a closed tile has none.
+      open ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl st-${dot}" title="${esc(label)}">${
+      esc(label)}</div>${lines}${details}${open ? `<div class="mcpl"></div><div class="tk"></div>` : ""}
   </div>`;
 }
 
@@ -367,15 +370,63 @@ function drawSessions(){
   drawTileTasks();
 }
 
+// Pure: the Session Subtitle - the branch the session is on and, in a
+// worktree, which one, ahead of its window title and folder, so where its
+// work goes is in view (2026-11-16). The branch is the transcript's
+// (gitBranch, via the status panel's data), so it is there for remote ones.
+function headSub(s, branch){
+  const parts = [];
+  if (branch) parts.push(`<span class="hbr" title="git branch">&#9095; ${esc(branch)}</span>`);
+  if (s.worktree) parts.push(`<span class="hwt" title="a worktree, not the main checkout">${WT_ICON} worktree ${esc(s.worktree)}</span>`);
+  else if (branch) parts.push(`<span class="hwt main" title="the project's main checkout">main checkout</span>`);
+  const rest = [s.window_title, s.cwd].filter(Boolean).map(esc).join("  ·  ");
+  return parts.join(" ") + (parts.length && rest ? " <span class=hsep>·</span> " : "") + rest;
+}
+// Pure: whether the window's Stop applies to row `s`: a session on this
+// machine in the middle of a turn.
+const canStop = s => !!s && !s.remote && (!!RUNNING[s.status] || s.state === "working");
+// Stop (2026-11-16): the turn ends as with Esc at the terminal - through the
+// session's mod when it can (then what came of it is asked for), else Esc
+// pressed in its console. Never twice within a few seconds from here: Esc
+// Esc in the terminal is its rewind, and the dispatcher refuses it too.
+let stopAt = 0;
+async function stopTurn(){
+  const s = current();
+  if (!canStop(s)) return false;
+  if (Date.now() - stopAt < 3000) return true;
+  stopAt = Date.now();
+  const k = key(s);
+  say("stopping…", k);
+  let r;
+  try { r = await post("/api/stop", {session_id: k}); } catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  if (!r.ok){ say(r.error || "could not stop it", k); return true; }
+  if (r.via !== "mod"){ say("pressed Esc in its terminal", k); return true; }
+  say("asked its mod to stop the turn…", k);
+  for (let i = 0; i < 12; i++){
+    await new Promise(res => setTimeout(res, 500));
+    let got;
+    try { got = await get("/api/stop?session=" + encodeURIComponent(k)); } catch (e) { continue; }
+    const res = got && got.result;
+    if (!res || res.id !== r.stop_id) continue;
+    say(res.outcome === "aborted" ? "stopped" : res.outcome === "idle" ? "it had already finished"
+      : "could not stop it: " + (res.reason || res.outcome), k);
+    return true;
+  }
+  say("asked it to stop - no answer from its mod yet", k);
+  return true;
+}
+
 function drawHead(){
   const s = current();
   if (view !== "session") return;
   setText($("#title"), s ? nameOf(s) : "no session selected");
-  setText($("#sub"), s ? [s.window_title, s.cwd].filter(Boolean).join("  ·  ") : "");
+  const sub = s ? headSub(s, statusFor === key(s) && statusData && statusData.stat ? statusData.stat.branch : "") : "";
+  if ($("#sub").dataset.sig !== sub){ $("#sub").innerHTML = sub; $("#sub").dataset.sig = sub; }
   $("#sub").title = $("#sub").textContent;
   $("#send").disabled = !s || !!s.remote;
   $("#sendmore").classList.toggle("off", !s || !!s.remote);
   $("#queue").disabled = !s;
+  $("#stop").hidden = !canStop(s);
   const acts = [];
   if (s && !s.remote){
     if (s.resumable){
@@ -438,6 +489,11 @@ function modeOf(cat){ return MODES.includes(shape[cat]) ? shape[cat] : "full"; }
 // "done in 10 minutes" can be read against a clock. Off unless turned on.
 let showTimes = false;
 try { showTimes = localStorage.getItem("imperatorium.times") === "1"; } catch (e) {}
+// View > Group tool calls: each run of tool calls and their results, one
+// after another in a turn, is folded into one group, collapsed until opened.
+// Each group opens on its own. Off unless turned on.
+let groupTools = false;
+try { groupTools = localStorage.getItem("imperatorium.group") === "1"; } catch (e) {}
 
 // Pure: the stamp for a block written at `at` (ISO), seen at `now` (ms):
 // "14:05" today, "Nov 14 14:05" before; null when there is no time.
@@ -477,25 +533,68 @@ function compactBlock(b, k, open){
     esc(oneLine(b))}</span></summary>${renderBlock(b)}</details>`;
 }
 
+// What Group tool calls folds together: calls and results. A question card
+// is not folded away, since it waits on you.
+const groupable = b => (b.kind === "tool" && !b.questions) || b.kind === "result";
+
+// Pure: a group's one line - how many calls, which tools, how many failed.
+function groupLine(bs){
+  const names = new Map();
+  let calls = 0, failed = 0;
+  for (const b of bs){
+    if (b.kind === "tool"){ calls++; names.set(b.name, (names.get(b.name) || 0) + 1); }
+    else if (b.is_error) failed++;
+  }
+  return {calls, failed, list: [...names].map(([n, c]) => c > 1 ? n + " ×" + c : n).join(", ")};
+}
+
+function groupHtml(bs, inner, k, open){
+  const g = groupLine(bs);
+  return `<details class="tgroup" data-k="${k}"${open ? " open" : ""}><summary><span class="k">${
+    g.calls} tool call${g.calls === 1 ? "" : "s"}</span><span class="ln">${esc(g.list)}</span>${
+    g.failed ? `<span class="gf">${g.failed} failed</span>` : ""}</summary><div class="gb">${inner}</div></details>`;
+}
+
 // One turn's blocks as the controls say. `k` names a block by its place in
-// the conversation, so one opened by hand stays open across repaints.
+// the conversation, so one opened by hand stays open across repaints; a
+// group is named "g" + its first block's.
 function shapeBlocks(it, i, opened){
-  return it.blocks.map((b, j) => {
+  const one = (b, j) => {
     const m = modeOf(categoryOf(it, b));
     if (m === "hidden") return "";
     const k = i + "." + j;
     return stampHtml(b) + (m === "compact" ? compactBlock(b, k, opened.has(k)) : renderBlock(b));
-  }).join("");
+  };
+  if (!groupTools) return it.blocks.map(one).join("");
+  let out = "", run = [];
+  const flush = () => {
+    if (!run.length) return;
+    const inner = run.map(([b, j]) => one(b, j)).join(""), bs = run.map(([b]) => b), k = "g" + i + "." + run[0][1];
+    run = [];
+    if (!inner) return;
+    out += bs.some(b => b.kind === "tool") ? groupHtml(bs, inner, k, opened.has(k)) : inner;
+  };
+  it.blocks.forEach((b, j) => {
+    if (groupable(b)){ run.push([b, j]); return; }
+    // Something hidden between two calls does not end the run.
+    if (modeOf(categoryOf(it, b)) === "hidden") return;
+    flush();
+    out += one(b, j);
+  });
+  flush();
+  return out;
 }
 
 function drawShape(){
   // The View menu's button is lit while any kind of text is not shown in full.
-  $("#viewmenu>summary").classList.toggle("mod", SHAPES.some(([cat]) => modeOf(cat) !== "full"));
+  $("#viewmenu>summary").classList.toggle("mod", groupTools || SHAPES.some(([cat]) => modeOf(cat) !== "full"));
   $("#shape").innerHTML = SHAPES.map(([cat, label]) => {
     const m = modeOf(cat);
     return `<label>${label}<select class="tiny${m === "full" ? " full" : ""}" data-shape="${cat}">${
       MODES.map(x => `<option value="${x}"${x === m ? " selected" : ""}>${
-        x[0].toUpperCase() + x.slice(1)}</option>`).join("")}</select></label>`;
+        x[0].toUpperCase() + x.slice(1)}</option>`).join("")}</select></label>` + (cat !== "result" ? "" :
+      `<label title="fold each run of tool calls and their results into one group, collapsed until you open it">Group tool calls<input type=checkbox data-group${
+        groupTools ? " checked" : ""}></label>`);
   }).join("") + `<label title="show when each part of the chat was written">Display Times<input type=checkbox data-times${
     showTimes ? " checked" : ""}></label>`;
 }
@@ -649,6 +748,12 @@ function drawLog(force){
     }
     if (html) want.push({i, html, sig: findSet.has(i) ? html + "\0" + finds.q : html});
   });
+  // Prompts sent from here that the conversation does not have yet, after it.
+  pendingSent[selected] = settlePending(pendingSent[selected] || [], logItems);
+  pendingSent[selected].forEach((p, j) => {
+    const html = pendingHtml(p);
+    want.push({i: logItems.length + j, html, sig: html});
+  });
   if (!want.length){
     log.innerHTML = earlier + `<div class="note">${logItems.length ? "everything here is hidden - see the display settings below" : "nothing yet"}</div>` + NEWEST;
     logDom = null;
@@ -657,6 +762,54 @@ function drawLog(force){
   markFinds();
   if (logFollow) log.scrollTop = log.scrollHeight;
   markAway();
+}
+
+// -- a prompt just sent ------------------------------------------------------
+// Shown at the end of the chat the moment it is sent, marked as on its way,
+// until the conversation has it. Each one waits for one more turn of yours
+// than the conversation had when it was sent (`base`, counting the ones
+// already waiting); one that was not sent stays, marked, until dismissed.
+const pendingSent = {};   // session key -> [{id, text, base, state, note}]
+let pendingSeq = 0;
+const yourTurns = items => items.filter(it => it.speaker === "you" && !mateTurn(it)).length;
+
+// Pure: the prompts still waiting, given the conversation's items now.
+function settlePending(list, items){
+  const n = yourTurns(items);
+  return list.filter(p => p.state === "failed" || n <= p.base);
+}
+
+function pendingHtml(p){
+  const note = p.state === "sending" ? "sending…" : p.state === "failed" ? "not sent - " + p.note : p.note;
+  return `<div class="turn you-turn pend ${p.state}" data-pend="${p.id}"><div class="who you">${esc(SPEAKER.you)}<span class="pnote">${
+    esc(note)}</span>${p.state === "sending" ? "" : `<button class="ghost tiny" data-unpend="${p.id}" title="${
+    p.state === "failed" ? "dismiss - the text is still in the prompt box" : "stop showing this here - it was sent"}" aria-label="dismiss">&#10005;</button>`}</div>${
+    renderText(p.text)}</div>`;
+}
+
+function addPending(k, text){
+  const list = pendingSent[k] || (pendingSent[k] = []);
+  const p = {id: ++pendingSeq, text, state: "sending", note: "",
+    base: (k === selected ? yourTurns(logItems) : 0) + list.filter(x => x.state !== "failed").length};
+  list.push(p);
+  if (k === selected){ logFollow = true; drawLog(); }
+  return p;
+}
+
+// The dispatcher's answer: sent (waiting for Claude) or not. One that was
+// not sent no longer counts towards the ones after it.
+function settleSend(k, p, r, how){
+  if (r.ok){ p.state = "sent"; p.note = how + " - waiting for Claude to respond"; }
+  else {
+    p.state = "failed"; p.note = r.error || "refused";
+    for (const x of pendingSent[k] || []) if (x.id > p.id && x.state !== "failed") x.base--;
+  }
+  if (k === selected) drawLog();
+}
+
+function dropPending(id){
+  for (const k in pendingSent) pendingSent[k] = pendingSent[k].filter(p => p.id !== id);
+  drawLog();
 }
 
 // -- following the end of the conversation ---------------------------------
@@ -2202,17 +2355,19 @@ const TASK_KINDS_SAID = [["tool", "tool call"], ["shell", "shell"], ["monitor", 
                          ["agent", "subagent"], ["wakeup", "wakeup"], ["process", "process"]];
 const LIVE_KINDS = new Set(["shell", "monitor", "agent", "wakeup"]);
 
-// Pure: {running, idle, done, extra} for row `s`, given what /api/awaited
-// said. `idle` is teammates waiting for a message; `extra` is what describes
-// the session rather than runs in it.
+// Pure: {running, idle, done, extra, mcp} for row `s`, given what
+// /api/awaited said. `idle` is teammates waiting for a message; `extra` is
+// what describes the session rather than runs in it; `mcp` (its MCP servers)
+// is drawn apart from the Task List, as a line of the tile's own summary.
 function taskList(s, tasks){
-  const out = {running: [], idle: [], done: [], extra: []};
+  const out = {running: [], idle: [], done: [], extra: [], mcp: null};
   if (!s) return out;
   if (s.doing && (RUNNING[s.status] || s.state === "working"))
     out.running.push({id: "tool", kind: "tool", label: s.doing, started: s.doing_since});
   for (const t of tasks || []){
     if (t.done) out.done.push(t);
     else if (t.idle) out.idle.push(t);
+    else if (t.kind === "mcp") out.mcp = t;
     else if (LIVE_KINDS.has(t.kind)) out.running.push(t);
     else out.extra.push(t);
   }
@@ -2295,6 +2450,21 @@ function drawTileTasks(){
       l.extra.some(t => t.kind === "hooks") ? ` <span class="st bad">hook errors</span>` : ""}</button><div class=tkl>${items}</div>`;
   box.classList.toggle("open", tasksOpen);
   if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }
+  const line = document.querySelector("#sessions .s.on .mcpl");
+  if (line){
+    const m = mcpLine(l.mcp);
+    if (line.dataset.sig !== m){ line.innerHTML = m; line.dataset.sig = m; }
+  }
+}
+// Pure: the open tile's MCP Line - its MCP servers, under the Meta Line and
+// aligned with it, in a colour of its own so it does not read as one of the
+// tasks (2026-11-16). A click opens the list, as the task row did.
+function mcpLine(t){
+  if (!t) return "";
+  const names = (t.servers && t.servers.length ? t.servers : String(t.label || "").split(", ")).filter(Boolean);
+  if (!names.length) return "";
+  return `<span class=mk data-task="${esc(t.id)}" title="MCP servers connected to this session: ${
+    esc(names.join(", "))}">MCP</span><span class=ml data-task="${esc(t.id)}">${esc(names.join(" · "))}</span>`;
 }
 const taskShown = () => !!taskView && taskView.k === selected && view === "session" && tab === "log";
 function openTask(id){
@@ -2821,7 +2991,7 @@ function goFind(dir){
   const el = [...document.querySelectorAll("#log .turn[data-i]")].find(t => +t.dataset.i === i);
   if (!el) return;
   const q = finds.q.toLowerCase();
-  el.querySelectorAll("details.cmp:not([open])").forEach(d => {
+  el.querySelectorAll("details.cmp:not([open]),details.tgroup:not([open])").forEach(d => {
     if (!q || d.textContent.toLowerCase().includes(q)){ d.open = true; opened.add(d.dataset.k); }
   });
   const m = el.querySelector("mark.cur") || el;
@@ -2985,6 +3155,7 @@ async function drawPending(){
   // A question's line in the chat says where to answer it.
   if (asked && typeof drawLog === "function") drawLog();
   $("#decide").hidden = !items.length;
+  keepQuestions();
   $("#decide").innerHTML = items.map(i => i.questions ? questionHtml(i) : `<div class="dq"><span title="${esc(i.input)}">${
     hostTag(i)}<b>${esc(folder(i.cwd))}</b> wants ${esc(i.tool)}: ${esc(i.input)}${i.reason ? " - " + esc(i.reason) : ""}</span>
     <button class="sm" data-dv="allow" data-di="${esc(i.id)}">Allow</button>
@@ -3007,21 +3178,36 @@ async function drawPending(){
 // An AskUserQuestion parked by the permission hook: the same choices the
 // terminal's dialog offers, answered here instead. "Other" is free text, as
 // in the terminal; a multi-select answer is its labels joined with ", ".
+// Like Claude Code's dialog it shows one question at a time (2026-11-16):
+// with several, a row of tabs - one per question, ☐ until answered, then a
+// Submit tab that reviews the answers - and ←/→ to move between them;
+// picking a single-select choice moves on to the next. Number keys pick a
+// choice while the card has focus.
 function questionHtml(i){
+  const n = i.questions.length, many = n > 1;
+  const tabs = !many ? "" : `<div class="qtabs" role="tablist">` +
+    `<button type="button" class="qnav" data-qstep="-1" title="previous question (←)" aria-label="previous question">&#8592;</button>` +
+    i.questions.map((q, k) => `<button type="button" class="qtab${k ? "" : " on"}" role="tab" data-qtab="${k}" title="${
+      esc(q.question)}"><span class="qbox">&#9744;</span>${esc(q.header || "Question " + (k + 1))}</button>`).join("") +
+    `<button type="button" class="qtab qsubmit" role="tab" data-qtab="${n}" title="review and submit">&#10004; Submit</button>` +
+    `<button type="button" class="qnav" data-qstep="1" title="next question (→)" aria-label="next question">&#8594;</button></div>`;
   const qs = i.questions.map((q, k) => `<div class="qq" data-k="${k}" data-multi="${q.multiSelect ? 1 : ""}"
-      data-q="${esc(q.question)}">
-    <div class="qt">${q.header ? `<span class="chip">${esc(q.header)}</span>` : ""}${esc(q.question)}${
+      data-q="${esc(q.question)}"${k ? " hidden" : ""}>
+    <div class="qt">${!many && q.header ? `<span class="chip">${esc(q.header)}</span>` : ""}${esc(q.question)}${
       q.multiSelect ? ` <small>(choose any)</small>` : ""}</div>
-    <div class="qo">${q.options.map(o => `<button type="button" data-opt="${esc(o.label)}">${
-      esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ""}</button>`).join("")}
+    <div class="qo">${q.options.map((o, m) => `<button type="button" data-opt="${esc(o.label)}"><span class="qn">${
+      q.multiSelect ? "&#9744;" : (m + 1) + "."}</span>${esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ""}</button>`).join("")}
       <input type="text" class="qother" placeholder="Other - type your own answer" aria-label="Other answer"></div></div>`).join("");
-  return `<div class="dq dqq" data-di="${esc(i.id)}"><div>${hostTag(i)}<b>${esc(folder(i.cwd))}</b> is asking you${
-    i.questions.length > 1 ? " " + i.questions.length + " questions" : ""}:</div>${qs}
-    <div class="qa"><button class="sm" data-dv="allow" data-di="${esc(i.id)}" disabled>Submit answer</button>
+  const review = !many ? "" : `<div class="qrev" data-k="${n}" hidden><div class="qt">Review your answers</div><div class="qrl"></div></div>`;
+  return `<div class="dq dqq" data-di="${esc(i.id)}" tabindex="-1"><div>${hostTag(i)}<b>${esc(folder(i.cwd))}</b> is asking you${
+    many ? " " + n + " questions" : ""}:</div>${tabs}${qs}${review}
+    <div class="qa"><button class="sm" data-dv="allow" data-di="${esc(i.id)}" disabled>Submit answer${many ? "s" : ""}</button>
     <button class="sm ghost" data-dv="pass" data-di="${esc(i.id)}" title="Show the question at the session's terminal now">Answer in terminal</button>
-    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}" title="Tell Claude you declined to answer">Decline</button></div></div>`;
+    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}" title="Tell Claude you declined to answer">Decline</button>
+    <span class="qkeys">${many ? "&#8592;/&#8594; question · " : ""}1-9 choose · Enter ${many ? "next" : "submit"}</span></div></div>`;
 }
 
+// Pure: what each question of a card has been answered with, by question.
 function questionAnswers(card){
   const out = {};
   card.querySelectorAll(".qq").forEach(qq => {
@@ -3033,24 +3219,112 @@ function questionAnswers(card){
   return out;
 }
 
+// A card's page and choices, kept across a redraw of the Decision Bar (one
+// more request arriving redraws it) by the request's id.
+const questionKept = new Map();
+function keepQuestions(){
+  questionKept.clear();
+  document.querySelectorAll("#decide .dqq").forEach(card => questionKept.set(card.dataset.di, {
+    at: +(card.dataset.at || 0),
+    qs: [...card.querySelectorAll(".qq")].map(qq => ({
+      on: [...qq.querySelectorAll("button.on")].map(b => b.dataset.opt),
+      other: qq.querySelector(".qother").value})),
+  }));
+}
+
 function wireQuestion(card){
   const submit = card.querySelector('[data-dv="allow"]');
+  const pages = [...card.querySelectorAll(".qq, .qrev")];
+  const qqs = [...card.querySelectorAll(".qq")];
+  const answered = qq => !!qq.querySelector("button.on") || !!qq.querySelector(".qother").value.trim();
   const check = () => {
-    submit.disabled = Object.keys(questionAnswers(card)).length < card.querySelectorAll(".qq").length;
+    submit.disabled = Object.keys(questionAnswers(card)).length < qqs.length;
+    qqs.forEach((qq, k) => {
+      const box = card.querySelector(`[data-qtab="${k}"] .qbox`);
+      if (box) box.innerHTML = answered(qq) ? "&#9746;" : "&#9744;";
+      if (qq.dataset.multi) qq.querySelectorAll("button[data-opt] .qn").forEach(m =>
+        m.innerHTML = m.parentNode.classList.contains("on") ? "&#9746;" : "&#9744;");
+    });
   };
-  card.querySelectorAll(".qq").forEach(qq => {
+  const show = k => {
+    const at = Math.max(0, Math.min(pages.length - 1, k));
+    card.dataset.at = at;
+    pages.forEach((p, i) => p.hidden = i !== at);
+    card.querySelectorAll("[data-qtab]").forEach(t => {
+      t.classList.toggle("on", +t.dataset.qtab === at);
+      t.setAttribute("aria-selected", +t.dataset.qtab === at ? "true" : "false");
+    });
+    const rev = card.querySelector(".qrev");
+    if (rev && !rev.hidden){
+      const got = questionAnswers(card);
+      rev.querySelector(".qrl").innerHTML = qqs.map((qq, i) => `<div class="qr" data-qtab="${i}" title="change this answer"><span class="qrq">${
+        esc(qq.dataset.q)}</span><span class="${got[qq.dataset.q] ? "qra" : "qra none"}">${
+        esc(got[qq.dataset.q] || "not answered")}</span></div>`).join("");
+    }
+  };
+  const step = d => show(+(card.dataset.at || 0) + d);
+  // The next page, or with the last one done, the answer goes.
+  const onward = () => {
+    if (+(card.dataset.at || 0) < pages.length - 1) step(1);
+    else if (!submit.disabled) submit.click();
+  };
+  card.addEventListener("click", e => {
+    const t = e.target.closest("[data-qtab]");
+    if (t){ show(+t.dataset.qtab); return; }
+    const n = e.target.closest("[data-qstep]");
+    if (n) step(+n.dataset.qstep);
+  });
+  card.addEventListener("keydown", e => {
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const inOther = e.target.classList && e.target.classList.contains("qother");
+    if (inOther){
+      if (e.key === "Enter"){ e.preventDefault(); onward(); }
+      return;
+    }
+    if (e.key === "ArrowLeft"){ e.preventDefault(); step(-1); }
+    else if (e.key === "ArrowRight"){ e.preventDefault(); step(1); }
+    else if (/^[1-9]$/.test(e.key)){
+      const page = pages[+(card.dataset.at || 0)];
+      const opts = page && page.classList.contains("qq") ? page.querySelectorAll("button[data-opt]") : [];
+      if (+e.key <= opts.length){ e.preventDefault(); opts[+e.key - 1].click(); }
+      else if (+e.key === opts.length + 1){ e.preventDefault(); page.querySelector(".qother").focus(); }
+    }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp"){
+      const page = pages[+(card.dataset.at || 0)];
+      const opts = [...page.querySelectorAll("button[data-opt], .qother, .qr")];
+      if (!opts.length) return;
+      e.preventDefault();
+      const i = opts.indexOf(document.activeElement);
+      opts[Math.max(0, Math.min(opts.length - 1, i < 0 ? 0 : i + (e.key === "ArrowDown" ? 1 : -1)))].focus();
+    }
+  });
+  qqs.forEach(qq => {
     const multi = !!qq.dataset.multi, other = qq.querySelector(".qother");
     qq.querySelectorAll("button[data-opt]").forEach(b => b.onclick = () => {
       if (!multi) { qq.querySelectorAll("button.on").forEach(x => x !== b && x.classList.remove("on")); other.value = ""; }
       b.classList.toggle("on");
       check();
+      // A single choice is the whole answer: on to the next question, as the
+      // terminal's dialog does. (One question alone waits for Submit.)
+      if (!multi && b.classList.contains("on") && pages.length > 1) onward();
     });
     other.oninput = () => {
       if (!multi && other.value.trim()) qq.querySelectorAll("button.on").forEach(x => x.classList.remove("on"));
       check();
     };
-    other.onkeydown = e => { if (e.key === "Enter" && !submit.disabled) submit.click(); };
   });
+  // Back where it was before a redraw, choices and all.
+  const kept = questionKept.get(card.dataset.di);
+  if (kept){
+    qqs.forEach((qq, k) => {
+      const q = kept.qs[k];
+      if (!q) return;
+      qq.querySelectorAll("button[data-opt]").forEach(b => b.classList.toggle("on", q.on.includes(b.dataset.opt)));
+      qq.querySelector(".qother").value = q.other || "";
+    });
+  }
+  check();
+  show(kept ? kept.at : 0);
 }
 
 // -- usage meter (the drawing is shared with the matrix) ---------------
@@ -3081,20 +3355,25 @@ foldMeter(meterOpen);
 // search, or insights. `tab` is which face of the session.
 let view = "session", tab = "log";
 
+// History and Insights are pop-ups over the window (2026-11-16), as the
+// New Session dialog is: the chat stays where it was behind them, and Esc,
+// their ✕ or a click outside them goes back to it. They used to take the
+// main area's place, with no plain way back. `view` stays "session".
+const POPUPS = {history: "#histbox", insights: "#insightbox"};
+function openPopup(which, open){
+  const box = $(POPUPS[which]);
+  if (!box || box.hidden === !open) return;
+  box.hidden = !open;
+  document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === which && open));
+  if (!open) return;
+  closeMenus();
+  for (const [w, sel] of Object.entries(POPUPS)) if (w !== which) $(sel).hidden = true;
+  if (which === "history"){ $("#hq").focus(); search(); }
+  else loadInsights();
+}
+// Kept for its callers: "session" closes both pop-ups.
 function setView(v){
-  view = v;
-  $("#sessionpane").hidden = v !== "session";
-  $("#historypane").hidden = v !== "history";
-  $("#insightpane").hidden = v !== "insights";
-  $("#headctl").hidden = v !== "session";
-  $("#ask").hidden = v !== "session";
-  if (v !== "session") closeMenus();
-  if (v === "history"){ $("#title").textContent = "past sessions"; $("#sub").textContent =
-      "search every session on this machine - titles, first prompts, and full text"; $("#hq").focus(); search(); }
-  if (v === "insights"){ $("#title").textContent = "insights"; $("#sub").textContent =
-      "estimated cost and tool failures across recent sessions"; loadInsights(); }
-  if (v === "session"){ drawHead(); refreshTab(true); }
-  document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === v));
+  for (const w of Object.keys(POPUPS)) openPopup(w, w === v);
 }
 
 function setTab(t){
@@ -3471,7 +3750,7 @@ async function search(){
     </div>`).join("") || `<div class="note">nothing found</div>`) +
     (d.complete ? "" : `<div class="note">still indexing older sessions - search again for complete results</div>`);
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
-    selected = b.dataset.open; setView("session"); });
+    openPopup("history", false); pick(b.dataset.open); });
   document.querySelectorAll("[data-rs]").forEach(b => b.onclick = async () => {
     const r = await post("/api/resume", {session_id: b.dataset.rs, where: b.dataset.w, fork: !!b.dataset.fork});
     b.parentNode.insertAdjacentHTML("beforeend", `<small>${esc(r.ok ? (r.id ? "started " + r.id : "opened") : r.error)}</small>`);
@@ -3526,10 +3805,16 @@ async function send(mode){
   const text = $("#prompt").value.trim();
   if (!s || !text || busy) return;
   busy = true; say("sending…", key(s));
-  const r = await post("/api/dispatch", {
-    session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: mode || "auto"
-  });
+  // A background send starts another session; only this one's goes in its chat.
+  const p = mode === "background" ? null : addPending(key(s), text);
+  let r;
+  try {
+    r = await post("/api/dispatch", {
+      session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: mode || "auto"
+    });
+  } catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
   busy = false;
+  if (p) settleSend(key(s), p, r, r.action === "typed" ? "typed at its prompt" : "sent");
   if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
   else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
@@ -3543,8 +3828,12 @@ async function sendTyped(){
   const text = $("#prompt").value.trim();
   if (!s || !text || busy) return;
   busy = true; say("typing…", key(s));
-  const r = await post("/api/typed", {session_id: key(s), prompt: text});
+  const p = addPending(key(s), text);
+  let r;
+  try { r = await post("/api/typed", {session_id: key(s), prompt: text}); }
+  catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
   busy = false;
+  settleSend(key(s), p, r, "typed at its prompt");
   if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
   else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
@@ -3663,46 +3952,74 @@ async function dictate(){
   if (stopWanted){ stopWanted = false; rec.stop(); }
 }
 
-// -- starting a project that has no session -----------------------------
-// The sidebar lists sessions, so without this a project nobody is currently
-// working in would be unreachable - which the old palette could do.
+// -- the New Session dialog --------------------------------------------------
+// From the sidebar's ☰ menu (2026-11-16, in place of the picker that opened
+// in the sidebar): any project in the catalogue - including one nobody is
+// working in now, which the sidebar would not otherwise reach - and the
+// permission mode the session starts in. A project on this machine opens in
+// a new terminal tab (/api/new) and is selected here once it starts; one on
+// a remote host has no terminal here, so it starts as a background session
+// there (/api/dispatch), in the mode Settings gives background sessions.
 let projects = [], psel = 0;
+const MODE_KEY = "imperatorium.newMode";
 
-function drawProjects(){
-  const q = $("#find").value.trim().toLowerCase();
+// Pure: the catalogue entries matching `q`, at most 40.
+function projectHits(list, q){
+  q = String(q || "").trim().toLowerCase();
   const norm = s => String(s).toLowerCase().replace(/[-_\/]+/g," ");
-  const hit = projects.filter(p => !q || norm(p.name).includes(q) ||
-                                   norm(p.name).replace(/ /g,"").includes(q.replace(/ /g,"")))
-                      .slice(0, 40);
+  const nq = norm(q);
+  return list.filter(p => !q || norm(p.name).includes(nq) || norm(p.path || "").includes(nq) ||
+                          norm(p.name).replace(/ /g,"").includes(q.replace(/ /g,""))).slice(0, 40);
+}
+function drawProjects(){
+  const hit = projectHits(projects, $("#find").value);
   psel = Math.min(psel, Math.max(0, hit.length - 1));
   $("#projects").innerHTML = hit.map((p,i) =>
-    `<div class="p${i===psel?" on":""}" data-n="${esc(p.name)}">${esc(p.name)}
+    `<div class="p${i===psel?" on":""}" role=option aria-selected="${i===psel}" data-pi="${i}">${esc(p.name)}${
+      p.host ? ` <span class="badge">${esc(p.host)}</span>` : ""}
       <small>${esc(p.path)}</small></div>`).join("") ||
     `<div class="note">no match</div>`;
-  document.querySelectorAll(".p").forEach((el,i) => {
-    el.onclick = () => { psel = i; startProject(hit[i]); };
-  });
+  const on = $("#projects").querySelector(".p.on");
+  if (on) on.scrollIntoView({block: "nearest"});
+  const p = hit[psel];
+  $("#nstart").disabled = !p;
+  $("#nbnote").textContent = !p ? "" : p.host
+    ? "on " + p.host + ": starts as a background session there, in the mode Settings gives background sessions"
+    : "";
+  $("#nmode").disabled = !!(p && p.host);
   return hit;
 }
-
-// By path, not name: two folders can share a name (bookoferrantpages on Y:
-// and on C:), and a name resolves to whichever the catalogue lists first.
 async function startProject(p){
-  const text = $("#prompt").value.trim();
-  $("#say").textContent = "starting " + p.name + "\u2026";
-  const r = await post("/api/dispatch", {
-    project: p.name, path: p.path, host: p.host || null,
-    prompt: text || "Ready when you are.", confirm: true,
-    mode: text ? "auto" : "launch"
-  });
-  $("#say").textContent = r.ok ? outcome(r) : (r.error || "refused");
-  if (r.ok){ clearPrompt(); togglePicker(false); }
+  if (!p) return;
+  const mode = $("#nmode").value;
+  try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
+  if (p.host){
+    // No terminal here for a remote host: a background session over there.
+    const text = $("#prompt").value.trim();
+    $("#say").textContent = "starting " + p.name + " on " + p.host + "…";
+    const r = await post("/api/dispatch", {project: p.name, path: p.path, host: p.host,
+      prompt: text || "Ready when you are.", confirm: true, mode: "background"});
+    $("#say").textContent = r.ok ? outcome(r) : (r.error || "refused");
+    if (r.ok){ if (text) clearPrompt(); openNew(false); }
+    return;
+  }
+  $("#say").textContent = "starting " + p.name + (mode !== "default" ? " in " + mode + " mode" : "") + "…";
+  const r = await post("/api/new", {cwd: p.path, permission_mode: mode});
+  if (!r.ok){ $("#say").textContent = r.error || "refused"; return; }
+  follow(r.session_id);
+  openNew(false);
+  $("#say").textContent = "opened a new session in " + p.name + " - selecting it once it starts";
 }
-
-function togglePicker(show){
-  const open = show === undefined ? $("#picker").hidden : show;
-  $("#picker").hidden = !open;
-  if (open){ $("#find").value = ""; psel = 0; drawProjects(); $("#find").focus(); }
+async function openNew(show){
+  const open = show === undefined ? $("#newbox").hidden : show;
+  $("#newbox").hidden = !open;
+  if (!open) return;
+  closeMenus();
+  try { $("#nmode").value = localStorage.getItem(MODE_KEY) || "default"; } catch (e) {}
+  if (!$("#nmode").value) $("#nmode").value = "default";
+  $("#find").value = ""; psel = 0; drawProjects(); $("#find").focus();
+  try { projects = (await get("/api/projects")).projects || []; } catch (e) {}
+  if (!$("#newbox").hidden) drawProjects();
 }
 
 // -- chat matrix ---------------------------------------------------------
@@ -3779,22 +4096,31 @@ $("#updbtn").onclick = () => {
 showUpdate();
 setInterval(showUpdate, 10 * 60 * 1000);
 
-$("#new").onclick = async () => {
-  if ($("#picker").hidden){
-    try { projects = (await get("/api/projects")).projects || []; } catch(e){}
-  }
-  togglePicker();
-};
+$("#new").onclick = () => openNew(true);
 $("#find").addEventListener("input", () => { psel = 0; drawProjects(); });
-$("#find").addEventListener("keydown", e => {
-  const hit = drawProjects();
+$("#newbox").addEventListener("keydown", e => {
+  if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); openNew(false); return; }
+  if (e.target.id === "nmode" || e.target.tagName === "BUTTON") return;
+  const hit = projectHits(projects, $("#find").value);
   if (e.key === "ArrowDown"){ e.preventDefault(); psel = Math.min(psel+1, hit.length-1); drawProjects(); }
   else if (e.key === "ArrowUp"){ e.preventDefault(); psel = Math.max(psel-1, 0); drawProjects(); }
-  else if (e.key === "Enter"){ e.preventDefault(); if (hit[psel]) startProject(hit[psel]); }
-  else if (e.key === "Escape"){ e.preventDefault(); togglePicker(false); }
+  else if (e.key === "Enter"){ e.preventDefault(); startProject(hit[psel]); }
 });
+$("#projects").addEventListener("click", e => {
+  const el = e.target.closest("[data-pi]");
+  if (!el) return;
+  psel = +el.dataset.pi; drawProjects();
+});
+$("#projects").addEventListener("dblclick", e => {
+  const el = e.target.closest("[data-pi]");
+  if (el) startProject(projectHits(projects, $("#find").value)[+el.dataset.pi]);
+});
+$("#nstart").onclick = () => startProject(projectHits(projects, $("#find").value)[psel]);
+$("#ncancel").onclick = () => openNew(false);
+$("#newbox").addEventListener("click", e => { if (e.target.id === "newbox") openNew(false); });
 
 $("#mic").onclick = dictate;
+$("#stop").onclick = () => { stopTurn(); };
 let f9Held = false;
 document.addEventListener("keydown", e => {
   if (e.key !== "F9") return;
@@ -3865,6 +4191,13 @@ $("#shape").addEventListener("change", e => {
     drawLog();
     return;
   }
+  if (e.target.matches("[data-group]")){
+    groupTools = e.target.checked;
+    try { localStorage.setItem("imperatorium.group", groupTools ? "1" : "0"); } catch (x) {}
+    drawShape();
+    drawLog();
+    return;
+  }
   const cat = e.target.dataset.shape;
   if (!cat) return;
   if (e.target.value === "full") delete shape[cat]; else shape[cat] = e.target.value;
@@ -3872,15 +4205,75 @@ $("#shape").addEventListener("change", e => {
   drawShape();
   drawLog();
 });
-$("#log").addEventListener("click", e => {
-  // A marked path (Settings > Highlighting) is copied by a click, unless the
-  // click ended a selection.
+// -- paths in the chat -------------------------------------------------------
+// A click on a marked path (Settings > Highlighting) opens the Path Menu, as
+// a click on one does in Claude Code's terminal (2026-11-16): Open (with the
+// program the file's type is associated with), Open folder (the folder that
+// holds it, with it selected) or Copy path. The dispatcher resolves a
+// relative path against the session's folder; a remote session's files are
+// not on this machine, so it can only copy. A click that ended a selection
+// is the selection's.
+function pathClicked(e){
   const pth = e.target.closest && e.target.closest(".pth");
-  if (pth && document.documentElement.classList.contains(pth.classList.contains("tp") ? "hl-tools" : "hl-prose")
-      && !String(getSelection() || "")){
-    const p = pth.dataset.copy || pth.textContent;
-    navigator.clipboard.writeText(p).then(() => { $("#say").textContent = "copied: " + p; }, () => {});
+  if (!pth || String(getSelection() || "")) return false;
+  if (!document.documentElement.classList.contains(pth.classList.contains("tp") ? "hl-tools" : "hl-prose")) return false;
+  e.preventDefault();
+  openPathMenu(pth.dataset.copy || pth.textContent, e.clientX, e.clientY);
+  return true;
+}
+let pathFor = null;
+function openPathMenu(p, x, y){
+  const s = current(), remote = !s || !!s.remote;
+  pathFor = {path: p, session: s ? key(s) : ""};
+  const m = $("#pathmenu");
+  m.innerHTML = `<div class="cap" title="${esc(p)}">${esc(p)}</div>` +
+    `<button data-pact="open"${remote ? " disabled" : ""} title="${remote ? "the file is on " + esc(s && s.host || "another machine")
+      : "open it with the program its type is associated with"}">Open</button>` +
+    `<button data-pact="reveal"${remote ? " disabled" : ""} title="${remote ? "the file is on " + esc(s && s.host || "another machine")
+      : "open the folder it is in, with it selected"}">Open folder</button>` +
+    `<button data-pact="copy">Copy path</button>`;
+  m.hidden = false;
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(4, Math.min(x, innerWidth - w - 4)) + "px";
+  m.style.top = Math.max(4, y + h + 8 > innerHeight ? y - h - 4 : y + 4) + "px";
+  const first = m.querySelector("button:not([disabled])");
+  if (first) first.focus();
+}
+function closePathMenu(){ $("#pathmenu").hidden = true; pathFor = null; }
+$("#pathmenu").addEventListener("click", async e => {
+  const b = e.target.closest("[data-pact]");
+  if (!b || !pathFor || b.disabled) return;
+  const {path, session} = pathFor, how = b.dataset.pact;
+  closePathMenu();
+  if (how === "copy"){
+    navigator.clipboard.writeText(path).then(() => { $("#say").textContent = "copied: " + path; }, () => {});
+    return;
   }
+  let r;
+  try { r = await post("/api/open_path", {path, session_id: session, reveal: how === "reveal"}); }
+  catch (x) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  $("#say").textContent = r.ok ? (how === "reveal" ? "shown in its folder: " : r.how === "edit" ? "opened in an editor: " : "opened: ") + (r.path || path)
+    : (r.error || "could not open it");
+});
+$("#pathmenu").addEventListener("keydown", e => {
+  const bs = [...$("#pathmenu").querySelectorAll("button:not([disabled])")];
+  const i = bs.indexOf(document.activeElement);
+  if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); closePathMenu(); }
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp"){
+    e.preventDefault();
+    if (bs.length) bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length].focus();
+  }
+});
+document.addEventListener("pointerdown", e => {
+  if (!$("#pathmenu").hidden && !e.target.closest("#pathmenu")) closePathMenu();
+}, true);
+window.addEventListener("blur", closePathMenu);
+$("#tvtext").addEventListener("click", pathClicked);
+
+$("#log").addEventListener("click", e => {
+  if (pathClicked(e)) return;
+  const un = e.target.closest && e.target.closest("[data-unpend]");
+  if (un){ dropPending(+un.dataset.unpend); return; }
   const b = e.target.closest && e.target.closest("[data-earlier]");
   if (b) showEarlier(b.dataset.earlier === "all");
   if (e.target.closest && e.target.closest("[data-newest]")) showNewest();
@@ -3907,7 +4300,7 @@ if (document.fonts) document.fonts.ready.then(() => { if (logFollow) showNewest(
 // `toggle` does not bubble; listen on the way down.
 $("#log").addEventListener("toggle", e => {
   const d = e.target;
-  if (!d.matches || !d.matches("details.cmp")) return;
+  if (!d.matches || !d.matches("details.cmp,details.tgroup")) return;
   if (d.open) opened.add(d.dataset.k); else opened.delete(d.dataset.k);
   // Opening a block is not new text: the view stays put, and if that pushed
   // the end out of view the log stops following, as if scrolled.
@@ -3920,8 +4313,15 @@ document.addEventListener("keydown", e => {
   if (e.key === "ArrowDown"){ e.preventDefault(); jump(1); }
 });
 $("#prompt").addEventListener("input", noteDraft);
-document.querySelectorAll("[data-view]").forEach(b => b.onclick = () =>
-  setView(view === b.dataset.view ? "session" : b.dataset.view));
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => openPopup(b.dataset.view, true));
+for (const [which, sel] of Object.entries(POPUPS)){
+  $(sel).addEventListener("click", e => {
+    if (e.target.id === sel.slice(1) || e.target.closest("[data-popclose]")) openPopup(which, false);
+  });
+  $(sel).addEventListener("keydown", e => {
+    if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); openPopup(which, false); }
+  });
+}
 let hqTimer;
 $("#hq").addEventListener("input", () => { clearTimeout(hqTimer); hqTimer = setTimeout(search, 350); });
 $("#days").onchange = loadInsights;
@@ -4043,10 +4443,18 @@ document.addEventListener("keydown", e => {
   const k = (e.key || "").toLowerCase(), ctl = (e.ctrlKey || e.metaKey) && !e.altKey;
   if (ctl && k === "k"){ e.preventDefault(); openJump($("#jumpbox").hidden); return; }
   if (ctl && k === "f" && view === "session" && tab === "log"){ e.preventDefault(); $("#cfind").focus(); $("#cfind").select(); return; }
-  if (!$("#jumpbox").hidden) return;
+  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden) return;
   if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)){ e.preventDefault(); pick(visibleKeys()[+e.key - 1]); return; }
   if (e.altKey && !e.ctrlKey && k === "n"){ e.preventDefault(); goWaiting(); return; }
-  if (typing(e)){ if (e.key === "Escape" && e.target.id === "prompt") e.target.blur(); return; }
+  // Esc in the prompt box stops a working session's turn, as at its
+  // terminal; with nothing to stop it leaves the box, as before.
+  if (typing(e)){
+    if (e.key === "Escape" && e.target.id === "prompt"){
+      if (view === "session" && canStop(current())){ e.preventDefault(); stopTurn(); }
+      else e.target.blur();
+    }
+    return;
+  }
   if (e.ctrlKey || e.altKey || e.metaKey) return;
   if (k === "j"){ e.preventDefault(); stepSession(1); }
   else if (k === "k"){ e.preventDefault(); stepSession(-1); }

@@ -470,5 +470,5 @@ Before the first stable (0.4.0):
 - [x] `state_version` and forward migrations with backup (checked by `serve --live`; no migrations yet)
 - [x] `update --rollback` and `update --version` (rollback restores the main binary; the voice worker stays as it is)
 - [x] Build provenance attestations; actions pinned by SHA
-- [ ] Windows code signing - signing works on this machine and `release.yml` signs with it (2026-11-16, Azure Artifact Signing; see Code signing); Azure app, federated credential, role, `release` environment and variables set up 2026-11-16; left: a preview tag to see it sign on the runner
+- [x] Windows code signing (2026-11-16, Azure Artifact Signing; see Code signing): first signed on the runner for `v0.4.0-preview.2`
 - [x] macOS marked experimental in notes and installer

@@ -17,6 +17,36 @@ const TERMINALS: &[&str] = &["windowsterminal"];
 const SHELLS: &[&str] = &["pwsh", "powershell", "cmd", "bash", "sh", "zsh", "fish"];
 pub const CTRL_C: &str = "\u{3}";
 pub const ENTER: &str = "\r";
+/// Esc: at a working session's prompt, it stops the turn.
+pub const ESC: &str = "\u{1b}";
+/// A second Esc this soon after one would open Claude Code's rewind menu.
+pub const ESC_APART: Duration = Duration::from_secs(3);
+
+/// Pure: whether an Esc may go to `pid` now, given when one last went.
+pub fn esc_allowed(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|l| now.duration_since(l) >= ESC_APART)
+}
+
+/// Press Esc once in the console of `pid`, never twice within ESC_APART:
+/// Esc Esc is the terminal's rewind, not a harder stop. Err: why not.
+pub fn press_escape(pid: u32) -> Result<(), String> {
+    type Pressed = Option<std::collections::HashMap<u32, Instant>>;
+    static LAST: std::sync::Mutex<Pressed> = std::sync::Mutex::new(None);
+    let now = Instant::now();
+    {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let map = last.get_or_insert_with(Default::default);
+        if !esc_allowed(map.get(&pid).copied(), now) {
+            return Err("already asked to stop a moment ago".into());
+        }
+        map.insert(pid, now);
+    }
+    if type_keys(pid, &[ESC]) {
+        Ok(())
+    } else {
+        Err("could not reach its terminal".into())
+    }
+}
 
 fn alive(pid: u32) -> bool {
     crate::procs::process_table().iter().any(|p| p.0 == pid)
@@ -55,6 +85,7 @@ pub fn type_keys(pid: u32, chunks: &[&str]) -> bool {
         .map(|c| match *c {
             CTRL_C => "<ctrl-c>".to_string(),
             ENTER => "<enter>".to_string(),
+            ESC => "<esc>".to_string(),
             other => other.to_string(),
         })
         .collect();
@@ -142,6 +173,7 @@ pub fn type_into_main(args: &[String]) -> i32 {
         .map(|a| match a.as_str() {
             "<ctrl-c>" => CTRL_C.to_string(),
             "<enter>" => ENTER.to_string(),
+            "<esc>" => ESC.to_string(),
             other => other.to_string(),
         })
         .collect();
@@ -175,6 +207,7 @@ pub fn type_into_main(args: &[String]) -> i32 {
                 let (vk, state) = match unit {
                     0x0D => (0x0D, 0),
                     0x03 => (0x43, 0x0008), // 'C', LEFT_CTRL_PRESSED
+                    0x1B => (0x1B, 0),      // VK_ESCAPE
                     _ => (0, 0),
                 };
                 for down in [1, 0] {
@@ -213,6 +246,14 @@ pub fn type_into_main(_args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn esc_is_never_pressed_twice_in_a_row() {
+        let t = Instant::now();
+        assert!(esc_allowed(None, t));
+        assert!(!esc_allowed(Some(t), t + Duration::from_millis(500)));
+        assert!(esc_allowed(Some(t), t + ESC_APART));
+    }
 
     #[test]
     fn tab_shell_only_under_a_terminal() {

@@ -192,3 +192,46 @@ fn a_check_needs_the_token() {
     let (code, _) = mod_post(&rig.d, "/api/mod/check", &json!({"tool_name": "Bash"}), None);
     assert_eq!(code, 403);
 }
+
+// ------------------------------------------------------------------- Stop
+// The window's Stop (Esc there): through a mod that can, the next beat's
+// reply carries it and the beat after says what came of it. (The console
+// path presses a real Esc, so it is not driven here: these sessions' pid is
+// the test's own.)
+
+fn stop(rig: &Rig, sid: &str) -> (u16, Value) {
+    let token = rig.d.window_token();
+    rig.d.post_window("/api/stop", &json!({"session_id": sid}), &token)
+}
+
+#[test]
+fn stop_goes_through_a_mod_that_can_and_says_what_came_of_it() {
+    let rig = Rig::start();
+    rig.live(SID, "busy", json!({}));
+    beat(&rig, SID, json!({"busy": true, "mod_version": "0.3.0"}));
+    let (code, out) = stop(&rig, SID);
+    assert_eq!(code, 200);
+    assert_eq!((out["ok"].clone(), out["via"].clone()), (json!(true), json!("mod")), "{out}");
+    let id = out["stop_id"].as_str().unwrap().to_string();
+    let reply = beat(&rig, SID, json!({"busy": true, "mod_version": "0.3.0"}));
+    assert_eq!(reply["stop"], json!(id), "{reply}");
+    beat(&rig, SID, json!({"busy": false, "mod_version": "0.3.0",
+                           "stopped": [{"id": id, "outcome": "aborted"}]}));
+    let (_, got) = rig.d.get(&format!("/api/stop?session={SID}"));
+    assert_eq!(got["result"]["outcome"], json!("aborted"), "{got}");
+    // Answered: not handed out again.
+    assert_eq!(beat(&rig, SID, json!({"mod_version": "0.3.0"}))["stop"], Value::Null);
+}
+
+#[test]
+fn stop_is_refused_with_nothing_running_and_from_outside_the_window() {
+    let rig = Rig::start();
+    rig.live(SID, "idle", json!({}));
+    beat(&rig, SID, json!({"busy": false, "mod_version": "0.3.0"}));
+    let (_, out) = stop(&rig, SID);
+    assert_eq!(out["ok"], json!(false), "{out}");
+    assert!(out["error"].as_str().unwrap().contains("not working"), "{out}");
+    let (code, _) = rig.d.post("/api/stop", &json!({"session_id": SID}));
+    assert_eq!(code, 403);
+    assert_eq!(beat(&rig, SID, json!({}))["stop"], Value::Null);
+}

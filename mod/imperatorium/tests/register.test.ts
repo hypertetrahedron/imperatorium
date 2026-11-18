@@ -175,3 +175,42 @@ test('a dispatcher that does not answer in time leaves the ask standing', async 
 
   expect((await pending).decision).toBe('ask')
 })
+
+test('a stop from the window ends the running turn and says so', async ($, on) => {
+  const clock = mock.clock(on)
+  let asked = 0
+  const w = world(on, (path, body) => {
+    if (path !== '/api/mod/beat') return {}
+    // Asked while the turn runs; offered again, it is not stopped twice.
+    if (body.busy && asked < 2) { asked += 1; return { ok: true, stop: 'st1' } }
+    return { ok: true }
+  })
+  const aborted: string[] = []
+  on('turn.abort', (_, e) => {
+    aborted.push(e.turnId)
+    return { value: undefined }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'go', turnId: 't-42' })
+  await clock.advance(2000)
+  await clock.advance(2000)
+
+  expect(aborted).toEqual(['t-42'])
+  const said = w.sent.filter(s => s.path === '/api/mod/beat')
+    .flatMap(s => (s.body.stopped as { id: string; outcome: string }[] | undefined) ?? [])
+  expect(said).toEqual([{ id: 'st1', outcome: 'aborted' }])
+})
+
+test('a stop with nothing running is said to be idle', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = world(on, path => (path === '/api/mod/beat' ? { ok: true, stop: 'st2' } : {}))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  await clock.advance(2000)
+
+  const said = w.sent.filter(s => s.path === '/api/mod/beat')
+    .flatMap(s => (s.body.stopped as { id: string; outcome: string }[] | undefined) ?? [])
+  expect(said).toEqual([{ id: 'st2', outcome: 'idle' }])
+})

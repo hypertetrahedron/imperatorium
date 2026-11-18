@@ -24,9 +24,10 @@ the Chat Matrix; everything else is filled in by the script).
 - **Sidebar Header** `#side h1` (no title text: the list speaks for itself)
   - Settings Button `#setbtn` (gear; opens the Settings window)
   - Matrix Button `#matrixbtn`
-  - New Button `#new`
-  - History Button `[data-view=history]`
-  - Insights Button `[data-view=insights]`
+  - **Sidebar Menu** `#sidemenu` (☰; 2026-11-16, in place of three buttons):
+    - New Session Item `#new` (opens the New Session Dialog)
+    - History Item `[data-view=history]` (opens the History Pop-up)
+    - Insights Item `[data-view=insights]` (opens the Insights Pop-up)
 - **Usage Meter** `#meter.meters`: Limit Bars (`.row`, in one grid `.rows` so
   every bar is the same length), Reset Tick, Percentage (`.pct`), Meter Tip
   (`.tip`, on hover: the window's name, use, reset time, time elapsed),
@@ -47,9 +48,6 @@ the Chat Matrix; everything else is filled in by the script).
 - **Sidebar Tools** `#tools`
   - Session Filter `#filter`
   - Group Selector `#group`
-- **Project Picker** `#picker`
-  - Project Search `#find`
-  - Project List `#projects`
 - **Session List** `#sessions`
   - Group Header `.g`
   - Archive Fold `#archfold`
@@ -58,30 +56,43 @@ the Chat Matrix; everything else is filled in by the script).
     Tag (`.nowait`), Dot Row (`.dots`)
   - Family Children `.kids`
   - **Session Tile** `.s`
-    - Tile Actions `.acts`: Pin, Close, Unarchive, Dismiss (archived, nothing running)
+    - Tile Actions `.acts`: Pin, Close, Unarchive, Dismiss (archived, nothing running);
+      in the open tile's top right corner (end of its Name Line), on no closed tile
     - Name Line `.n`: App Icon (or VS Code Icon), Worktree Icon, Pin Star, New Badge
     - Window Title Line `.w`
     - Doing Line `.d`
     - Meta Line `.m`: State Dot, State Label, Age, Host, PR Badge,
       Context Badge, Queued Badge, Cold Badge
+    - **MCP Line** `.mcpl` (open tile only): MCP Mark `.mk` and the server
+      names `.ml`, aligned with the Meta Line in its own colour (`--mcp`),
+      above the Task List so it is not read as a task
+    - **Task List** `.tk`: Tasks Header `.tkh`, Task Rows `.tki` (Kind Mark
+      `.k`, plain text; Fresh-Output Dot `.live`, pulses)
 
 **2. Main Area** `#main`
 - **Decision Bar** `#decide`: Decision Rows (`.dq`) with Allow / Deny;
   a parked AskUserQuestion is a Question Card (`.dqq`) instead - one
-  Question (`.qq`) per question with Option buttons (`.qo`) and an Other
-  box (`.qother`), then Submit answer / Answer in terminal / Decline (`.qa`)
+  Question (`.qq`) per question with Option buttons (`.qo`, numbered
+  `.qn`) and an Other box (`.qother`), then Submit answer / Answer in
+  terminal / Decline (`.qa`) and Key Hints (`.qkeys`). With several
+  questions one shows at a time: Question Tabs (`.qtabs`: ←/→ `.qnav`, a
+  Question Tab `.qtab` each, the Submit Tab `.qsubmit`) and, on the Submit
+  Tab, the Answer Review (`.qrev`)
 - **Session Header** `#head`: one row, the title on the left and the
   Header Controls on the right
   - Session Title `#title`
-  - Session Subtitle `#sub`
+  - Session Subtitle `#sub`: Branch Badge (`.hbr`), Worktree Tag (`.hwt`,
+    or "main checkout"), then the window title and folder
   - **Header Controls** `#headctl`, left to right:
     - Tab Picker `#tabpick`: Conversation, Changes, Activity, Worktrees
     - **New / Fork Menu** `#launch`: New, New+close, Fork, Fork in bg
     - **View Menu** `#viewmenu`: Copy Resume Button (`#copybtn`), Current
-      Prompt Button (`#curbtn`), Display Shapes (`#shape`), and under them
-      Display Times (`[data-times]`, off by default: each block of the chat
-      shows when it was written, as a Block Time `.bt`). Its button is lit
-      while any kind of text is not shown in full
+      Prompt Button (`#curbtn`), Display Shapes (`#shape`) with Group Tool
+      Calls (`[data-group]`, off by default) under the Tool results row,
+      and under them Display Times (`[data-times]`, off by default: each
+      block of the chat shows when it was written, as a Block Time `.bt`).
+      Its button is lit while any kind of text is not shown in full or tool
+      calls are grouped
     - Find Bar `#findbar` (below), shown on the Conversation tab only
     - Session Actions `#acts`: the ones that stay buttons - Resume,
       Resume in bg, Show Window. Between the two pairs of arrows, to keep
@@ -93,10 +104,23 @@ the Chat Matrix; everything else is filled in by the script).
     - Card Body `#curbody`
   - **Conversation Log** `#log`
     - Turn `.turn`, headed by its Speaker Line `.who`
+    - Prompt Band: a turn of yours (`.turn.you-turn`) under
+      `html.hl-prompts` (Settings > Highlighting > Your prompts), in
+      `--hl-prompt` (Settings > Highlight colours > Your prompts)
+    - Sent Prompt `.turn.pend` (`.sending`, `.sent`, `.failed`): a prompt
+      sent from the window, at the end of the log until the conversation
+      has it, with its Sent Note `.pnote` and a dismiss button
+      (`[data-unpend]`) once it has an answer
     - Thinking Block `.think`
     - Tool Line `.tool`
     - Collapsed Block `details.cmp`
+    - Tool Group `details.tgroup` (View > Group Tool Calls): a run of tool
+      calls and results, collapsed to one line (count, tools, failures);
+      its blocks inside in `.gb`
     - Compaction Marker `details.compact`
+    - Path `.pth`: a click opens the Path Menu (below)
+    - Question Record `.askq`: with several questions, Record Tabs
+      (`.asktabs`) and one Record Page (`.askp`) at a time
     - Earlier Button `.earlier`
     - Via-Inbox Tag `.via`
     - Show Most Recent Button `.newest button`: floats at the bottom of
@@ -110,10 +134,11 @@ the Chat Matrix; everything else is filled in by the script).
   - **Worktrees Panel** `#worktrees`
     - Worktree Card `.card`
     - Worktree Diff `.wdiff`
-- **History Pane** `#historypane`
+- **History Pop-up** `#histbox` (over the window; Esc, ✕ `[data-popclose]` or a
+  click outside returns to the chat), holding the History Pane `#historypane`
   - History Search `#hq`
   - History Results `#hits`, made of History Hits (`.hit`)
-- **Insights Pane** `#insightpane`
+- **Insights Pop-up** `#insightbox`, likewise, holding the Insights Pane `#insightpane`
   - Cost Card `#costs`: Cost Chart (`svg.chart`) and Cost Tables
   - Tool Failures Card `#errs`
 - In the Header Controls (above), from what was the Chat Strip:
@@ -128,6 +153,8 @@ the Chat Matrix; everything else is filled in by the script).
   - **Send Bar** `#bar`
     - **Send Split** `.split`: Send `#send` and the Send Menu `#sendmore`
       (its ▾), which holds Send As Typed `#sendtyped`
+    - Stop `#stop` (only while the session works; Esc in the Prompt Box
+      does the same)
     - Queue `#queue`, Background `#bg`, Dictate `#mic`
     - Say Line `#say`
   - **Heavy Warning** `#heavy`
@@ -147,6 +174,15 @@ opens from the Prompt Box
 - Phrase Filter `#qq`
 - Phrase List `#qlist`, made of Phrase Rows (`.ji`, numbered `.qn`)
 - Key Hints `.keys`
+
+**5. New Session Dialog** `#newbox`: from the Sidebar Menu
+- Project Search `#find`
+- Project List `#projects`, made of Project Rows (`.p`)
+- Permission Mode `#nmode`
+- Remote Note `#nbnote`, Start `#nstart`, Cancel `#ncancel`, Key Hints `.keys`
+
+**6. Path Menu** `#pathmenu`: a click on a Path in the chat - the path
+(`.cap`), then Open, Open folder, Copy path (`[data-pact]`)
 
 ## Chat Matrix window
 

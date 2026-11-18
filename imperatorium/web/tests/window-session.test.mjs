@@ -151,7 +151,10 @@ describe("SessionTree", () => {
     assertIn(".s.on .why{display:none}", CSS);
     assertNotIn(":not(:hover) :is(.m", CSS);
     assertNotIn(".s:hover .acts", CSS);
-    assertIn('<span class="acts">${acts}</span></div>`;', SCRIPT);
+    // 2026-11-16: pin and close in the open tile's first line (its top right
+    // corner), and on no closed tile.
+    assertIn('open ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl', SCRIPT);
+    assertNotIn('prBadge(s.pr)}</span><span class="acts">', SCRIPT);
   });
 
   it("tile x closes a running local session rather than archiving", () => {

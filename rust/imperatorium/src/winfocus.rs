@@ -124,6 +124,11 @@ mod win {
         hwnd != 0 && unsafe { IsWindow(h(hwnd)) } != 0
     }
 
+    /// The window in front now (0 when none).
+    pub fn foreground() -> isize {
+        unsafe { GetForegroundWindow() as isize }
+    }
+
     /// winfocus._raise: SetForegroundWindow, borrowing the foreground
     /// thread's input queue when Windows refuses a background process (the
     /// dispatcher always is one). Detached again at once: two threads left
@@ -169,12 +174,15 @@ mod win {
     pub fn is_window(_hwnd: isize) -> bool {
         false
     }
+    pub fn foreground() -> isize {
+        0
+    }
     pub fn raise(_hwnd: isize) -> bool {
         false
     }
 }
 
-pub use win::{owner_pid, titled_windows};
+pub use win::{foreground, owner_pid, titled_windows};
 
 /// winfocus.focus_hwnd: raise one specific window; true when it came forward.
 pub fn focus_hwnd(hwnd: isize) -> bool {

@@ -565,6 +565,12 @@ Both endpoints want the token the dispatcher keeps in its state folder
 an older Claude Code, a remote host - is reached through its socket, as
 before. The status panel's **link** row says which a session uses.
 
+The window's **Stop** (or Esc in its prompt box) ends a working session's
+turn as Esc at its terminal does: through the mod (0.3.0 and later) with
+`$.turn.abort`, the beat's reply carrying the request and the next beat
+saying what came of it; for a session without one, Esc is pressed in its
+console, never twice within 3 s (Esc Esc there opens the rewind menu).
+
 `claude plugin validate mod/imperatorium` and `claude plugin test
 mod/imperatorium` check and test it. `IMPERATORIUM_MOD_ENDPOINT` and
 `IMPERATORIUM_MOD_TOKEN_FILE` point one session's mod at another dispatcher,

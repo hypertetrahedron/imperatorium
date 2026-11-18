@@ -103,13 +103,15 @@ describe("TileTasks", () => {
       "                      {id: 'b0', kind: 'shell', label: 'old', done: true, ended: 1},",
       "                      {id: 'mcp', kind: 'mcp', label: 'chrome'}]);",
       "process.stdout.write(JSON.stringify([l.running.map(t => [t.id, t.kind]),",
-      " l.done.map(t => t.id), l.extra.map(t => t.id),",
+      " l.done.map(t => t.id), l.extra.map(t => t.id), l.mcp && l.mcp.id,",
       " taskSummary(l.running), taskSummary([])]));"));
-    const [running, done, extra, summary, empty] = got;
+    const [running, done, extra, mcp, summary, empty] = got;
     assert.deepEqual(running, [["tool", "tool"], ["b1", "shell"], ["a1", "agent"], ["processes", "process"]]);
     // What ended stays out of the running list, under its own row.
     assert.deepEqual(done, ["b0"]);
-    assert.deepEqual(extra, ["mcp"]);
+    // MCP servers are the tile's own line, not one of its tasks (2026-11-16).
+    assert.deepEqual(extra, []);
+    assert.equal(mcp, "mcp");
     // Every running row is counted, the processes row by how many it is.
     assert.equal(summary, "1 tool call · 1 shell · 1 subagent · 2 processes");
     assert.equal(empty, "none running");
@@ -137,7 +139,8 @@ describe("TileTasks", () => {
       "const RUNNING = {busy: 1, shell: 1}; const age = () => '';\n",
       "const localStorage = {getItem: () => null, setItem() {}};\n",
       "const box = {classList: {toggle() {}}, dataset: {}, innerHTML: ''};\n",
-      "const document = {querySelector: () => box};\n",
+      "const mcpl = {dataset: {}, innerHTML: ''};\n",
+      "const document = {querySelector: q => q.includes('mcpl') ? mcpl : box};\n",
       "let selected = 'a', procFor = 'a', procTasks = ", j(tasks), ";\n",
       "const current = () => ({status: 'idle'});\n",
       between(SCRIPT, "let tasksOpen = false", "const taskShown"),
@@ -167,6 +170,20 @@ describe("TileTasks", () => {
     assertIn("Idle Agents (1)", html);
     assertLess(html.indexOf('data-task="w1"'), html.indexOf("Idle Agents"));
     assertIn("Tasks · 2 subagents", html);
+  });
+
+  it("MCP servers are a line of the tile's own, not a task row", () => {
+    // 2026-11-16 (user request): they read as one of the tasks.
+    const mcp = { id: "mcp", kind: "mcp", label: "chrome, docs", servers: ["chrome", "docs"] };
+    const html = drawn([...TEAM, mcp], false);
+    assertNotIn('data-task="mcp"', html);
+    const line = evalJs(cat(ESC, "\n", between(SCRIPT, "function mcpLine(", "const taskShown"),
+      "\nprocess.stdout.write(mcpLine(", j(mcp), ") + '|' + mcpLine(null));"));
+    assertIn('<span class=mk data-task="mcp"', line);
+    assertIn(">chrome · docs</span>", line);
+    assert.ok(line.endsWith("|"), line);
+    assertIn(".s .mcpl .ml{flex:1;min-width:0;color:var(--mcp)", CSS);
+    assertIn('<div class="mcpl"></div><div class="tk"></div>', SCRIPT);
   });
 
   it("no idle agents, no Idle Agents row", () => {
@@ -260,7 +277,7 @@ describe("PermissionCards", () => {
     "const $ = s => (els[s] = els[s] || {hidden: false, innerHTML: '', textContent: ''});\n",
     "const document = {querySelectorAll: () => []};\n",
     "const folder = c => String(c).split(/[\\\\/]/).pop();\n",
-    "let pendingNow = []; const wireQuestion = () => {};\n",
+    "let pendingNow = []; const wireQuestion = () => {}, keepQuestions = () => {};\n",
     "const get = async () => ({pending: ", j(items), "});\n",
     between(SCRIPT, "let pendingSig = \"\";", "// An AskUserQuestion parked"),
     "\ndrawPending().then(() => process.stdout.write($('#decide').innerHTML));"));
@@ -288,14 +305,17 @@ describe("PermissionCardPlacementTests", () => {
 });
 
 describe("WorkPulseTests", () => {
-  /** Everything that stands for work in progress pulses, in both windows. */
-  const RULE = ".dot.d-busy,.dot.d-idle,.s .tki.run .k,.s .tki .live{animation:pulse";
+  /** The state dots and a task's fresh-output dot pulse, in both windows; a
+   * running task's kind mark is plain text (2026-11-16). */
+  const RULE = ".dot.d-busy,.dot.d-idle,.s .tki .live{animation:pulse";
 
   it("both pages pulse work in progress", () => {
     for (const page of [renderShell(), renderMatrix()]) {
       assertIn(RULE, page);
       assertIn("@keyframes pulse", page);
       assertIn("prefers-reduced-motion", page);
+      assertNotIn(".tki.run .k{animation", page);
+      assertNotIn(".s .tki.run .k,", page);
     }
   });
 
