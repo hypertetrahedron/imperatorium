@@ -16,7 +16,7 @@ use crate::paths;
 use crate::pyish::take;
 
 const TIMEOUT: f64 = 20.0;
-const MAX_DIFF: usize = 400 * 1024;
+pub(crate) const MAX_DIFF: usize = 400 * 1024;
 
 /// stdout of `git -C cwd args`; Err(message) as changes.git raises it.
 pub fn git(cwd: &str, args: &[&str], check: bool) -> Result<String, String> {
@@ -207,7 +207,7 @@ pub fn changes(cwd: &str) -> Value {
 }
 
 /// changes.parse_worktrees: `git worktree list --porcelain`.
-fn parse_worktrees(text: &str) -> Vec<Map<String, Value>> {
+pub(crate) fn parse_worktrees(text: &str) -> Vec<Map<String, Value>> {
     let mut out = Vec::new();
     let mut cur: Option<Map<String, Value>> = None;
     let mut lines: Vec<&str> = splitlines(text);
@@ -250,7 +250,7 @@ fn parse_worktrees(text: &str) -> Vec<Map<String, Value>> {
     out
 }
 
-fn norm(p: &str) -> String {
+pub(crate) fn norm(p: &str) -> String {
     paths::abs_normcase(p).unwrap_or_default()
 }
 
@@ -258,7 +258,7 @@ fn norm(p: &str) -> String {
 /// through norm)? Python's comparison first; then, for two spellings of one
 /// folder that it misses - an 8.3 short name (`C:\Users\RUNNER~1`, as a
 /// short TEMP gives) against the long one git reports - the canonical paths.
-fn same_dir(listed: &str, want: &str, named: &str) -> bool {
+pub(crate) fn same_dir(listed: &str, want: &str, named: &str) -> bool {
     if norm(listed) == want {
         return true;
     }
@@ -269,7 +269,7 @@ fn same_dir(listed: &str, want: &str, named: &str) -> bool {
 }
 
 /// True for a worktree Claude Code made for a background session.
-fn is_agent_worktree(main: &str, path: &str) -> bool {
+pub(crate) fn is_agent_worktree(main: &str, path: &str) -> bool {
     let root = norm(
         &std::path::Path::new(main)
             .join(".claude")
@@ -382,7 +382,7 @@ pub fn recorded_bases(project: &str) -> std::collections::HashMap<String, String
     out
 }
 
-fn branch_exists(project: &str, branch: &str) -> bool {
+pub(crate) fn branch_exists(project: &str, branch: &str) -> bool {
     let r = format!("refs/heads/{branch}");
     git(project, &["rev-parse", "--verify", "--quiet", &r], false)
         .map(|t| !crate::pyish::strip(&t).is_empty())

@@ -371,15 +371,17 @@ function drawSessions(){
 }
 
 // Pure: the Session Subtitle - the branch the session is on and, in a
-// worktree, which one, ahead of its window title and folder, so where its
-// work goes is in view (2026-11-16). The branch is the transcript's
-// (gitBranch, via the status panel's data), so it is there for remote ones.
+// worktree, which one, ahead of its folder, so where its work goes is in
+// view (2026-11-16). The branch is the transcript's (gitBranch, via the
+// status panel's data), so it is there for remote ones. Not the window
+// title (2026-11-17): that is the prompt's gist, already on the tile and a
+// click away in Show Current Prompt.
 function headSub(s, branch){
   const parts = [];
   if (branch) parts.push(`<span class="hbr" title="git branch">&#9095; ${esc(branch)}</span>`);
   if (s.worktree) parts.push(`<span class="hwt" title="a worktree, not the main checkout">${WT_ICON} worktree ${esc(s.worktree)}</span>`);
   else if (branch) parts.push(`<span class="hwt main" title="the project's main checkout">main checkout</span>`);
-  const rest = [s.window_title, s.cwd].filter(Boolean).map(esc).join("  ·  ");
+  const rest = s.cwd ? esc(s.cwd) : "";
   return parts.join(" ") + (parts.length && rest ? " <span class=hsep>·</span> " : "") + rest;
 }
 // Pure: whether the window's Stop applies to row `s`: a session on this
@@ -433,14 +435,14 @@ function drawHead(){
       acts.push(`<button class="sm" data-act="resume-window" title="claude --resume in a new tab">Resume</button>`);
       acts.push(`<button class="sm ghost" data-act="resume-background" title="continue it in the background; the prompt box is its next message">Resume in bg</button>`);
     }
-    if (s.pid)
-      acts.push(`<button class="sm ghost" data-act="show" title="bring this session's terminal window to the front">Show Window</button>`);
   }
   const html = acts.join("");
   if ($("#acts").dataset.sig !== html){ $("#acts").innerHTML = html; $("#acts").dataset.sig = html; }
   // New, New+close, Fork and Fork in bg live in the New / Fork menu, and
-  // Copy resume cmd in the View menu; neither applies to a remote session.
+  // Show Window and Copy resume cmd in the View menu; none applies to a
+  // remote session, and Show Window needs a running one.
   const local = !!(s && !s.remote);
+  $("#showbtn").hidden = !(local && s.pid);
   $("#launch").hidden = !local;
   if (!local) $("#launch").open = false;
   $('#launch [data-act="new-close"]').hidden = !(local && s.pid);
@@ -769,9 +771,15 @@ function drawLog(force){
 // until the conversation has it. Each one waits for one more turn of yours
 // than the conversation had when it was sent (`base`, counting the ones
 // already waiting); one that was not sent stays, marked, until dismissed.
+// Counted in prompts, not turns: prompts with no reply between them come back
+// as one turn of yours - a stopped one leaves no reply (2026-11-17: two
+// sends, each stopped with Esc, then a third, came back as two turns, and
+// the third's note stayed for good) - but each keeps its own text.
 const pendingSent = {};   // session key -> [{id, text, base, state, note}]
 let pendingSeq = 0;
-const yourTurns = items => items.filter(it => it.speaker === "you" && !mateTurn(it)).length;
+const yourTurns = items => items.reduce((n, it) => it.speaker !== "you" || it.note ? n :
+  n + (it.blocks || []).filter(b => b.kind === "text" && !teammateParts(b.text) &&
+    !/^\[Request interrupted/.test(b.text)).length, 0);
 
 // Pure: the prompts still waiting, given the conversation's items now.
 function settlePending(list, items){
@@ -2751,6 +2759,26 @@ function newlyStarted(before, list, now){
   return fresh.length ? key(fresh[0]) : null;
 }
 
+// Pure: a /clear followed through (2026-11-17). A cleared session goes on in
+// the same claude process under a new session id - and with the process's
+// old start time, so newlyStarted misses it. `before` maps each key on the
+// last list to its pid; the answer is {from, to} for a new local row whose
+// pid an old row had and no longer has (gone, or left resumable), the
+// selected one first; null when none, and on the first list.
+function clearedInto(before, list, selected){
+  if (!before) return null;
+  const now = new Map(list.map(s => [key(s), s]));
+  const found = [];
+  for (const s of list){
+    if (s.remote || !s.pid || before.has(key(s))) continue;
+    for (const [k, pid] of before){
+      const after = now.get(k);
+      if (k !== key(s) && pid === s.pid && (!after || after.pid !== pid)) found.push({from: k, to: key(s)});
+    }
+  }
+  return found.find(f => f.from === selected) || found[0] || null;
+}
+
 // Pure: the title counts the sessions waiting for you. hotkey.py accepts the
 // "(N) " prefix when it looks for this window by title.
 const titleFor = n => (n ? `(${n}) ` : "") + "Imperatorium";
@@ -2791,13 +2819,16 @@ function drawFavicon(list){
 // -- a new session list, pushed or polled -------------------------------------
 const rowSig = s => [s.status, s.status_changed_at, s.last_event_at, s.doing, s.attention,
                      s.attention_kind, s.waiting_tasks, s.reviewed].join("|");
-let keysBefore = null;
+let keysBefore = null, pidsBefore = null;
 function gotSessions(list){
   const was = current(), wasSig = was ? rowSig(was) : "";
   sessions = list;
   catchFollowed();
-  catchStarted(newlyStarted(keysBefore, list, Date.now() / 1000));
+  const cleared = clearedInto(pidsBefore, list, selected);
+  if (cleared) catchCleared(cleared);
+  else catchStarted(newlyStarted(keysBefore, list, Date.now() / 1000));
   keysBefore = new Set(list.map(key));
+  pidsBefore = new Map(list.filter(s => !s.remote && s.pid).map(s => [key(s), s.pid]));
   const looking = view === "session" && document.visibilityState === "visible" ? selected : null;
   seenAt = updateSeen(seenAt, list, looking, Date.now() / 1000);
   try { localStorage.setItem("imperatorium.seen", JSON.stringify(seenAt)); } catch (e) {}
@@ -3359,16 +3390,19 @@ let view = "session", tab = "log";
 // New Session dialog is: the chat stays where it was behind them, and Esc,
 // their ✕ or a click outside them goes back to it. They used to take the
 // main area's place, with no plain way back. `view` stays "session".
-const POPUPS = {history: "#histbox", insights: "#insightbox"};
+const POPUPS = {history: "#histbox", insights: "#insightbox", project: "#projbox"};
 function openPopup(which, open){
   const box = $(POPUPS[which]);
   if (!box || box.hidden === !open) return;
   box.hidden = !open;
   document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === which && open));
-  if (!open) return;
+  // Project Changes opens on the selected session's project unless asked
+  // for another (openProject).
+  if (!open){ if (which === "project") projFor = null; return; }
   closeMenus();
-  for (const [w, sel] of Object.entries(POPUPS)) if (w !== which) $(sel).hidden = true;
+  for (const [w, sel] of Object.entries(POPUPS)) if (w !== which){ $(sel).hidden = true; if (w === "project" && which !== "project") projFor = null; }
   if (which === "history"){ $("#hq").focus(); search(); }
+  else if (which === "project"){ $("#pjrefresh").focus(); loadProject(); }
   else loadInsights();
 }
 // Kept for its callers: "session" closes both pop-ups.
@@ -3383,6 +3417,7 @@ function setTab(t){
   ["log","changes","activity","worktrees"].forEach(n => $("#" + n).hidden = n !== t);
   // Find and prompt jump only mean anything in the conversation.
   $("#findbar").hidden = $("#jump").hidden = t !== "log";
+  if (t !== "log" && !$("#findpop").hidden) openFind(false);
   drawCurrent();
   loadProcs();
   refreshTab(true);
@@ -3599,6 +3634,158 @@ async function finishWorktree(s, action, path, force){
   $("#worktrees").dataset.sig = ""; loadWorktrees();
 }
 
+// -- Project Changes (2026-11-17) ---------------------------------------------
+// One pop-up per project: the main checkout, each worktree and each branch
+// ahead of its base without one, the sessions working in each, and first the
+// files more than one of them touches - where a merge meets another's work.
+// Read when opened and on Refresh, never polled.
+let projFor = null, projData = null;
+
+// Pure: a folder as the window compares them.
+const normDir = p => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+// Pure: the projects there are sessions on this machine in, by name, each
+// with a folder to ask about - the main checkout's when a session is in it.
+function projectChoices(list){
+  const by = new Map();
+  for (const s of list){
+    if (s.remote || !s.cwd) continue;
+    const name = s.project || s.cwd.split(/[\\/]/).filter(Boolean).pop();
+    const had = by.get(name);
+    if (!had || (had.worktree && !s.worktree)) by.set(name, {name, cwd: s.cwd, worktree: !!s.worktree});
+  }
+  return [...by.values()].map(({name, cwd}) => ({name, cwd})).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Pure: for each line of work, the sessions working in it - each session in
+// the line whose folder is, or holds, its own, the deepest such.
+function lineSessions(lines, list){
+  const out = lines.map(() => []);
+  for (const s of list){
+    if (s.remote || !s.cwd) continue;
+    const c = normDir(s.cwd);
+    let best = -1, depth = -1;
+    lines.forEach((l, i) => {
+      const p = normDir(l.path);
+      if (p && (c === p || c.startsWith(p + "/")) && p.length > depth){ best = i; depth = p.length; }
+    });
+    if (best >= 0) out[best].push(s);
+  }
+  return out;
+}
+
+// Pure: what a line is called.
+function lineName(l){
+  const leaf = String(l.path || "").split(/[\\/]/).filter(Boolean).pop() || "";
+  return l.kind === "main" ? "main checkout" + (l.branch ? " · " + l.branch : "")
+    : l.kind === "worktree" ? (l.branch || "(detached)") + " · worktree " + leaf
+    : l.branch + " · branch, no worktree";
+}
+
+function openProject(cwd){
+  if (cwd) projFor = cwd;
+  openPopup("project", true);
+}
+
+async function loadProject(){
+  const choices = projectChoices(sessions);
+  const s = current();
+  if (!projFor) projFor = s && !s.remote && s.cwd ? s.cwd : (choices[0] || {}).cwd || null;
+  const pick = $("#pjpick");
+  const here = choices.find(c => normDir(c.cwd) === normDir(projFor));
+  pick.innerHTML = (here ? "" : `<option value="${esc(projFor || "")}">${esc(projFor || "no project")}</option>`) +
+    choices.map(c => `<option value="${esc(c.cwd)}">${esc(c.name)}</option>`).join("");
+  pick.value = projFor || "";
+  const pane = $("#projpane");
+  if (!projFor){ pane.innerHTML = `<div class="note">no session on this machine to take a project from</div>`; return; }
+  pane.innerHTML = `<div class="note">reading every worktree and branch…</div>`;
+  const asked = projFor;
+  let d;
+  try { d = await get("/api/project_changes?project=" + encodeURIComponent(asked)); } catch (e) { d = {ok: false, error: "the dispatcher did not answer"}; }
+  if (asked !== projFor || $("#projbox").hidden) return;
+  projData = d;
+  drawProject();
+}
+
+function drawProject(){
+  const d = projData, pane = $("#projpane");
+  if (!d.ok){ pane.innerHTML = `<div class="note">${esc(d.error || "could not read it")}</div>`; return; }
+  if (!d.repo){ pane.innerHTML = `<div class="note">not a git repository</div>`; return; }
+  const lines = d.lines || [], who = lineSessions(lines, sessions);
+  const shared = new Set((d.overlaps || []).map(o => o.path));
+  const HOW = {committed: "committed", uncommitted: "not committed", both: "committed and not"};
+  const ov = (d.overlaps || []).map(o => `<details class="pjov" data-file="${esc(o.path)}"><summary><b>${esc(o.path)}</b> <span class="kv">${
+      o.in.map(x => esc(lineName(lines[x.line])) + " (" + HOW[x.how] + ")").join(" · ")}</span></summary><div class="pjdiffs"></div></details>`).join("");
+  const cards = lines.map((l, i) => {
+    const mine = who[i], pr = mine.map(s => s.pr).find(Boolean);
+    const files = [...new Set([...(l.committed || []), ...(l.uncommitted || [])])].sort();
+    const un = new Set(l.uncommitted || []);
+    const stats = [
+      un.size ? `<b>${un.size} not committed</b>` : "nothing uncommitted",
+      l.kind === "main" && !l.base ? (l.upstream ? `${l.ahead || 0} ahead, ${l.behind || 0} behind ${esc(l.upstream)}` : "")
+        : `${l.ahead || 0} ahead${l.behind ? ", " + l.behind + " behind" : ""} of ${esc(l.base || d.base || "?")}`,
+      l.subject ? "last: " + esc(l.subject) : "",
+    ].filter(Boolean).join(" · ");
+    // Its commits are all in another line: branched from it, or merged in.
+    const held = (l.held_by || []).map(k => lines[k]).filter(Boolean);
+    const heldNote = held.length && (l.committed || []).length
+      ? `<div class="kv">its commits are all in ${held.map(h => esc(lineName(h))).join(", ")}</div>` : "";
+    const chips = mine.map(s => `<button class="sm ghost pjs" data-pjs="${esc(key(s))}" title="open this session">${esc(nameOf(s))}</button>`).join("");
+    const acts = l.kind === "worktree" && l.agent ? `<div class="btns">
+        <button class="sm" data-pja="merge" data-pjp="${esc(l.path)}" ${l.ahead && !un.size ? "" : "disabled"}>Merge into ${esc(l.base || d.base)}</button>
+        <button class="sm ghost" data-pja="pr" data-pjp="${esc(l.path)}" ${un.size ? "disabled" : ""}>Push + open PR</button>
+        <button class="sm danger" data-pja="discard" data-pjp="${esc(l.path)}">Discard</button></div>` : "";
+    const list = files.map(f => `<div class="pjf${shared.has(f) ? " shared" : ""}" data-pjf="${esc(f)}" data-pjl="${i}" title="show its diff">${
+        un.has(f) ? "<span class=code>~</span>" : "<span class=code>+</span>"}${esc(f)}${shared.has(f) ? " <span class=kv>· also elsewhere</span>" : ""}</div><div class="pjfd" hidden></div>`).join("");
+    return `<div class="card pjline${shared.size && files.some(f => shared.has(f)) ? " meets" : ""}">
+      <h3>${esc(lineName(l))}${prBadge(pr)}</h3>
+      ${l.path ? `<small>${esc(l.path)}</small>` : ""}
+      <div class="kv" style="margin:4px 0 0">${stats}${l.error ? " · <b>" + esc(l.error) + "</b>" : ""}</div>
+      ${heldNote}
+      ${chips ? `<div class="pjwho">${chips}</div>` : `<div class="kv">no session working here</div>`}
+      ${files.length ? `<details class="pjfiles"><summary>${files.length} file${files.length > 1 ? "s" : ""}${l.truncated ? " (list cut short)" : ""}</summary><div class="files">${list}</div></details>` : ""}
+      ${acts}</div>`;
+  }).join("");
+  const more = d.unlisted_branches ? `<div class="note">${d.unlisted_branches} older branches not looked at</div>` : "";
+  pane.innerHTML = `<div class="kv">${esc(d.main)} · base ${esc(d.base || "none")} · ${lines.length} line${lines.length === 1 ? "" : "s"} of work</div>
+    <div class="card"><h3>Files in more than one line of work</h3>${ov ||
+      `<div class="kv">none - no two lines of work touch the same file</div>`}</div>${cards}${more}`;
+  pane.querySelectorAll("[data-pjs]").forEach(b => b.onclick = () => { openPopup("project", false); pick(b.dataset.pjs); });
+  pane.querySelectorAll(".pjov").forEach(el => el.addEventListener("toggle", () => {
+    if (!el.open || el.dataset.read) return;
+    el.dataset.read = "1";
+    const o = d.overlaps.find(x => x.path === el.dataset.file);
+    const box = el.querySelector(".pjdiffs");
+    box.innerHTML = o.in.map(x => `<div class="pjdh">${esc(lineName(lines[x.line]))}</div><div class="pjd" data-i="${x.line}">reading…</div>`).join("");
+    o.in.forEach(x => fileDiff(lines[x.line], o.path).then(h => {
+      const slot = box.querySelector(`.pjd[data-i="${x.line}"]`);
+      if (slot) slot.innerHTML = h;
+    }));
+  }));
+  pane.querySelectorAll("[data-pjf]").forEach(el => el.onclick = async () => {
+    const box = el.nextElementSibling;
+    box.hidden = !box.hidden;
+    if (!box.hidden && !box.innerHTML) box.innerHTML = await fileDiff(lines[+el.dataset.pjl], el.dataset.pjf);
+  });
+  pane.querySelectorAll("[data-pja]").forEach(b => b.onclick = async () => {
+    await finishWorktree({cwd: d.main}, b.dataset.pja, b.dataset.pjp);
+    loadProject();
+  });
+}
+
+// One file's diff in one line of work, as HTML.
+async function fileDiff(l, file){
+  const at = l.kind === "branch" ? l.branch : l.path;
+  let r;
+  try {
+    r = await get("/api/project_file_diff?project=" + encodeURIComponent(projFor) + "&kind=" + encodeURIComponent(l.kind) +
+      "&at=" + encodeURIComponent(at) + "&file=" + encodeURIComponent(file));
+  } catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  if (!r.ok) return `<div class="note">${esc(r.error || "could not read it")}</div>`;
+  if (r.untracked) return `<div class="note">a new file, not added to git yet</div>`;
+  return r.diff ? `<div class="diff">${diffHtml(r.diff)}${r.truncated ? "\n… (truncated)" : ""}</div>` : `<div class="note">no difference</div>`;
+}
+
 // The tile's ✕: ends the session, and with it its terminal tab.
 async function closeSession(k){
   const s = sessions.find(x => key(x) === k);
@@ -3692,6 +3879,22 @@ function catchStarted(k){
     return;
   }
   pick(k);
+}
+
+// A session cleared with /clear: its new conversation is opened and the
+// prompt box takes the keys, ready for the first prompt. One you were
+// looking at always follows; any other only when you are not mid-sentence,
+// as catchStarted.
+function catchCleared({from, to}){
+  if (to === selected) return;
+  const box = $("#prompt");
+  if (from !== selected && document.activeElement === box && box.value.trim()){
+    const s = sessions.find(x => key(x) === to);
+    $("#say").textContent = (s ? nameOf(s) : to) + " was cleared - not switched while you type";
+    return;
+  }
+  pick(to);
+  if (view === "session" && !box.disabled) box.focus();
 }
 
 function select(id){
@@ -4325,6 +4528,8 @@ for (const [which, sel] of Object.entries(POPUPS)){
 let hqTimer;
 $("#hq").addEventListener("input", () => { clearTimeout(hqTimer); hqTimer = setTimeout(search, 350); });
 $("#days").onchange = loadInsights;
+$("#pjpick").onchange = () => { projFor = $("#pjpick").value; loadProject(); };
+$("#pjrefresh").onclick = () => loadProject();
 // A new dispatcher came up: load its page, on the same session. The prompt
 // box's draft is already in localStorage.
 function reloadForNewDispatcher(){
@@ -4442,8 +4647,8 @@ $("#jumpbox").addEventListener("click", e => { if (e.target.id === "jumpbox") op
 document.addEventListener("keydown", e => {
   const k = (e.key || "").toLowerCase(), ctl = (e.ctrlKey || e.metaKey) && !e.altKey;
   if (ctl && k === "k"){ e.preventDefault(); openJump($("#jumpbox").hidden); return; }
-  if (ctl && k === "f" && view === "session" && tab === "log"){ e.preventDefault(); $("#cfind").focus(); $("#cfind").select(); return; }
-  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden) return;
+  if (ctl && k === "f" && view === "session" && tab === "log"){ e.preventDefault(); openFind(true); return; }
+  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden || !$("#projbox").hidden) return;
   if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)){ e.preventDefault(); pick(visibleKeys()[+e.key - 1]); return; }
   if (e.altKey && !e.ctrlKey && k === "n"){ e.preventDefault(); goWaiting(); return; }
   // Esc in the prompt box stops a working session's turn, as at its
@@ -4467,7 +4672,23 @@ $("#cfind").addEventListener("input", () => { clearTimeout(findTimer); findTimer
 $("#cfilter").onchange = runFind;
 $("#cfind").addEventListener("keydown", e => {
   if (e.key === "Enter"){ e.preventDefault(); goFind(e.shiftKey ? 1 : -1); }
-  if (e.key === "Escape"){ e.preventDefault(); resetFind(); drawLog(); $("#cfind").blur(); }
+});
+// The find window: the Find button (or ctrl+F) opens it with the box ready;
+// the button again, its close, or Esc in it closes it and clears the find,
+// so no highlights are left behind with nothing on screen to explain them.
+// It is not modal: the chat stays usable while it is open.
+function openFind(on){
+  $("#findpop").hidden = !on;
+  $("#findbtn").classList.toggle("on", on);
+  $("#findbtn").setAttribute("aria-expanded", String(on));
+  if (on){ $("#cfind").focus(); $("#cfind").select(); return; }
+  if (finds.q || finds.filter){ resetFind(); drawLog(); }
+  else resetFind();
+}
+$("#findbtn").onclick = () => openFind($("#findpop").hidden);
+$("#cfclose").onclick = () => { openFind(false); $("#findbtn").focus(); };
+$("#findpop").addEventListener("keydown", e => {
+  if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); openFind(false); $("#findbtn").focus(); }
 });
 $("#cfprev").onclick = () => goFind(-1);
 $("#cfnext").onclick = () => goFind(1);

@@ -614,8 +614,8 @@ describe("Controls", () => {
     // Peer request 2026-10-18: the tabs, the launch actions, the view
     // options, find and prompt jump all on the session header's row, in
     // that order, and nothing left between the chat and the prompt box.
-    // The buttons that stay (Show Window) sit between find's arrows and
-    // prompt jump's, to keep the two pairs apart.
+    // The buttons that stay (Resume) sit between find's arrows and prompt
+    // jump's, to keep the two pairs apart.
     const html = renderShell();
     const head = html.slice(html.indexOf("id=headrow"), html.indexOf("id=sessionpane"));
     const order = ["id=headtext", "id=tabpick", "id=launch", "id=viewmenu", "id=findbar", "id=acts", "id=jump"]
@@ -627,7 +627,7 @@ describe("Controls", () => {
       assertIn(act, launch);
     }
     const view = head.slice(head.indexOf("id=viewmenu"), head.indexOf("id=findbar"));
-    for (const needle of ["data-act=copy", "id=curbtn", "id=shape"]) assertIn(needle, view);
+    for (const needle of ["data-act=show", "data-act=copy", "id=curbtn", "id=shape"]) assertIn(needle, view);
     assertNotIn("id=strip", html);
     assertNotIn("id=tabs", html);
     assertNotIn("#strip", SCRIPT);
@@ -665,9 +665,9 @@ describe("FollowNewSession", () => {
   });
 
   it("the header offers the buttons", () => {
-    for (const needle of ['data-act="show"', ">Show Window<", "follow(r.session_id)", "catchFollowed();"]) {
-      assertIn(needle, SCRIPT);
-    }
+    for (const needle of ["follow(r.session_id)", "catchFollowed();"]) assertIn(needle, SCRIPT);
+    // Show Window is in the View menu since 2026-11-17.
+    assertIn(">Show Window</button>", renderShell());
     // New+close lives in the header's New / Fork menu, in the shell.
     for (const needle of ["data-act=new-close", ">New+close<"]) assertIn(needle, renderShell());
   });

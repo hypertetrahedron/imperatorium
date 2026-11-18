@@ -46,6 +46,7 @@ mod modlink;
 mod models;
 mod notify;
 mod opener;
+mod overview;
 mod paths;
 mod proc;
 mod pending;
