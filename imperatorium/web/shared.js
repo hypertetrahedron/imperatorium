@@ -200,6 +200,8 @@ const meterTip = (name, w, spent) => {
     if (spent) lines.push("from this machine: " + tok(spent.total_tokens) + " tokens · ≈" + usd(spent.cost_usd || 0));
     return `<div class="tip">${lines.map(l => `<div>${l}</div>`).join("")}</div>`;
   }
+  if (name === "spend_limit")
+    return `<div class="tip">${spendLines(w, spent).map(l => `<div>${l}</div>`).join("")}</div>`;
   const lines = [esc(LIMIT_TITLES[name] || name), Math.round(w.used) + "% used" +
     // Kept across restarts, so it can be from before this dispatcher started.
     (w.at && Date.now() / 1000 - w.at > 600 ? ` (reading from ${esc(resetLabel(w.at))})` : "")];
@@ -212,35 +214,32 @@ const meterTip = (name, w, spent) => {
   return `<div class="tip">${lines.map(l => `<div>${l}</div>`).join("")}</div>`;
 };
 
-// The Remaining Meter: what is left of a fixed allocation - a spend limit
-// set behind a Claude apps gateway, e.g. an Enterprise seat's $500 a month -
-// under that limit's used bar. The fill is what is left, so it empties as the
-// allocation does. Dollars when the gateway sends them (it sends the
-// percentage first), else the percentage left. Its tip adds roughly how many
+// The spend limit's Meter Tip: what is left of a fixed allocation - an admin's
+// monthly budget, or a Claude apps gateway's spend limit, e.g. an Enterprise
+// seat's $500 a month. Dollars when they are known (a gateway sends the
+// percentage first), else the percentage left. It adds roughly how many
 // tokens that buys at this machine's own recent mix (`spent`: a spend window
 // with total_tokens and cost_usd), which is a guide, not a promise: the mix
-// of models and caching sets the price.
+// of models and caching sets the price. The bar itself is the used fraction;
+// what is left is its inverse, so the tip carries it rather than a second bar.
 const PERIOD_WORDS = {daily: "a day", weekly: "a week", monthly: "a month"};
-function remainingHtml(w, spent){
-  if (!w || w.waiting || typeof w.used !== "number") return "";
+function spendLines(w, spent){
   const dollars = typeof w.limit_usd === "number" && w.limit_usd > 0;
   const usedUsd = typeof w.used_usd === "number" ? w.used_usd : (dollars ? w.limit_usd * w.used / 100 : null);
   const leftPct = Math.max(0, Math.min(100, 100 - w.used));
   const leftUsd = dollars ? Math.max(0, w.limit_usd - usedUsd) : null;
-  const cls = leftPct <= 5 ? "over" : leftPct <= 20 ? "hi" : "";
-  const shown = dollars ? usd(leftUsd) : Math.round(leftPct) + "%";
-  const lines = ["Remaining allocation", dollars
+  const lines = [LIMIT_TITLES.spend_limit, dollars
     ? `${usd(leftUsd)} of ${usd(w.limit_usd)} left` + (PERIOD_WORDS[w.period] ? ` (${PERIOD_WORDS[w.period]})` : "")
-    : Math.round(leftPct) + "% left (the gateway has not sent the dollars yet)"];
+    : Math.round(leftPct) + "% left (the dollars have not come yet)"];
   if (dollars) lines.push(`${usd(usedUsd)} used (${Math.round(w.used)}%)`);
+  // Kept across restarts, so it can be from before this dispatcher started.
+  if (w.at && Date.now() / 1000 - w.at > 600) lines.push(`reading from ${esc(resetLabel(w.at))}`);
   if (w.resets_at) lines.push("refills " + esc(resetLabel(w.resets_at)) + " (in " + until(w.resets_at) + ")");
   if (dollars && spent && spent.cost_usd > 0 && spent.total_tokens > 0)
     lines.push(`≈${tok(leftUsd * spent.total_tokens / spent.cost_usd)} tokens at this machine's ` +
                `recent mix (${tok(spent.total_tokens / spent.cost_usd)} per $)`);
-  lines.push("the gateway's estimate from token counts, not a bill");
-  return `<div class="row remain"><span>left</span>
-      <span class="bar"><i class="${cls}" style="width:${leftPct}%"></i></span>
-      <span class="pct">${esc(shown)}</span><div class="tip">${lines.map(l => `<div>${l}</div>`).join("")}</div></div>`;
+  lines.push("an estimate from token counts, not a bill");
+  return lines;
 }
 
 // Global and Open lines under the bars.
@@ -328,7 +327,7 @@ function planHtml(plan){
 
 // The meters: a row per window the account reports - a verified Ultra
 // account has no 5h one, an API key or Bedrock none, a gateway's spend limit
-// only "spend", which the Remaining Meter follows - then (marked extra, so the sidebar shows
+// only "spend", whose tip says what is left - then (marked extra, so the sidebar shows
 // them only when opened) the pace lines, the plan, the spend lines and the
 // model mix. `lines: false` leaves out the spend lines, for the matrix's
 // status tile, which spells the spend out below.
@@ -349,8 +348,7 @@ function meterHtml(u, opts){
       pace = `<div class="pace extra">${Math.round(p.per_hour)}%/h - lasts until reset</div>`;
     return `<div class="row${w.waiting ? " waiting" : ""}"><span>${esc(LIMIT_NAMES[name] || name)}</span>
       <span class="bar"><i class="${cls}" style="width:${pct}%"></i>${timeTick(name, w.resets_at)}</span>
-      <span class="pct">${Math.round(w.used)}%</span>${meterTip(name, w, spent[name])}</div>${pace}` +
-      (name === "spend_limit" ? remainingHtml(w, wins[wins.length - 1]) : "");
+      <span class="pct">${Math.round(w.used)}%</span>${meterTip(name, w, name === "spend_limit" ? wins[wins.length - 1] : spent[name])}</div>${pace}`;
   }).join("");
   const rest = (lines ? spendHtml(u.spend) : "") + mixHtml(u.spend);
   if (!bars && !rest) return planHtml(u.plan);
