@@ -118,7 +118,7 @@ pub fn spend_limit(body: &Value, now: f64) -> Option<Map<String, Value>> {
         return None;
     }
     let (used, limit) = from_spend(body).or_else(|| from_extra_usage(body))?;
-    if !(limit > 0.0) || !used.is_finite() || used < 0.0 {
+    if !limit.is_finite() || limit <= 0.0 || !used.is_finite() || used < 0.0 {
         return None;
     }
     let mut w = Map::new();
@@ -254,8 +254,11 @@ mod tests {
         assert_eq!(token_from(&json!({"claudeAiOauth": {"accessToken": "t"}}), NOW).as_deref(), Some("t"));
     }
 
+    /// What the local server saw: the request line, then the headers.
+    type Seen = (String, Vec<(String, String)>);
+
     /// One canned answer from a local server; the request line and headers back.
-    fn serve_once(status: u16, body: &str) -> (String, std::thread::JoinHandle<(String, Vec<(String, String)>)>) {
+    fn serve_once(status: u16, body: &str) -> (String, std::thread::JoinHandle<Seen>) {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let addr = format!("http://{}/api/oauth/usage", server.server_addr().to_ip().unwrap());
         let body = body.to_string();
