@@ -428,6 +428,21 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
                 warm.spend(now, 120.0, &limits);
             }));
         });
+        if crate::account_spend::wanted() {
+            // A usage-based Team or Enterprise login has an admin's monthly
+            // budget that no statusline carries: ask Anthropic for it.
+            let poller = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                let mut failures = 0u32;
+                loop {
+                    let wait = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        poller.poll_account_spend(&mut failures)
+                    }))
+                    .unwrap_or(crate::account_spend::EVERY);
+                    std::thread::sleep(std::time::Duration::from_secs_f64(wait));
+                }
+            });
+        }
         let me = Arc::downgrade(&shared);
         shared.updates.start(move || me.upgrade().map(|s| s.config()));
         let sweeper = Arc::clone(&shared);
