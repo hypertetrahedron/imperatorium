@@ -197,33 +197,42 @@ describe("MetersThatApply", () => {
     assertNotIn('class="row remain"', got);
   });
 
-  it("a spend limit with dollars shows what is left", () => {
+  it("a spend limit with dollars is one meter whose tip says what is left", () => {
     const got = runJs({ limits: { spend_limit: { used: 62.8, resets_at: soon(),
                                                  used_usd: 314.12, limit_usd: 500, period: "monthly" } },
                         spend: { global: { windows: [{ name: "month", total_tokens: 2e6, cost_usd: 10 }] } } });
     assertIn("<span>spend</span>", got);
     assertIn('<span class="pct">63%</span>', got);
-    const left = got.slice(got.indexOf('class="row remain"'));
-    assertIn("<span>left</span>", left);
-    assertIn('style="width:37.2', left);
-    assertIn('<span class="pct">$186</span>', left);
-    assertIn("$186 of $500 left (a month)", left);
-    assertIn("$314 used (63%)", left);
-    assertIn("≈37M tokens at this machine's recent mix (200k per $)", left);
+    // The inverse is not a second row.
+    assert.equal(count(got, '<div class="row">'), 1);
+    assertNotIn('class="row remain"', got);
+    assertNotIn("<span>left</span>", got);
+    const tip = got.slice(got.indexOf('class="tip"'));
+    assertIn("Spend limit", tip);
+    assertIn("$186 of $500 left (a month)", tip);
+    assertIn("$314 used (63%)", tip);
+    assertIn("refills ", tip);
+    assertIn("≈37M tokens at this machine's recent mix (200k per $)", tip);
     assertNotIn("<span>5h</span>", got);
   });
 
-  it("before the dollars come the remaining meter says the percentage", () => {
+  it("before the dollars come the spend tip says the percentage left", () => {
     const got = runJs({ limits: { spend_limit: { used: 90, resets_at: soon() } } });
-    const left = got.slice(got.indexOf('class="row remain"'));
-    assertIn('<span class="pct">10%</span>', left);
-    assertIn('class="hi"', left);
-    assertIn("10% left", left);
-    assertNotIn("tokens at this machine", left);
+    assertIn('<span class="pct">90%</span>', got);
+    assertIn('class="hi"', got);
+    const tip = got.slice(got.indexOf('class="tip"'));
+    assertIn("10% left", tip);
+    assertNotIn("tokens at this machine", tip);
   });
 
-  it("a spend limit that just reset waits without a remaining meter", () => {
+  it("an old reading of the spend limit says when it is from", () => {
+    const got = runJs({ limits: { spend_limit: { used: 40, resets_at: soon(), at: Math.floor(Date.now() / 1000) - 3600 } } });
+    assertIn("reading from ", got.slice(got.indexOf('class="tip"')));
+  });
+
+  it("a spend limit that just reset waits, saying so in its tip", () => {
     const got = runJs({ limits: { spend_limit: { used: 0, waiting: true, reset_at: 5, resets_at: null } } });
     assertNotIn('class="row remain"', got);
+    assertIn("waiting for a new reading", got);
   });
 });

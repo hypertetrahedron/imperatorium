@@ -24,6 +24,7 @@
 //!
 //!     imperatorium policy-decide           # JSON lines {request, policy} -> [verdict, reason, tier]
 
+mod account_spend;
 mod activity;
 mod background;
 mod changes;

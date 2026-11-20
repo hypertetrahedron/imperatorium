@@ -21,6 +21,39 @@ impl Shared {
         }
     }
 
+    /// One look at the account's monthly spend limit (`account_spend`): the
+    /// seconds to wait before the next. A reading goes in as the spend_limit
+    /// window, a crossing is announced like a statusline's, and a failure
+    /// leaves what is there (the last reading is kept in limits.json).
+    pub(super) fn poll_account_spend(&self, failures: &mut u32) -> f64 {
+        use crate::account_spend as acct;
+        let now = Self::now();
+        let wait = |n: u32| (acct::EVERY * 2f64.powi(n.min(8) as i32)).min(acct::BACKOFF_MAX);
+        let Some(token) = acct::token(now) else {
+            // Not logged in on disk, or the token is waiting to be renewed.
+            return acct::EVERY;
+        };
+        match acct::fetch(&token, std::time::Duration::from_secs(15)) {
+            Ok(body) => {
+                *failures = 0;
+                if let Some(limits) = acct::spend_limit(&body, now) {
+                    if let Some(crossing) = self.usage.ingest_account(&limits, now) {
+                        self.budget_crossed(&crossing);
+                    }
+                }
+                acct::EVERY
+            }
+            Err(acct::Failure::Auth) => acct::EVERY * 2.0,
+            Err(acct::Failure::Other(why)) => {
+                *failures += 1;
+                if *failures == 1 {
+                    eprintln!("imperatorium: account spend: {why}");
+                }
+                wait(*failures)
+            }
+        }
+    }
+
     /// Control._global_windows: [(name, since, resets_at)] the global
     /// spend is counted over.
     fn global_windows(&self, limits: &Value, now: f64) -> Vec<(String, f64, Value)> {

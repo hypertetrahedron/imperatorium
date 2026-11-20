@@ -237,6 +237,17 @@ The statusline script reads the provider from the session's environment
 (`CLAUDE_CODE_USE_BEDROCK` and the like), the model id is the fallback, and
 the Team or Enterprise plan comes from `organizationType` in `~/.claude.json`.
 
+A usage-based Team or Enterprise login has an admin's monthly budget that no
+statusline carries, so the dispatcher asks Anthropic for it every five minutes
+(`GET /api/oauth/usage`, the call Claude Code's `/usage` and the desktop app
+make) with the login's token from `~/.claude/.credentials.json`, and shows it
+as the **spend** meter - "$558 of $1000 left (monthly)" - with the usual
+80%/95% budget alerts. The token is only read, never refreshed (Claude Code
+owns it); an expired one waits for Claude Code to renew it, and on macOS,
+where the login is in the keychain, there is no meter. The endpoint is
+undocumented: an answer this does not recognise shows nothing rather than a
+wrong number. `IMPERATORIUM_ACCOUNT_SPEND=off` turns it off.
+
 A project with more than one session open gathers them under a node named
 for the project, its tiles indented beneath it and named without the
 project (`5b`, `fizzy-wondering-lark`). The node carries one dot per

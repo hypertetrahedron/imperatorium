@@ -342,18 +342,29 @@ impl Usage {
     /// Usage.ingest: one statusline payload; the highest threshold crossed.
     pub fn ingest(&self, key: &str, payload: &Map<String, Value>, now: f64) -> Option<Value> {
         let got = reading(payload);
-        let mut crossings: Vec<Value> = Vec::new();
         let mut inner = self.inner.lk();
         let mut rec = got.clone();
         rec.insert("at".into(), json!(now));
         inner.sessions.insert(key.into(), rec);
         Self::drop_gone(&mut inner, &got, now);
-        for (name, w) in got
-            .get("limits")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flatten()
-        {
+        let limits = got.get("limits").and_then(Value::as_object).cloned().unwrap_or_default();
+        self.merge(&mut inner, &limits, now)
+    }
+
+    /// The account's own windows, read from Anthropic rather than from a
+    /// session's statusline (see `account_spend`): no session is recorded, and
+    /// no window another source holds is dropped for being absent.
+    pub fn ingest_account(&self, limits: &Map<String, Value>, now: f64) -> Option<Value> {
+        let mut inner = self.inner.lk();
+        self.merge(&mut inner, limits, now)
+    }
+
+    /// Fold `limits` (window name -> `reading`'s entry) into the account's
+    /// windows, their pace history and the once-per-window threshold marks;
+    /// the highest threshold crossed.
+    fn merge(&self, inner: &mut Inner, limits: &Map<String, Value>, now: f64) -> Option<Value> {
+        let mut crossings: Vec<Value> = Vec::new();
+        for (name, w) in limits {
             let used = num(w.get("used")).unwrap_or(0.0);
             let resets = num(w.get("resets_at"));
             let prev = inner.limits.get(name).cloned();
@@ -388,7 +399,7 @@ impl Usage {
                 }
             }
         }
-        self.save(&mut inner);
+        self.save(inner);
         crossings.into_iter().max_by(|a, b| {
             a["threshold"]
                 .as_f64()
@@ -744,6 +755,35 @@ mod features_tests {
         let quiet = u.summary(1.0 + PLAN_SPAN + 1.0)["plan"].clone();
         assert_ne!(quiet["label"], "AWS Bedrock");
     }
+
+    #[test]
+    fn the_accounts_own_spend_reading_makes_the_meter_and_the_alert() {
+        // The usage endpoint's answer for a usage-based Enterprise login
+        // (account_spend): no session behind it, and nothing else dropped.
+        let u = Usage::new(vec![80.0, 95.0], None, false, 0.0);
+        u.ingest("s1", &five_hour(10.0, 100_000.0), 1.0);
+        let spend = |used_usd: f64| {
+            obj(json!({"spend_limit": {"used": used_usd / 10.0, "resets_at": 200_000.0,
+                       "used_usd": used_usd, "limit_usd": 1000.0, "period": "monthly"}}))
+        };
+        assert!(u.ingest_account(&spend(441.0), 2.0).is_none());
+        let got = u.summary(3.0);
+        let w = &got["limits"]["spend_limit"];
+        assert_eq!((w["used_usd"].clone(), w["limit_usd"].clone(), w["period"].clone()),
+                   (json!(441.0), json!(1000.0), json!("monthly")));
+        assert!(got["limits"].get("five_hour").is_some());
+        assert_eq!(got["plan"], Value::Null);
+        // It fires once on crossing 80%, and again only past 95%.
+        let first = u.ingest_account(&spend(810.0), 4.0).expect("crossed 80");
+        assert_eq!((first["window"].clone(), first["threshold"].clone()), (json!("spend_limit"), json!(80.0)));
+        assert!(u.ingest_account(&spend(850.0), 5.0).is_none());
+        assert_eq!(u.ingest_account(&spend(960.0), 6.0).unwrap()["threshold"], 95.0);
+        // A new month starts over, and the dollars survive a restart.
+        let next = obj(json!({"spend_limit": {"used": 1.0, "resets_at": 900_000.0, "used_usd": 10.0, "limit_usd": 1000.0}}));
+        assert!(u.ingest_account(&next, 300_000.0).is_none());
+        assert_eq!(u.inner.lk().history["spend_limit"], vec![(300_000.0, 1.0)]);
+        assert!(u.inner.lk().sessions.keys().all(|k| k == "s1"));
+    }
 }
 
 /// test_rename.py: a statusline from before the rename still reports.
@@ -762,4 +802,5 @@ mod core_tests {
             Some("vertex")
         );
     }
+
 }
