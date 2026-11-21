@@ -173,8 +173,8 @@ describe("HistoryInsightsPopups", () => {
 
   /** openPopup against stub boxes: which are shown after `calls`. */
   const shown = (calls) => evalJson(cat(
-    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hq': {focus() {}}};\n",
-    "let projFor = null;\n",
+    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hookbox': {hidden: true}, '#hq': {focus() {}}};\n",
+    "let projFor = null; const openFleetView = () => {}, leaveFleet = () => {};\n",
     "const $ = s => els[s]; const document = {querySelectorAll: () => []};\n",
     "let searched = 0, loaded = 0; const search = () => searched++, loadInsights = () => loaded++, closeMenus = () => {};\n",
     between(SCRIPT, "const POPUPS =", "\n\nfunction setTab("), "\n", calls,

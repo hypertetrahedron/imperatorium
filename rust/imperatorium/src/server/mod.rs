@@ -32,6 +32,7 @@ use crate::{
 mod alerts;
 mod conv;
 mod dispatch;
+mod fleet;
 mod hook;
 mod prefs;
 mod route;
@@ -149,6 +150,12 @@ pub struct Shared {
     updates: Arc<crate::update::Checker>,
     /// Delayed jobs (the idle check after Stop), all on one thread.
     timer: crate::timer::Timer,
+    /// Watches and proposed actions (fleet.rs), kept in fleet.json beside
+    /// the state; in memory only for a shadow.
+    book: Mutex<crate::fleet::Book>,
+    /// What the watch loop saw at its last look. A leaf lock, as is `book`;
+    /// the two are never held together.
+    watch_mem: Mutex<crate::fleet::Memory>,
 }
 
 impl Shared {
@@ -163,6 +170,9 @@ impl Shared {
             },
         );
         let has_store = store.is_some();
+        let book_path = store
+            .as_ref()
+            .and_then(|s| s.path.parent().map(crate::fleet::book_path));
         let boot: String = {
             let t = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -257,6 +267,8 @@ impl Shared {
                     .then(|| crate::remote::Fleet::new(hosts, crate::remote::poll_every()))
             },
             tunnels: Mutex::new(HashMap::new()),
+            book: Mutex::new(crate::fleet::Book::open(book_path)),
+            watch_mem: Mutex::new(crate::fleet::Memory::default()),
         }
     }
 
@@ -459,6 +471,23 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
                     let text = panic_text(&*e);
                     if seen.len() < 64 && seen.insert(text.clone()) {
                         eprintln!("imperatorium: sweep_queue panicked: {text}");
+                    }
+                }
+            }
+        });
+        let watcher = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            // The watches (fleet.rs): checked by the dispatcher, no model.
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs_f64(crate::timing::secs(5.0)));
+                let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    watcher.check_watches()
+                }));
+                if let Err(e) = got {
+                    let text = panic_text(&*e);
+                    if seen.len() < 64 && seen.insert(text.clone()) {
+                        eprintln!("imperatorium: check_watches panicked: {text}");
                     }
                 }
             }

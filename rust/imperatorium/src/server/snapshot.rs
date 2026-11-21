@@ -207,6 +207,8 @@ impl Shared {
             &registry::session_files(),
             &creds,
         );
+        // Ask's own `claude -p` (server/fleet.rs) is not a session of yours.
+        rows.retain(|r| !self.is_ask_row(r));
         procs::annotate(&mut rows);
         let empty = Map::new();
         let known = st
@@ -225,7 +227,13 @@ impl Shared {
             if extra.is_empty() {
                 continue;
             }
-            if overlay(row, extra) {
+            // Only a failure needs the transcript: did it get past it?
+            let past = if extra.get("attention_kind").and_then(Value::as_str) == Some("failure") {
+                self.stats.read(&sid, Self::now()).as_ref().and_then(moved_past)
+            } else {
+                None
+            };
+            if overlay(row, extra, past) {
                 if let Some(store) = &self.store {
                     store.clear_attention(&sid);
                 }
@@ -342,7 +350,7 @@ impl Shared {
             }
             let d = truthy(row.get("socket")) && truthy(row.get("token"));
             row.insert("dispatchable".into(), json!(d));
-            if !extra.is_empty() && overlay(&mut row, &extra) {
+            if !extra.is_empty() && overlay(&mut row, &extra, None) {
                 if let Some(store) = &self.store {
                     store.clear_attention(&key);
                 }
@@ -523,6 +531,10 @@ impl Shared {
             ),
         );
         out.insert("alive".into(), json!(alive));
+        // The session this one was forked from, so the list can nest it.
+        if let Some(p) = stat.get("forked_from").filter(|p| p.is_string()) {
+            out.insert("forked_from".into(), p.clone());
+        }
         if alive {
             for name in ["agents", "shells", "monitors", "wakeups"] {
                 let n = stat
@@ -620,8 +632,10 @@ impl Shared {
                 quiet = Self::now();
                 r
             } else if Self::now() - quiet >= stream_keepalive() {
+                // A named event, not a `:` comment (2026-11-21): a page cannot see
+                // comments, so it could not tell a quiet stream from a dead one.
                 quiet = Self::now();
-                out.write_all(b": keepalive\n\n").and_then(|_| out.flush())
+                out.write_all(b"event: ping\ndata: {}\n\n").and_then(|_| out.flush())
             } else {
                 Ok(())
             };
@@ -739,12 +753,24 @@ fn finished_at(row: &Row) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// When a transcript summary last showed the session going on: the later of
+/// its newest prompt and its last real reply.
+fn moved_past(stat: &Value) -> Option<f64> {
+    ["last_prompt_at", "last_reply_at"]
+        .iter()
+        .filter_map(|k| stat.get(*k).and_then(Value::as_f64))
+        .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))
+}
+
 /// Control._overlay: fold what hooks recorded into a row. Read-only here:
 /// where Python would also clear stale attention in the store, this only
 /// leaves it off the row (Python's next snapshot does the same).
 /// Control._overlay. True when the recorded attention is settled and the
 /// store should clear it (Python clears it right there).
-fn overlay(row: &mut Row, extra: &Map<String, Value>) -> bool {
+///
+/// `past` is when the session's transcript last showed it going on - a new
+/// prompt or a real reply (sessionstat's `last_prompt_at`/`last_reply_at`).
+fn overlay(row: &mut Row, extra: &Map<String, Value>, past: Option<f64>) -> bool {
     for field in [
         "socket",
         "name",
@@ -756,6 +782,9 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>) -> bool {
         "last_failure_detail",
         "window_title",
         "hc",
+        // What the last Stop hook said the session still waits on.
+        "stop_background_tasks",
+        "stop_crons",
     ] {
         if truthy(extra.get(field)) && !truthy(row.get(field)) {
             row.insert(field.into(), extra[field].clone());
@@ -772,7 +801,19 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>) -> bool {
     let since = extra.get("attention_since").filter(|v| truthy(Some(v)));
     let kind = extra.get("attention_kind").and_then(Value::as_str);
     let failure = kind == Some("failure");
-    let stale = !failure && registry::moved_on(row, since.and_then(Value::as_f64));
+    // A failure is not settled by the session merely working again (the
+    // retry after a 529 would wipe it), but it is by a prompt or a real reply
+    // after it: the user went on (a /login reruns the failed prompt with no
+    // new one; its reply follows), or the API answered. 2026-11-18: "login
+    // required" stayed up until the rerun's turn ended.
+    let stale = if failure {
+        let failed_at = ["last_failure_at", "attention_since"]
+            .iter()
+            .find_map(|k| extra.get(*k).and_then(Value::as_f64).filter(|v| *v > 0.0));
+        matches!((failed_at, past), (Some(f), Some(p)) if p > f)
+    } else {
+        registry::moved_on(row, since.and_then(Value::as_f64))
+    };
     let mut clear = false;
     if since.is_some() && stale {
         clear = true;
@@ -799,4 +840,60 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>) -> bool {
     let d = dispatchable(row);
     row.insert("dispatchable".into(), json!(d));
     clear
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    fn obj(v: Value) -> Row {
+        v.as_object().unwrap().clone()
+    }
+
+    /// The store's record after a "login required" StopFailure at 1000.
+    fn failed() -> Row {
+        obj(json!({"attention_since": 1000.0, "attention_kind": "failure",
+                   "attention_reason": "login required - run /login",
+                   "last_failure": "authentication_failed", "last_failure_at": 1000.0}))
+    }
+
+    #[test]
+    fn a_failure_stays_while_the_session_only_works_again() {
+        // The retry after a 529, or a /login's rerun before its reply.
+        let mut row = obj(json!({"status": "busy", "status_at_change": "busy",
+                                 "status_changed_at": 1500.0}));
+        assert!(!overlay(&mut row, &failed(), None));
+        assert_eq!(row["attention"], true);
+        assert_eq!(row["attention_kind"], "failure");
+        // what the transcript showed before the failure proves nothing
+        let mut row = obj(json!({"status": "busy"}));
+        assert!(!overlay(&mut row, &failed(), Some(990.0)));
+        assert_eq!(row["attention"], true);
+    }
+
+    #[test]
+    fn a_prompt_or_reply_after_the_failure_clears_it() {
+        let mut row = obj(json!({"status": "busy"}));
+        assert!(overlay(&mut row, &failed(), Some(1010.0)));
+        assert!(!row.contains_key("attention"));
+        // A record from before last_failure_at goes by the attention clock.
+        let mut old = failed();
+        old.shift_remove("last_failure_at");
+        let mut row = obj(json!({"status": "idle"}));
+        assert!(overlay(&mut row, &old, Some(1010.0)));
+        // A permission wait showing since 500, then the failure at 1000: a
+        // prompt at 800 was before the failure.
+        let mut both = failed();
+        both.insert("attention_since".into(), json!(500.0));
+        let mut row = obj(json!({"status": "idle"}));
+        assert!(!overlay(&mut row, &both, Some(800.0)));
+        assert_eq!(row["attention"], true);
+    }
+
+    #[test]
+    fn moved_past_is_the_later_of_prompt_and_reply() {
+        assert_eq!(moved_past(&json!({"last_prompt_at": 5.0, "last_reply_at": 9.0})), Some(9.0));
+        assert_eq!(moved_past(&json!({"last_prompt_at": 5.0})), Some(5.0));
+        assert_eq!(moved_past(&json!({})), None);
+    }
 }

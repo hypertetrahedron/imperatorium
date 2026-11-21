@@ -44,6 +44,24 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// What the summary has gained since the Python reference froze
+/// (2026-11-15), left out of `got` before comparing: `last_prompt_at`
+/// (2026-11-18, a failure clears once the session goes on), `hooks_ok_at`
+/// and each hook error's `hooks` (when the Stop hooks last ran cleanly and
+/// which commands ran, for the window's explanation).
+fn without_additions(mut got: Value) -> Value {
+    if let Some(o) = got.as_object_mut() {
+        o.shift_remove("last_prompt_at");
+        o.shift_remove("hooks_ok_at");
+        if let Some(Value::Array(errs)) = o.get_mut("hook_errors") {
+            for e in errs.iter_mut().filter_map(Value::as_object_mut) {
+                e.shift_remove("hooks");
+            }
+        }
+    }
+    got
+}
+
 struct Goldens {
     list: Value,
     sessions: Vec<Value>,
@@ -88,6 +106,47 @@ fn load(dir: &Path) -> Goldens {
             .unwrap()
             .clone(),
     }
+}
+
+/// Sessions whose head holds a prompt another session delivered (Claude
+/// Code writes it as meta, with `origin.kind` / `turnOrigin` "peer"). Python
+/// skipped those, so a session driven only from Imperatorium's window had
+/// `/clear` for its first prompt, or no info and no place in the list at
+/// all; since 2026-11-21 the binary counts them (sessions.rs,
+/// first_prompt_from_head). For these sessions the goldens' `summary` and
+/// `first_prompt` - and their absence - are not compared.
+fn peer_sessions(root: &Path) -> std::collections::HashSet<String> {
+    use std::io::Read;
+    let mut out = std::collections::HashSet::new();
+    let Ok(projects) = std::fs::read_dir(root.join("projects")) else { return out };
+    for dir in projects.flatten() {
+        let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
+        for f in files.flatten() {
+            let path = f.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let mut head = vec![0u8; 65536];
+            let n = std::fs::File::open(&path).and_then(|mut h| h.read(&mut head)).unwrap_or(0);
+            let head = String::from_utf8_lossy(&head[..n]);
+            if head.contains("\"turnOrigin\":\"peer\"") || head.contains("\"kind\":\"peer\"") {
+                if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                    out.insert(id.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `v` without the fields a delivered prompt changes, for a peer session.
+fn without_prompt_fields(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("summary");
+        o.remove("first_prompt");
+    }
+    v
 }
 
 fn raises(v: &Value) -> bool {
@@ -153,8 +212,22 @@ fn compare(root: &Path, g: &Goldens, what: &str) {
         }
         f.check(|| label, diff);
     };
+    let peers = peer_sessions(root);
+    let is_peer = |v: &Value| v["session_id"].as_str().is_some_and(|id| peers.contains(id));
     let list = it.next().unwrap();
-    check(&mut f, "list", "", "list".into(), &g.list, &list);
+    let (want_list, got_list) = if peers.is_empty() {
+        (g.list.clone(), list)
+    } else {
+        let wanted: std::collections::HashSet<&str> = g.list.as_array().into_iter().flatten()
+            .filter_map(|v| v["session_id"].as_str()).collect();
+        let norm = |v: &Value| if is_peer(v) { without_prompt_fields(v) } else { v.clone() };
+        let want: Vec<Value> = g.list.as_array().into_iter().flatten().map(norm).collect();
+        let got: Vec<Value> = list.as_array().into_iter().flatten()
+            .filter(|v| !is_peer(v) || v["session_id"].as_str().is_some_and(|id| wanted.contains(id)))
+            .map(norm).collect();
+        (json!(want), json!(got))
+    };
+    check(&mut f, "list", "", "list".into(), &want_list, &got_list);
     for i in 0..n {
         let (s, items, stats) = (&g.sessions[i], &g.items[i], &g.stats[i]);
         let id = s["id"].as_str().unwrap();
@@ -164,14 +237,12 @@ fn compare(root: &Path, g: &Goldens, what: &str) {
             without_items_times(it.next().unwrap()),
             without_items_times(it.next().unwrap()),
         );
-        check(
-            &mut f,
-            "sessions",
-            id,
-            format!("info {id}"),
-            &s["info"],
-            &info,
-        );
+        if !peers.contains(id) {
+            check(&mut f, "sessions", id, format!("info {id}"), &s["info"], &info);
+        } else if !s["info"].is_null() {
+            check(&mut f, "sessions", id, format!("info {id}"),
+                  &without_prompt_fields(&s["info"]), &without_prompt_fields(&info));
+        }
         check(
             &mut f,
             "sessions",
@@ -206,7 +277,7 @@ fn compare(root: &Path, g: &Goldens, what: &str) {
             &merged,
         );
         for (k, now) in g.clocks.iter().enumerate() {
-            let got = it.next().unwrap();
+            let got = without_additions(it.next().unwrap());
             check(
                 &mut f,
                 "stats",

@@ -518,6 +518,11 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | GET/POST | `/api/prefs` | pinned, archived, grouping |
 | GET/POST | `/api/notify` | ntfy and speech channels, on/off |
 | GET | `/api/pending` | parked permission requests; `POST /api/decide` answers one |
+| GET | `/api/fleet` | every session as a few fields (state, waiting and why, doing, cost), the permission requests waiting, the active watches |
+| GET | `/api/fleet/book` | watches, proposed and answered actions, what has fired |
+| POST | `/api/fleet/watch` | `{op: add\|confirm\|pause\|resume\|remove, ...}` - anyone may add (it is proposed); only the window confirms or changes one |
+| POST | `/api/fleet/action` | `{op: propose, action, session, prompt, reason}` from anyone; `{op: confirm\|decline, id}` only from the window |
+| POST | `/api/ask` | `{question}` - only from the window: a tool-less `claude -p` answers from the fleet snapshot |
 
 `mode` is `auto` (inject if a session is live, else launch), `inject`, `launch`,
 `background`, or `dry-run`.
@@ -586,6 +591,51 @@ console, never twice within 3 s (Esc Esc there opens the rewind menu).
 mod/imperatorium` check and test it. `IMPERATORIUM_MOD_ENDPOINT` and
 `IMPERATORIUM_MOD_TOKEN_FILE` point one session's mod at another dispatcher,
 for testing.
+
+## Fleet: Ask, watches and agent tools
+
+One place to ask about every session at once, and to be told when
+something happens, without an agent that acts on its own. (Why it is shaped
+this way: `docs/research-super-agent.md`.) **Fleet** is the first row of the
+session list; picked, it takes the chat's place: the watches as a folded
+list at the top, then what waits for you to confirm, what happened
+recently, and Ask's answers, asked in the normal prompt box. Its row says
+how many proposals wait and how many watches are on.
+
+- **Ask.** "Who needs me?", "what finished while I was away?" A
+  `claude -p` with no tools, no hooks and no MCP servers reads a snapshot
+  the dispatcher builds (each session's state, wait, current step, cost;
+  the permission requests waiting; the recent events) and answers, naming
+  sessions as links that open them. It spends your plan's usage, so it runs
+  only when you ask, and only from the window. The model is `ask.model` in
+  `config.json` (default `sonnet`).
+- **Watches**, checked by the dispatcher itself every few seconds with no
+  model in the loop: a session (or a project's, or any) *finishes its
+  work*, *waits for you more than N minutes*, or *costs more than $N*. When
+  one comes true it is pushed and spoken on the notification channels that
+  are on, said in the window (and on the desktop, if desktop notifications
+  are on), and logged as an event.
+- **Proposals.** Ask, or an agent through `imperatorium mcp`, may propose a
+  watch or an action from a fixed menu - queue a prompt, stop a turn,
+  `/compact`, open the terminal. Nothing is watched or run until you
+  confirm it in Fleet (a badge, *N to confirm*, says one is waiting); the
+  dispatcher takes a confirmation only from the window's own page. A
+  confirmed prompt is queued as any prompt is and arrives framed as another
+  session's message, never as you, so it cannot approve anything. Nothing
+  here answers a permission request or a question. Each answered action is
+  logged to `actions.jsonl` beside `decisions.jsonl`; watches and
+  proposals live in `fleet.json` beside the state.
+
+**`imperatorium mcp`** makes any Claude Code session the "super agent": a
+stdio MCP server over the same API, with `fleet_status`, `session_detail`,
+`conversation_tail`, `recent_events`, `spend`, `project_changes`,
+`list_watches`, and `propose_watch` / `propose_action`, which only propose.
+Text that comes from a session's transcript is handed back marked as data,
+not instructions. Register it once, for every project:
+
+```
+claude mcp add --scope user imperatorium -- "%LOCALAPPDATA%\Programs\imperatorium\imperatorium.exe" mcp
+```
 
 ## How dispatch actually works
 

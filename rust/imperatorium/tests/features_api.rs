@@ -268,6 +268,41 @@ fn features_a_session_that_scheduled_its_own_next_turn_is_not_waiting() {
     assert!(!fx.events().iter().any(|e| e["kind"] == "idle_prompt"));
 }
 
+#[test]
+fn features_what_the_stop_hook_lists_holds_waiting_for_you_back() {
+    // Claude Code's Stop input names its own in-flight work and crons; the
+    // transcript and the process list here show none of it.
+    let fx = Fx::start("stopwaits", vec![], scaled(), &[]);
+    let (bg, cron, none) = (sid(21), sid(22), sid(23));
+    for s in [&bg, &cron, &none] {
+        fx.record(s, json!({"status": "idle"}));
+        fx.session_start(s, None, None);
+    }
+    let stop = |s: &str, tasks: Value, crons: Value| {
+        fx.hook(json!({"hook_event_name": "Stop", "session_id": s, "cwd": fx.proj_a.to_string_lossy(),
+                       "background_tasks": tasks, "session_crons": crons}));
+    };
+    stop(&bg, json!([{"id": "t1", "type": "MCP task", "status": "running", "description": "export",
+                      "server": "s", "tool": "t"}]), json!([]));
+    stop(&cron, json!([]), json!([{"id": "c1", "schedule": "*/5 * * * *", "recurring": true, "prompt": "check"}]));
+    stop(&none, json!([]), json!([]));
+
+    let raised = |sid: &str| fx.events().iter().filter(|ev| ev["kind"] == "idle_prompt" && ev["session_id"] == sid).count();
+    wait_until(Duration::from_secs(60), || (raised(&none) >= 1).then_some(())).expect("nothing listed: waiting for you");
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(raised(&bg), 0, "an MCP task is still running");
+    assert_eq!(raised(&cron), 0, "a cron starts the next turn");
+    let row = fx.row(&bg).unwrap();
+    assert_eq!(row["attention"], false, "{row}");
+    assert_eq!((row["waiting_tasks"].clone(), row["tasks"].clone()), (json!(1), json!({"other": 1})), "{row}");
+    let row = fx.row(&cron).unwrap();
+    assert_eq!((row["attention"].clone(), row["tasks"].clone()), (json!(false), json!({"wakeups": 1})), "{row}");
+    assert_eq!(fx.row(&none).unwrap()["attention"], true);
+    // A resumed process has nothing in flight until its next Stop says so.
+    fx.session_start(&bg, None, None);
+    assert!(fx.row(&bg).unwrap().get("tasks").is_none_or(Value::is_null));
+}
+
 // ------------------------------------------- resume, new, close, dismiss
 
 fn wt_args(fx: &Fx, n: usize) -> Vec<Vec<String>> {

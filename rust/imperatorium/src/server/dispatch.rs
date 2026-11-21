@@ -51,14 +51,48 @@ impl Shared {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let got =
-            match crate::launch::resume(session_id, cwd.as_deref(), where_, fork, prompt, &options)
+        // A fork runs beside the session it came from, so it gets a worktree
+        // of its own, made from the branch that session has checked out -
+        // else both edit the same files. A resume by id finds the session
+        // from any directory (checked 2026-11-21 against 2.1.330).
+        let made = match cwd.as_deref() {
+            Some(c) if fork && std::path::Path::new(c).is_dir() => {
+                let name = format!("fork-{}", session_id.chars().take(8).collect::<String>());
+                match crate::changes::make_worktree(c, &name) {
+                    Ok(m) => m,
+                    Err(e) => return json!({"ok": false, "error": format!("could not make its worktree: {e}")}),
+                }
+            }
+            _ => None,
+        };
+        let run_in = made
+            .as_ref()
+            .and_then(|m| m["path"].as_str().map(str::to_string))
+            .or_else(|| cwd.clone());
+        let mut got =
+            match crate::launch::resume(session_id, run_in.as_deref(), where_, fork, prompt, &options)
             {
                 Ok(g) => g,
-                Err(e) => return json!({"ok": false, "error": e}),
+                Err(e) => {
+                    if let Some(m) = &made {
+                        crate::changes::drop_worktree(m);
+                    }
+                    return json!({"ok": false, "error": e});
+                }
             };
-        let e = json!({"kind": if fork { "fork" } else { "resume" }, "session_id": session_id,
-                       "cwd": cwd, "summary": got["command"]});
+        let mut e = json!({"kind": if fork { "fork" } else { "resume" }, "session_id": session_id,
+                           "cwd": cwd, "summary": got["command"]});
+        if let Some(m) = &made {
+            let base = match m["base"].as_str() {
+                Some(b) => b.to_string(),
+                None => m["start"].as_str().unwrap_or("").chars().take(12).collect(),
+            };
+            for (k, v) in [("worktree", m["path"].clone()), ("branch", m["branch"].clone()),
+                           ("base", json!(base))] {
+                e[k] = v.clone();
+                got[k] = v;
+            }
+        }
         store.add_event_json(e);
         self.invalidate();
         got

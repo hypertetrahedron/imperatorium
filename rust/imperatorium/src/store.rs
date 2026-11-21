@@ -180,6 +180,20 @@ impl Store {
         })
     }
 
+    /// Take these fields off a session's record, if it has them.
+    pub fn drop_fields(&self, sid: &str, fields: &[&str]) {
+        self.with(|data| {
+            let Some(Value::Object(rec)) = Self::table(data, "sessions").get_mut(sid) else {
+                return ((), false);
+            };
+            let mut dropped = false;
+            for k in fields {
+                dropped |= rec.shift_remove(*k).is_some();
+            }
+            ((), dropped)
+        })
+    }
+
     pub fn forget(&self, sid: &str) {
         self.with(|data| {
             Self::table(data, "tokens").shift_remove(sid);

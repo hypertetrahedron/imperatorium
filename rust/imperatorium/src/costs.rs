@@ -11,6 +11,7 @@ use crate::pyish::{py_str, truthy};
 
 /// (model id, input $/Mtok, output $/Mtok), in costs.PRICES' order.
 pub const PRICES: &[(&str, f64, f64)] = &[
+    ("claude-fable-5-2", 8.0, 40.0),
     ("claude-fable-5-1", 10.0, 50.0),
     ("claude-fable-5", 10.0, 50.0),
     ("claude-mythos-5-1", 10.0, 50.0),
@@ -33,7 +34,7 @@ pub const PRICES: &[(&str, f64, f64)] = &[
 ];
 /// Newest of each family, for an id the table has not heard of.
 const FAMILIES: &[(&str, &str)] = &[
-    ("fable", "claude-fable-5-1"),
+    ("fable", "claude-fable-5-2"),
     ("opus", "claude-opus-5-5"),
     ("sonnet", "claude-sonnet-5-5"),
     ("haiku", "claude-haiku-5-5"),
@@ -108,7 +109,7 @@ const WORKTREE: &str = "/.claude/worktrees/";
 fn read_ratio(key: &str) -> f64 {
     match key {
         "claude-opus-5-5" => 0.05,
-        "claude-fable-5-1" | "claude-mythos-5-1" => 0.025,
+        "claude-fable-5-2" | "claude-fable-5-1" | "claude-mythos-5-1" => 0.025,
         _ => READ_DEFAULT,
     }
 }
@@ -885,6 +886,7 @@ mod history_tests {
     #[test]
     fn cache_read_multipliers() {
         for (model, expect) in [("claude-opus-5-5", 4.0 * 0.05), ("claude-fable-5-1", 10.0 * 0.025),
+                                ("claude-fable-5-2", 8.0 * 0.025), ("claude-fable-5-2-20261101", 8.0 * 0.025),
                                 ("claude-sonnet-5-5", 2.0 * 0.1), ("claude-opus-5", 5.0 * 0.1)] {
             let mut r = Rig::new();
             let usage = json!({"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": M});
@@ -920,6 +922,14 @@ mod history_tests {
         let out = r.summary(30);
         near(out["total"].as_f64().unwrap(), 4.0);
         assert_eq!(out["unpriced_tokens"], 0);
+    }
+
+    #[test]
+    fn fable_family_falls_back_to_5_2() {
+        let mut r = Rig::new();
+        r.write("s1", &[entry_with("m1", "claude-fable-9-9", r"C:\work\app", &stamp(0, 12),
+                                   json!({"input_tokens": M, "output_tokens": 0}))]);
+        near(r.summary(30)["total"].as_f64().unwrap(), 8.0);
     }
 
     #[test]

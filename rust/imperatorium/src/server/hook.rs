@@ -86,6 +86,8 @@ impl Shared {
                     payload.get("session_name").cloned().unwrap_or(Value::Null),
                 );
                 store.register(&key, token.as_ref(), &meta);
+                // A new or resumed process has nothing in flight yet.
+                store.drop_fields(&key, &["stop_background_tasks", "stop_crons"]);
                 store.undismiss(&key);
                 self.invalidate();
                 ev("session_start", json!({"cwd": meta.get("cwd")}));
@@ -117,6 +119,10 @@ impl Shared {
                     .unwrap_or_else(|| "notification".into());
                 meta.insert("last_notification".into(), json!(kind));
                 let caption = match kind.as_str() {
+                    // Claude Code sends this same generic "Claude needs your
+                    // permission" a few seconds into a question dialog, while
+                    // its session file says "input needed": keep those words.
+                    "permission_prompt" if self.asking(&key, &sid, host) => Some("input needed"),
                     "permission_prompt" => Some("needs permission"),
                     "idle_prompt" => Some("waiting for you"),
                     "agent_needs_input" => Some("needs input"),
@@ -159,6 +165,9 @@ impl Shared {
                     json!("unknown")
                 };
                 meta.insert("last_failure".into(), failure);
+                // What a later prompt or reply is measured against: the
+                // attention clock may be older (another wait still showing).
+                meta.insert("last_failure_at".into(), json!(Self::now()));
                 meta.insert(
                     "last_failure_detail".into(),
                     json!(crate::pyish::take(&detail_s, 280)),
@@ -186,6 +195,9 @@ impl Shared {
                     .filter(|v| truthy(Some(v)))
                     .map(crate::pyish::py_str)
                     .unwrap_or_default();
+                if event == "Stop" {
+                    meta.extend(stop_waits(payload));
+                }
                 store.register(&key, token.as_ref(), &meta);
                 if ["Stop", "SubagentStop", "TaskCompleted"].contains(&event.as_str()) {
                     store.clear_attention(&key);
@@ -217,6 +229,20 @@ impl Shared {
         json!({"ok": true})
     }
 
+    /// Is this session's prompt a question rather than a permission: its
+    /// running call is AskUserQuestion, or it has one parked in the window.
+    fn asking(&self, key: &str, sid: &str, host: Option<&str>) -> bool {
+        let q = crate::pending::QUESTION_TOOL;
+        if self.live.current(key, Self::now())["tool"].as_str() == Some(q) {
+            return true;
+        }
+        self.pending.waiting().iter().any(|p| {
+            p["tool"].as_str() == Some(q)
+                && p["session_id"].as_str() == Some(sid)
+                && p["host"].as_str() == host
+        })
+    }
+
     /// Control._idle_check: the `idle_prompt` Claude Code no longer sends. A
     /// minute after Stop, a session that is idle, has had no hook since and
     /// has nothing running is waiting for you. True when it raised it.
@@ -233,6 +259,12 @@ impl Shared {
             return false;
         };
         if row.get("status").and_then(Value::as_str) != Some("idle") {
+            return false;
+        }
+        // What Claude Code itself listed at that Stop: work still in flight,
+        // or a cron or wakeup that will start the next turn by itself.
+        let listed = |k: &str| rec.get(k).and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+        if listed("stop_background_tasks") || listed("stop_crons") {
             return false;
         }
         // Background work holds idle_prompt back; a pending wakeup is not
@@ -443,6 +475,40 @@ impl Shared {
 
 /// Control.decisions: the permission hook's recent verdicts, newest first,
 /// from the decisions.jsonl beside the state file.
+/// What a Stop hook says the session still waits on: Claude Code's own
+/// `background_tasks` (shells, monitors, subagents, MCP tasks, workflows)
+/// and `session_crons` (CronCreate, ScheduleWakeup, /loop), kept short as
+/// `stop_background_tasks` / `stop_crons`. A Claude Code too old to send a
+/// field leaves it out, and the record keeps no claim either way.
+pub(super) fn stop_waits(payload: &Map<String, Value>) -> Map<String, Value> {
+    const MOST: usize = 20;
+    let mut out = Map::new();
+    if let Some(tasks) = payload.get("background_tasks").and_then(Value::as_array) {
+        let short: Vec<Value> = tasks
+            .iter()
+            .take(MOST)
+            .map(|t| {
+                let s = |k: &str| t.get(k).and_then(Value::as_str).unwrap_or("");
+                json!({"id": s("id"), "type": s("type"), "status": s("status"),
+                       "description": crate::pyish::take(s("description"), 120)})
+            })
+            .collect();
+        out.insert("stop_background_tasks".into(), Value::Array(short));
+    }
+    if let Some(crons) = payload.get("session_crons").and_then(Value::as_array) {
+        let short: Vec<Value> = crons
+            .iter()
+            .take(MOST)
+            .map(|c| {
+                json!({"id": c.get("id").and_then(Value::as_str).unwrap_or(""),
+                       "recurring": c.get("recurring").and_then(Value::as_bool).unwrap_or(false)})
+            })
+            .collect();
+        out.insert("stop_crons".into(), Value::Array(short));
+    }
+    out
+}
+
 pub(super) fn decisions(dir: &std::path::Path, limit: usize) -> Vec<Value> {
     let Some(text) = tail_lines(&dir.join("decisions.jsonl"), limit) else {
         return vec![];
@@ -632,5 +698,34 @@ mod tests {
             assert_eq!(got_lines[got_lines.len().saturating_sub(limit)..].concat(), want);
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn obj(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_stop_keeps_what_claude_code_still_waits_on() {
+        let got = stop_waits(&obj(json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [
+                {"id": "b1", "type": "shell", "status": "running", "description": "npm test", "command": "npm test"},
+                {"id": "m1", "type": "monitor", "status": "running", "description": "x".repeat(500)},
+            ],
+            "session_crons": [{"id": "c1", "schedule": "*/5 * * * *", "recurring": true, "prompt": "check CI"}],
+        })));
+        let tasks = got["stop_background_tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0], json!({"id": "b1", "type": "shell", "status": "running", "description": "npm test"}));
+        assert_eq!(tasks[1]["description"].as_str().unwrap().chars().count(), 120);
+        assert_eq!(got["stop_crons"], json!([{"id": "c1", "recurring": true}]));
+    }
+
+    #[test]
+    fn a_stop_with_nothing_waiting_says_so_and_an_old_one_says_nothing() {
+        let empty = stop_waits(&obj(json!({"background_tasks": [], "session_crons": []})));
+        assert_eq!(empty["stop_background_tasks"], json!([]));
+        assert_eq!(empty["stop_crons"], json!([]));
+        assert!(stop_waits(&obj(json!({"hook_event_name": "Stop"}))).is_empty());
     }
 }

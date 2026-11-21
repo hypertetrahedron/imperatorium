@@ -619,7 +619,8 @@ pub fn awaited(stat: &Value, folder: Option<&Path>, agents: Option<&Path>) -> Ve
         out.push(json!({"id": "hooks", "kind": "hooks",
                         "label": format!("{} hook error{}", errors.len(), if errors.len() == 1 { "" } else { "s" }),
                         "foreground": false, "started": null, "size": 0, "mtime": null,
-                        "text": text.join("\n"), "path": null, "errors": errors}));
+                        "text": text.join("\n"), "path": null, "errors": errors,
+                        "ok_at": stat.get("hooks_ok_at").cloned().unwrap_or(Value::Null)}));
     }
     out
 }

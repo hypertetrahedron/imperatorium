@@ -183,14 +183,20 @@ fn open_stream(rig: &Rig) -> BufReader<std::net::TcpStream> {
     BufReader::new(s)
 }
 
-/// The next `data:` line of an open stream, as the list it carries.
+/// The next `sessions` event of an open stream, as the list it carries
+/// (a `ping` between them is skipped).
 fn next_list(r: &mut BufReader<std::net::TcpStream>) -> Value {
+    let mut ping = false;
     loop {
         let mut line = String::new();
         let n = r.read_line(&mut line).expect("the stream went quiet");
         assert!(n > 0, "the stream ended");
-        if let Some(data) = line.strip_prefix("data: ") {
-            return serde_json::from_str(data.trim_end()).unwrap();
+        if line.starts_with("event: ") {
+            ping = line.trim_end() == "event: ping";
+        } else if let Some(data) = line.strip_prefix("data: ") {
+            if !ping {
+                return serde_json::from_str(data.trim_end()).unwrap();
+            }
         }
     }
 }
@@ -246,7 +252,9 @@ fn an_unchanged_list_is_not_resent() {
         assert!(n > 0);
         got.extend_from_slice(&buf[..n]);
     }
-    // Keepalive comments keep arriving, so look for a while, not for quiet.
+    // Keepalives keep arriving, so look for a while, not for quiet. They are
+    // `ping` events, which a page can see (a `:` comment it cannot), so it
+    // can tell a quiet stream from a dead one (2026-11-21).
     s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
     let until = Instant::now() + Duration::from_millis(1500);
     while Instant::now() < until {
@@ -258,4 +266,6 @@ fn an_unchanged_list_is_not_resent() {
     }
     let text = String::from_utf8_lossy(&got);
     assert_eq!(text.matches("event: sessions").count(), 1, "{text}");
+    assert!(text.contains("event: ping\ndata: {}\n\n"), "{text}");
+    assert!(!text.contains(": keepalive"), "{text}");
 }

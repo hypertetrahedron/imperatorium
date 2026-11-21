@@ -16,7 +16,7 @@ describe("Drafts", () => {
   const runJs = (steps) => {
     const body = between(SCRIPT, "// -- one unsent draft per session", "let ticks = 0;");
     return evalJson(cat(
-      "const box = {value: ''}; const $ = () => box; let selected = null;\n",
+      "const box = {value: ''}; const $ = () => box; let selected = null, view = 'session';\n",
       "const store = {}; const localStorage = {getItem: k => store[k] || null,",
       " setItem: (k, v) => { store[k] = v; }};\n", body, "\n", steps));
   };
@@ -62,10 +62,11 @@ describe("SessionTree", () => {
       "const drawSessions = () => {};\n",
       between(s, "const esc =", "\n\n"), "\n", between(s, "const folder =", "\n"), "\n",
       between(s, "const nameOf =", "\nfunction groupOf"), "\n",
-      between(s, "function tree(", "\nfunction drawSessions"), "\n",
+      between(s, "function key(", "\n"), "\n",
+      between(s, "function forkOrder(", "\nfunction drawSessions"), "\n",
       "const stateOf = s => [s.attention ? 'd-attn' : 'd-idle', 'x'];\n",
       "const isUnread = s => !!s.unread;\n",
-      "const tile = (s, short) => '[' + (short && s.short_name || nameOf(s)) + ']';\n",
+      "const tile = (s, short, d) => '[' + (d ? '>'.repeat(d) : '') + (short && s.short_name || nameOf(s)) + ']';\n",
       "const prefs = {group: ", j(group), "};\n",
       then || "process.stdout.write(tree(" + j(sessions) + "));");
   };
@@ -80,6 +81,38 @@ describe("SessionTree", () => {
     assertIn('<span class="car">▾</span><span>hai-proof</span>', html);
     assertIn('<div class="kids">[5b][fizzy-wondering-lark]</div>', html);
     assert.ok(html.endsWith("[strata-0b]"));
+  });
+
+  it("a fork nests under the session it was forked from", () => {
+    const row = (id, name, extra) => ({ sessionId: id, name, cwd: "C:/src/strata", project: "strata", ...extra });
+    const html = runJs("state", [
+      row("c", "child", { work: { forked_from: "p" } }),
+      row("o", "other"),
+      row("g", "grandchild", { work: { forked_from: "c" } }),
+      row("p", "parent"),
+      row("x", "orphan", { work: { forked_from: "gone" } }),
+      row("l1", "loop-a", { work: { forked_from: "l2" } }),
+      row("l2", "loop-b", { work: { forked_from: "l1" } }),
+    ]);
+    const kids = html.slice(html.indexOf('<div class="kids">') + 18, html.lastIndexOf("</div>"));
+    // Roots keep their order; each fork follows its parent, a step in; a
+    // parent not on the list leaves the fork at the top; a loop shows once each.
+    assert.equal(kids, "[other][parent][>child][>>grandchild][orphan][loop-a][>loop-b]");
+  });
+
+  it("the fork marker names the parent", () => {
+    const got = evalJs(cat(
+      between(SCRIPT, "const esc =", "\n\n"), "\n",
+      between(SCRIPT, "function key(", "\n"), "\n",
+      between(SCRIPT, "const nameOf =", "\n"), "\n",
+      between(SCRIPT, "function forkMark(", "\nfunction tree("), "\n",
+      "const all = [{sessionId: 'p', name: 'the <parent>'}];\n",
+      "process.stdout.write(JSON.stringify([forkMark({work: {forked_from: 'p'}}, all),",
+      " forkMark({work: {forked_from: 'abcdef1234'}}, all), forkMark({}, all)]));"));
+    const [named, bare, none] = JSON.parse(got);
+    assertIn('title="forked from the &lt;parent&gt;"', named);
+    assertIn('title="forked from abcdef12"', bare);
+    assert.equal(none, "");
   });
 
   it("one dot per session on the node", () => {

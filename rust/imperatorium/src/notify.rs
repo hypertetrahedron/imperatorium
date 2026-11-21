@@ -211,6 +211,16 @@ impl Notifier {
         text
     }
 
+    /// A watch came true (fleet.rs): at once, on every channel that is on.
+    pub fn watch(&self, channels: &Channels, text: &str) {
+        if let Some((_, cfg, true)) = channel(channels, "ntfy") {
+            self.push(cfg, text, "Imperatorium: watch", &["eyes"]);
+        }
+        if let Some((_, cfg, true)) = channel(channels, "speak") {
+            self.say(cfg, &text.replace(['-', '_'], " "));
+        }
+    }
+
     fn push(&self, cfg: &Map<String, Value>, message: &str, title: &str, tags: &[&str]) {
         let sent = ntfy_request(cfg, title, message, tags).and_then(|(url, headers, body)| {
             let mut req = ureq::post(&url).timeout(std::time::Duration::from_secs(10));

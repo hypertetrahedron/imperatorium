@@ -153,9 +153,11 @@ function tileSignals(s, now, open){
 // the open tile's for the selected one only.
 // `short` is for a tile under its project's node, where the project's name
 // would only be said twice; the chat header still carries the full name.
-function tile(s, short){
+// `depth` nests a fork under the session it was forked from (forkOrder).
+function tile(s, short, depth){
   const [dot, label] = stateOf(s);
-  const now = Date.now() / 1000, open = key(s) === selected;
+  const fd = Math.min(depth || 0, 4);
+  const now = Date.now() / 1000, open = key(s) === selected && view !== "fleet";
   const mark = s.attention ? (s.attention_kind === "failure" ? " fail"
     : s.attention_kind === "complete" ? " comp" : " attn") : "";
   const pinned = (prefs.pinned || []).includes(pkey(s));
@@ -182,9 +184,10 @@ function tile(s, short){
   const details = `<div class="m"><span class="det">${tileDetails(s, now, spend).map(p =>
     `<span class="${p.cls || ""}" title="${esc(p.title)}">${esc(p.text)}</span>`).join(" · ")}${
     s.host ? " · " + esc(s.host) : ""}${prBadge(s.pr)}</span></div>`;
-  return `<div class="s${open ? " on" : ""}${mark}${isUnread(s) ? " unread" : ""}" data-k="${esc(key(s))}">
+  return `<div class="s${open ? " on" : ""}${mark}${isUnread(s) ? " unread" : ""}${fd ? " fk" : ""}"${
+      fd ? ` style="--fd:${fd}"` : ""} data-k="${esc(key(s))}">
     <div class="t1"><span class="dot ${dot}" title="${esc(label)}"></span><span class="n" title="${esc(nameOf(s))}">${
-      s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""}${s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${
+      forkMark(s, sessions)}${s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""}${s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${
       pinned ? `<span class="pin">★</span>` : ""}</span>${
       plain ? "" : `<span class="why" title="${esc(label)}">${esc(label)}</span>`}<span class="sig">${
       tileSignals(s, now, open)}</span>${
@@ -202,6 +205,37 @@ function tile(s, short){
 // hides or shows only the sessions waiting for you, leaving the rest.
 // archive does. Grouped by folder, the whole list is that tree: every
 // project gets a node, one session or several, in place of a group header.
+// Pure: `list` with each fork moved to just under the session it was forked
+// from (work.forked_from, read off the transcript), as [session, depth].
+// Sessions whose parent is not in `list` keep their place at depth 0; a
+// parent's forks keep the order they had. A loop cannot nest anything.
+function forkOrder(list){
+  const here = new Set(list.map(key)), kids = new Map();
+  const parentOf = s => { const p = (s.work || {}).forked_from; return p && p !== key(s) && here.has(p) ? p : null; };
+  for (const s of list){
+    const p = parentOf(s);
+    if (p){ if (!kids.has(p)) kids.set(p, []); kids.get(p).push(s); }
+  }
+  const out = [], put = new Set();
+  const walk = (s, d) => {
+    if (put.has(s)) return;
+    put.add(s); out.push([s, d]);
+    for (const k of kids.get(key(s)) || []) walk(k, d + 1);
+  };
+  for (const s of list) if (!parentOf(s)) walk(s, 0);
+  for (const s of list) walk(s, 0);  // only a loop is left
+  return out;
+}
+// Pure: the "forked from" marker for a tile - the parent's name when it is
+// on the list, else its id's head.
+function forkMark(s, all){
+  const p = (s.work || {}).forked_from;
+  if (!p) return "";
+  const parent = (all || []).find(x => key(x) === p);
+  const name = parent ? nameOf(parent) : p.slice(0, 8);
+  return `<span class="fork" title="forked from ${esc(name)}">&#8627;</span>`;
+}
+
 function tree(list){
   const fams = new Map();
   for (const s of list){
@@ -209,9 +243,10 @@ function tree(list){
     if (!fams.has(f)) fams.set(f, []);
     fams.get(f).push(s);
   }
+  const tiles = (kids, short) => forkOrder(kids).map(([s, d]) => tile(s, short, d)).join("");
   return [...fams].map(([f, kids]) => {
     // A project with one session needs no header, in any grouping.
-    if (kids.length < 2) return kids.map(s => tile(s)).join("");
+    if (kids.length < 2) return tiles(kids);
     const shut = folded.has(f), noWait = waitHidden.has(f);
     const dots = kids.map(s => `<span class="dot ${stateOf(s)[0]}" title="${
       esc(nameOf(s) + ": " + stateOf(s)[1])}"></span>`).join("");
@@ -223,7 +258,7 @@ function tree(list){
       shut ? "▸" : "▾"}</span><span>${esc(f)}</span>${noWait && !shut ? `<span class="nowait">waiting hidden</span>` : ""
       }${nNew ? `<span class="newn" title="sessions that finished a turn since you last looked">${nNew} new</span>` : ""
       }<span class="dots">${dots}</span></div>` +
-      (shown.length ? `<div class="kids">${shown.map(s => tile(s, true)).join("")}</div>` : "");
+      (shown.length ? `<div class="kids">${tiles(shown, true)}</div>` : "");
   }).join("");
 }
 
@@ -770,12 +805,15 @@ function drawLog(force){
 // Shown at the end of the chat the moment it is sent, marked as on its way,
 // until the conversation has it. Each one waits for one more turn of yours
 // than the conversation had when it was sent (`base`, counting the ones
-// already waiting); one that was not sent stays, marked, until dismissed.
+// already waiting). One that was not sent stays, marked, until dismissed or
+// until you go on: another prompt sent after it was refused, or one more turn
+// of yours in the conversation (typed at the terminal) - 2026-11-18: a bare
+// /model's refusal stayed up through the prompts after it.
 // Counted in prompts, not turns: prompts with no reply between them come back
 // as one turn of yours - a stopped one leaves no reply (2026-11-17: two
 // sends, each stopped with Esc, then a third, came back as two turns, and
 // the third's note stayed for good) - but each keeps its own text.
-const pendingSent = {};   // session key -> [{id, text, base, state, note}]
+const pendingSent = {};   // session key -> [{id, text, base, counted, state, note, after}]
 let pendingSeq = 0;
 const yourTurns = items => items.reduce((n, it) => it.speaker !== "you" || it.note ? n :
   n + (it.blocks || []).filter(b => b.kind === "text" && !teammateParts(b.text) &&
@@ -784,7 +822,8 @@ const yourTurns = items => items.reduce((n, it) => it.speaker !== "you" || it.no
 // Pure: the prompts still waiting, given the conversation's items now.
 function settlePending(list, items){
   const n = yourTurns(items);
-  return list.filter(p => p.state === "failed" || n <= p.base);
+  return list.filter(p => p.state !== "failed" ? n <= p.base
+    : !list.some(x => x.id > p.after && x.state !== "failed") && !(p.counted && n > p.base));
 }
 
 function pendingHtml(p){
@@ -797,7 +836,7 @@ function pendingHtml(p){
 
 function addPending(k, text){
   const list = pendingSent[k] || (pendingSent[k] = []);
-  const p = {id: ++pendingSeq, text, state: "sending", note: "",
+  const p = {id: ++pendingSeq, text, state: "sending", note: "", counted: k === selected,
     base: (k === selected ? yourTurns(logItems) : 0) + list.filter(x => x.state !== "failed").length};
   list.push(p);
   if (k === selected){ logFollow = true; drawLog(); }
@@ -809,7 +848,7 @@ function addPending(k, text){
 function settleSend(k, p, r, how){
   if (r.ok){ p.state = "sent"; p.note = how + " - waiting for Claude to respond"; }
   else {
-    p.state = "failed"; p.note = r.error || "refused";
+    p.state = "failed"; p.note = r.error || "refused"; p.after = pendingSeq;
     for (const x of pendingSent[k] || []) if (x.id > p.id && x.state !== "failed") x.base--;
   }
   if (k === selected) drawLog();
@@ -2447,15 +2486,97 @@ function taskItems(l, now){
       (doneOpen ? l.done.map(t => taskRow(t, now, true)).join("") : "");
   return items + l.extra.map(t => taskRow(t, now)).join("");
 }
+// -- hook errors --------------------------------------------------------------
+// The tile's "hook errors" chip opens a pop-up saying what went wrong and what
+// to do (2026-11-18: the chip said nothing more, and nothing opened from it).
+// The errors are what Claude Code recorded for the session's Stop hooks, its
+// last ten. The chip is for the ones since the hooks last ran cleanly: once a
+// later turn's Stop hooks run without an error, they are earlier ones.
+
+// Pure: the hooks row's errors since the Stop hooks last ran cleanly.
+const hookErrorsNow = h => !h ? [] : (h.errors || []).filter(e => !h.ok_at || (e.at || 0) > h.ok_at);
+
+// What a hook's error text says went wrong, the first that matches.
+const HOOK_KINDS = [
+  {re: /not recognized as|command not found|not found|no such file|cannot find|ENOENT/i,
+   what: "The hook's program could not be found",
+   why: "Claude Code could not start the command - it is not installed, the path is wrong, or it is not on the PATH Claude Code runs it with.",
+   fix: "Check the path in the hook's command, or install what it runs."},
+  {re: /timed? ?out|timeout|deadline/i,
+   what: "The hook took too long",
+   why: "Claude Code stopped waiting for it.",
+   fix: "Make the hook faster, or give it a longer \"timeout\" (seconds) in its settings entry."},
+  {re: /permission denied|access is denied|EACCES|EPERM/i,
+   what: "The hook was not allowed to run or to reach a file",
+   why: "The system refused it - a script without permission to run, or a file it cannot open.",
+   fix: "Check the script can be run (chmod +x on a script) and the files it uses are readable."},
+  {re: /ECONNREFUSED|connection refused|actively refused|could not connect|failed to connect|unreachable/i,
+   what: "The hook could not reach a service",
+   why: "It calls something - a local server, a port, a URL - that did not answer.",
+   fix: "Start that service, or check the address the hook uses."},
+  {re: /json|parse|unexpected token|invalid output/i,
+   what: "Claude Code could not read the hook's output",
+   why: "A hook that prints to stdout must print the JSON Claude Code expects, or nothing.",
+   fix: "Send the hook's own messages to stderr, or print valid JSON."},
+  {re: /exit(ed)? (with )?(code|status)|non-?zero|status \d|code \d/i,
+   what: "The hook ran and failed",
+   why: "Its command ended with an error code.",
+   fix: "Run it yourself to see why (below)."},
+];
+const HOOK_OTHER = {what: "The hook reported an error", why: "Claude Code recorded the text below.",
+                    fix: "Run it yourself to see all of its output (below)."};
+const hookKind = text => HOOK_KINDS.find(k => k.re.test(text || "")) || HOOK_OTHER;
+
+// Pure: the pop-up's body for the hooks row `h` of session `s`.
+function hookHelpHtml(h, s){
+  const errors = (h && h.errors) || [], now = hookErrorsNow(h);
+  if (!errors.length) return `<p class=none>No hook errors recorded for this session.</p>`;
+  const cwd = (s && s.cwd) || "the session's folder";
+  const hooks = [...new Set(errors.flatMap(e => e.hooks || []))];
+  const ours = hooks.some(c => /imperatorium/i.test(c));
+  const kinds = [...new Set(now.map(e => hookKind(e.error)))];
+  const errHtml = e => `<li class="${now.includes(e) ? "" : "old"}"><span class=when>${
+    esc(e.at ? clock(e.at) : "")}</span> <b>${esc(e.event || "Stop")}</b> - ${esc(hookKind(e.error).what)}<pre>${esc(e.error || "")}</pre></li>`;
+  return [
+    now.length
+      ? `<p>A hook is a command Claude Code runs at a point in a session - these ran when a turn ended (Stop). One that fails does not stop the session, but whatever it was for (a check, a notification, a log) did not happen.</p>`
+      : `<p class=ok>The Stop hooks ran without an error at ${esc(clock(h.ok_at))}: these are earlier ones, kept for reference.</p>`,
+    kinds.map(k => `<div class=hkkind><b>${esc(k.what)}.</b> ${esc(k.why)} ${esc(k.fix)}</div>`).join(""),
+    hooks.length ? `<h4>Stop hooks that ran</h4><ul class=hkcmds>${hooks.map(c => `<li><code>${esc(c)}</code></li>`).join("")}</ul>` : "",
+    `<h4>What to do</h4><ol class=hksteps>`,
+    `<li>Find the hook: in the session's terminal (View &gt; Show Window) run <code>/hooks</code> - it lists each hook and the settings file it comes from.</li>`,
+    `<li>See why it fails: run its command yourself in <code>${esc(cwd)}</code>; or start the session with <code>claude --debug</code>, which logs each hook's full output.</li>`,
+    `<li>Fix or remove it where it is set: <code>~/.claude/settings.json</code> (every project), <code>.claude/settings.json</code> or <code>.claude/settings.local.json</code> in the project, or the plugin that adds it (<code>/plugin</code>).</li>`,
+    ours ? `<li>One of them is Imperatorium's own hook. Check the dispatcher answers with <code>imperatorium status</code>; <code>imperatorium install</code> puts its hooks back as they should be.</li>` : "",
+    `<li>The chip goes once a later turn's Stop hooks run without an error.</li></ol>`,
+    `<h4>Errors (newest last)</h4><ul class=hkerrs>${errors.map(errHtml).join("")}</ul>`,
+  ].join("");
+}
+function hooksRow(){
+  return procFor === selected ? (procTasks || []).find(t => t.kind === "hooks") || null : null;
+}
+function drawHookHelp(){
+  const s = current();
+  $("#hksub").textContent = s ? nameOf(s) : "";
+  $("#hookpane").innerHTML = hookHelpHtml(hooksRow(), s);
+}
+function openHookHelp(){
+  openPopup("hooks", true);
+  $("#hookbox [data-popclose]").focus();
+}
+
 function drawTileTasks(){
   const box = document.querySelector("#sessions .s.on .tk");
   if (!box) return;
   const s = current(), now = Date.now() / 1000;
   const l = taskList(s, procFor === selected ? procTasks : []);
   const items = taskItems(l, now);
-  const html = `<button type=button class=tkh data-tasks-toggle aria-expanded="${tasksOpen}">` +
-    `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running))}${
-      l.extra.some(t => t.kind === "hooks") ? ` <span class="st bad">hook errors</span>` : ""}</button><div class=tkl>${items}</div>`;
+  // The chip is a button of its own beside the header, which folds the list.
+  const hooks = l.extra.find(t => t.kind === "hooks");
+  const html = `<div class=tkhr><button type=button class=tkh data-tasks-toggle aria-expanded="${tasksOpen}">` +
+    `<span class=ar>&#9656;</span>Tasks · ${esc(taskSummary(l.running))}</button>${
+      hookErrorsNow(hooks).length ? `<button type=button class="st bad hkchip" data-hookerr title="what went wrong, and what to do">hook errors</button>` : ""
+    }</div><div class=tkl>${items}</div>`;
   box.classList.toggle("open", tasksOpen);
   if (box.dataset.sig !== html){ box.innerHTML = html; box.dataset.sig = html; }
   const line = document.querySelector("#sessions .s.on .mcpl");
@@ -2700,10 +2821,11 @@ function noteDraft(){
   saveDrafts();
 }
 function syncDraft(){
-  if (draftFor === selected) return;
+  const k = view === "fleet" ? "fleet" : selected;
+  if (draftFor === k) return;
   noteDraft();
-  draftFor = selected;
-  $("#prompt").value = (selected && drafts[selected]) || "";
+  draftFor = k;
+  $("#prompt").value = (k && drafts[k]) || "";
 }
 // After a send: clear the draft it came from, and the box only if it still
 // shows that session - the person may have moved on while it was in flight.
@@ -2844,18 +2966,43 @@ function gotSessions(list){
 // Server-sent events: the dispatcher pushes the list when it changes, and at
 // once when a hook reports. Polling takes over while the stream is down;
 // EventSource reconnects by itself.
-let streamUp = false;
+// The dispatcher sends `ping` every 15 s of quiet (2026-11-21); a stream
+// not heard from for STREAM_QUIET is taken for dead even if the browser
+// thinks it open: polling takes over and the stream is opened again.
+let streamUp = false, streamAt = 0, streamES = null;
+const STREAM_QUIET = 45000;
 function openStream(){
   if (!("EventSource" in window)) return;
-  const es = new EventSource("/api/stream");
+  const es = streamES = new EventSource("/api/stream");
+  const heard = () => { if (es === streamES) streamAt = Date.now(); };
   es.addEventListener("sessions", e => {
     let d;
     try { d = JSON.parse(e.data); } catch (x) { return; }
+    if (es !== streamES) return;
+    heard();
     streamUp = true;
     gotSessions(d.sessions || []);
   });
-  es.onopen = () => checkBoot(reloadForNewDispatcher);
-  es.onerror = () => { streamUp = false; };
+  es.addEventListener("ping", heard);
+  es.onopen = () => { heard(); checkBoot(reloadForNewDispatcher); };
+  es.onerror = () => { if (es === streamES) streamUp = false; };
+}
+// Pure: whether a stream last heard from at `at` is to be given up on.
+function streamStale(up, at, now){ return up && now - at > STREAM_QUIET; }
+function watchStream(){
+  if (!streamStale(streamUp, streamAt, Date.now())) return;
+  streamUp = false;
+  if (streamES) streamES.close();
+  openStream();
+}
+// Said once when the dispatcher stops answering, and taken back when it does.
+const DOWN_SAID = "the dispatcher is not answering - retrying";
+let downSaid = false;
+function noteDown(down){
+  if (down === downSaid) return;
+  downSaid = down;
+  if (down) $("#say").textContent = DOWN_SAID;
+  else if ($("#say").textContent === DOWN_SAID) $("#say").textContent = "";
 }
 
 // -- keyboard ----------------------------------------------------------------
@@ -2922,14 +3069,19 @@ function openJump(show){
 // cache in the chat (coldHtml), neither on the tile. How large a
 // context the cold cache is said for is a setting (chat.cold_cache_tokens),
 // carried on the row as work.cold_tokens; 0 says it for any.
+// The cache clock runs from the last main-chain reply, so a working turn
+// keeps it warm with each step; it can still lapse under one long tool call
+// or a foreground subagent, but then the turn's own next step pays the
+// rewrite and there is no prompt to warn about - so it is said only once the
+// session is not working (2026-11-21: a >1h turn showed "cache expired").
 const CTX_WARN = 85;
 function heavyWarnings(s, now){
   const out = [], w = s.work || {}, ctx = (s.usage || {}).context_pct;
   if (ctx != null && ctx >= CTX_WARN)
     out.push({kind: "context", short: "ctx " + Math.round(ctx) + "%",
       text: `context ${Math.round(ctx)}% full - consider /compact or a fresh session before more work`});
-  const tok = w.context_tokens;
-  if (tok != null && tok >= (w.cold_tokens || 0) && w.cache_expires_at && w.cache_expires_at <= now)
+  const tok = w.context_tokens, working = !!RUNNING[s.status] || s.state === "working";
+  if (!working && tok != null && tok >= (w.cold_tokens || 0) && w.cache_expires_at && w.cache_expires_at <= now)
     out.push({kind: "cold", short: "cold " + kfmt(tok),
       text: `prompt cache expired: the next prompt re-sends ${kfmt(tok)} tokens of context at the full cache-write price`});
   return out;
@@ -3148,16 +3300,19 @@ async function loadCosts(){
 
 let ticks = 0;
 async function tick(){
+  watchStream();
   try {
     if (!streamUp) gotSessions((await get("/api/sessions")).sessions || []);
     else drawSessions();  // ages on the tiles keep counting between pushes
     if (ticks % 3 === 0) drawMeter();
     if (ticks % 2 === 0) drawPending();
+    if (ticks % 2 === 1) loadFleet();
     if (ticks % 20 === 0) loadPrefs();
     if (ticks % 7 === 0) checkBoot(reloadForNewDispatcher);
     loadStatus(false);
     await refreshTab(false);
-  } catch (e) { /* dispatcher restarting; the page keeps what it has */ }
+    noteDown(false);
+  } catch (e) { /* dispatcher restarting; the page keeps what it has */ if (e && e.down) noteDown(true); }
   ticks++;
   setTimeout(tick, 1500);
 }
@@ -3385,12 +3540,13 @@ foldMeter(meterOpen);
 // `view` is what the main column shows: a session (with tabs), history
 // search, or insights. `tab` is which face of the session.
 let view = "session", tab = "log";
+const PROMPT_PH = $("#prompt").placeholder;
 
 // History and Insights are pop-ups over the window (2026-11-16), as the
 // New Session dialog is: the chat stays where it was behind them, and Esc,
 // their ✕ or a click outside them goes back to it. They used to take the
 // main area's place, with no plain way back. `view` stays "session".
-const POPUPS = {history: "#histbox", insights: "#insightbox", project: "#projbox"};
+const POPUPS = {history: "#histbox", insights: "#insightbox", project: "#projbox", hooks: "#hookbox"};
 function openPopup(which, open){
   const box = $(POPUPS[which]);
   if (!box || box.hidden === !open) return;
@@ -3403,11 +3559,14 @@ function openPopup(which, open){
   for (const [w, sel] of Object.entries(POPUPS)) if (w !== which){ $(sel).hidden = true; if (w === "project" && which !== "project") projFor = null; }
   if (which === "history"){ $("#hq").focus(); search(); }
   else if (which === "project"){ $("#pjrefresh").focus(); loadProject(); }
+  else if (which === "hooks") drawHookHelp();
   else loadInsights();
 }
-// Kept for its callers: "session" closes both pop-ups.
+// Kept for its callers: "session" closes the pop-ups and leaves Fleet;
+// "fleet" shows Fleet where the chat goes.
 function setView(v){
   for (const w of Object.keys(POPUPS)) openPopup(w, w === v);
+  if (v === "fleet") openFleetView(); else leaveFleet();
 }
 
 function setTab(t){
@@ -3905,6 +4064,7 @@ function select(id){
 
 // -- queue -----------------------------------------------------------------
 async function queue(){
+  if (view === "fleet") return;
   const s = current();
   const text = $("#prompt").value.trim();
   if (!s || !text) return;
@@ -4004,6 +4164,7 @@ function outcome(r){
 }
 
 async function send(mode){
+  if (view === "fleet"){ if (mode !== "background") askFleet(); return; }
   const s = sessions.find(x => key(x) === selected);
   const text = $("#prompt").value.trim();
   if (!s || !text || busy) return;
@@ -4027,6 +4188,7 @@ async function send(mode){
 // message cannot (see Control.send_typed).
 async function sendTyped(){
   closeMenus();
+  if (view === "fleet") return;
   const s = sessions.find(x => key(x) === selected);
   const text = $("#prompt").value.trim();
   if (!s || !text || busy) return;
@@ -4224,6 +4386,244 @@ async function openNew(show){
   try { projects = (await get("/api/projects")).projects || []; } catch (e) {}
   if (!$("#newbox").hidden) drawProjects();
 }
+
+// -- fleet ----------------------------------------------------------------
+// Fleet (2026-11-20; docs/research-super-agent.md): ask about every session
+// at once, the watches the dispatcher checks itself (no model in the loop),
+// and what an agent or Ask has proposed. Nothing proposed is watched or run
+// until it is confirmed here - the dispatcher takes a confirmation only from
+// this page - and a confirmed prompt still reaches its session framed as
+// someone else's, never as yours.
+// Since 2026-11-21 it is the first row of the session list rather than a
+// pop-up in the menu: picking it shows Fleet where the chat goes (`view` is
+// "fleet"), with the watches folded at the top, and the prompt box asks.
+let fleetBook = null, fleetFired = null, fleetAsking = false, fleetChat = [];
+const WATCH_NUM = {waiting: ["minutes", "10"], spend: ["dollars", "5"]};
+const FLEET_PH = "ask about every session… who needs me? what finished while I was away? which one is costing the most?";
+let fleetWatchesOpen = false;
+try { fleetWatchesOpen = localStorage.getItem("imperatorium.fleetWatches") === "1"; } catch (e) {}
+
+// A session by its key, or - as Ask sometimes cites one - by its name or
+// an id prefix of 6 or more (only when that names exactly one).
+function sessionByKey(k){
+  const exact = sessions.find(s => pkey(s) === k || key(s) === k);
+  if (exact || !k) return exact;
+  const t = k.toLowerCase();
+  const hits = sessions.filter(s => [nameOf(s), s.name].some(n => n && n.toLowerCase() === t)
+    || (t.length >= 6 && [pkey(s), key(s)].some(id => id && id.toLowerCase().startsWith(t))));
+  return hits.length === 1 ? hits[0] : undefined;
+}
+// Ask names sessions as [[session:KEY]]; each becomes a link that opens it.
+// One that names no session here stays as plain text, never a dead link.
+function citeHtml(html){
+  return html.replace(/\[\[session:([^\]\s<]+)\]\]/g, (m, k) => {
+    const s = sessionByKey(k);
+    return s ? `<a href="#" class=cite data-cite="${attr(pkey(s))}">${esc(nameOf(s))}</a>` : esc(k);
+  });
+}
+function fleetWhen(t){ const a = age(t); return a ? a + " ago" : ""; }
+function proposalHtml(x, kind){
+  const why = x.reason || x.note;
+  return `<div class=flitem><div class=flwhat><b>${esc(kind === "watch" ? "Watch: " + x.text : x.text)}</b>
+    <small>proposed by ${esc(x.source || "?")} ${esc(fleetWhen(x.created_at))}</small>${
+    why ? `<div class=flwhy>${esc(why)}</div>` : ""}${
+    x.prompt ? `<div class=flprompt title="delivered when its turn ends, framed as another session's message">${esc(x.prompt)}</div>` : ""}</div>
+    <div class=btns><button class=sm data-fl="${kind}:confirm:${attr(x.id)}">${kind === "watch" ? "Watch" : "Run it"}</button>
+    <button class="ghost sm" data-fl="${kind}:${kind === "watch" ? "remove" : "decline"}:${attr(x.id)}">Decline</button></div></div>`;
+}
+function watchHtml(w){
+  const st = w.status === "active" ? "" : ` <small class=flst>${esc(w.status)}</small>`;
+  const fired = w.fired_count ? ` <small>fired ${w.fired_count}x, last ${esc(fleetWhen(w.last_fired_at))}</small>` : "";
+  const flip = w.status === "active" ? ["pause", "Pause"] : ["resume", w.status === "fired" ? "Again" : "Resume"];
+  return `<div class=flitem><div class=flwhat>${esc(w.text)}${st}${fired}</div><div class=btns>
+    <button class="ghost sm" data-fl="watch:${flip[0]}:${attr(w.id)}">${flip[1]}</button>
+    <button class="ghost sm" data-fl="watch:remove:${attr(w.id)}">Remove</button></div></div>`;
+}
+function fleetTargets(){
+  const projects = [...new Set(sessions.map(s => s.project).filter(Boolean))].sort();
+  return `<option value="">every session</option>` +
+    projects.map(p => `<option value="p:${attr(p)}">project ${esc(p)}</option>`).join("") +
+    sessions.map(s => `<option value="s:${attr(pkey(s))}">${esc(nameOf(s))}</option>`).join("");
+}
+// Pure: the Fleet row's two lines, from the book - what waits for you
+// on the right, then how many watches are on (or what it is for).
+function fleetRowText(b){
+  const n = b ? b.proposed || 0 : 0;
+  const on = b ? (b.watches || []).filter(w => w.status === "active").length : 0;
+  return {sum: n ? n + " to confirm" : "", sub: on ? on + (on === 1 ? " watch on" : " watches on") : "ask about every session", attn: n > 0};
+}
+function drawFleetRow(){
+  const r = fleetRowText(fleetBook), row = $("#fleetrow");
+  setText($("#fleetsum"), r.sum);
+  setText($("#fleetsub"), r.sub);
+  row.classList.toggle("attn", r.attn);
+  row.classList.toggle("on", view === "fleet");
+}
+// Pure: one Ask exchange as two chat turns - the question, then the answer
+// (or that it is being asked).
+function askTurnHtml(t){
+  return `<div class="turn you-turn"><div class="who you">${esc(SPEAKER.you || "you")}</div><div class=txt>${esc(t.q)}</div></div>` +
+    `<div class="turn"><div class="who claude">Ask</div>${t.html ||
+      `<small>asking - a model reads a snapshot of every session; this takes a few seconds and uses your plan's usage</small>`}</div>`;
+}
+function drawFleet(){
+  const b = fleetBook || {watches: [], actions: [], fired: []};
+  const props = b.watches.filter(w => w.status === "proposed").map(w => proposalHtml(w, "watch"))
+    .concat(b.actions.filter(a => a.status === "proposed").map(a => proposalHtml(a, "action")));
+  const ph = props.join("") || `<small>Nothing waiting. An agent with Imperatorium's tools, or Ask, can propose a watch or an action; it shows here until you answer it.</small>`;
+  if ($("#flprop").dataset.sig !== ph){ $("#flprop").innerHTML = ph; $("#flprop").dataset.sig = ph; }
+  const live = b.watches.filter(w => w.status !== "proposed");
+  const wh = live.map(watchHtml).join("") || `<small>No watches yet.</small>`;
+  if ($("#flwatch").dataset.sig !== wh){ $("#flwatch").innerHTML = wh; $("#flwatch").dataset.sig = wh; }
+  const on = live.filter(w => w.status === "active").length;
+  setText($("#flwcount"), live.length ? `(${on} on${live.length > on ? ", " + (live.length - on) + " off" : ""})` : "");
+  const recent = b.fired.slice(0, 12).map(f => ({at: f.at, text: f.text, cls: "ok"}))
+    .concat(b.actions.filter(a => a.status !== "proposed" && a.answered_at).map(a => ({at: a.answered_at,
+      text: a.text + " - " + a.status + (a.status === "failed" && a.result && a.result.error ? ": " + a.result.error : ""),
+      cls: a.status === "failed" ? "bad" : "run"})))
+    .sort((x, y) => y.at - x.at).slice(0, 15);
+  setHtml("#flfired", recent.map(r => `<div class=ev><span class=t>${esc(fleetWhen(r.at))}</span><span class="${r.cls} x" title="${attr(r.text)}">${esc(r.text)}</span></div>`).join("")
+    || `<small>Nothing yet.</small>`);
+  setHtml("#flchat", fleetChat.map(askTurnHtml).join(""));
+  const pick = $("#wtarget"), had = pick.value, opts = fleetTargets();
+  if (pick.dataset.sig !== opts){ pick.innerHTML = opts; pick.dataset.sig = opts; pick.value = had; }
+  const num = WATCH_NUM[$("#wkind").value];
+  $("#wnum").hidden = !num;
+  if (num){ $("#wnum").placeholder = num[0]; $("#wnum").title = num[0]; }
+}
+function setHtml(sel, html){ const el = $(sel); if (el.dataset.sig !== html){ el.innerHTML = html; el.dataset.sig = html; } }
+function fleetBadge(){
+  const n = fleetBook ? fleetBook.proposed || 0 : 0, b = $("#fleetbtn");
+  b.hidden = !n;
+  b.textContent = n + " to confirm";
+  drawFleetRow();
+}
+// A watch that fired since the last look: said in the window, and on the
+// desktop when the window is not in front (as a session waiting is).
+function fleetNews(book){
+  const latest = (book.fired[0] || {}).at || 0;
+  if (fleetFired !== null) for (const f of book.fired.filter(f => f.at > fleetFired).slice(0, 3)){
+    $("#say").textContent = "watch: " + f.text;
+    if (deskNotify && "Notification" in window && Notification.permission === "granted"
+        && !(document.visibilityState === "visible" && document.hasFocus())){
+      const n = new Notification("Imperatorium watch", {body: f.text, tag: "imperatorium-watch-" + f.watch + "-" + f.at});
+      n.onclick = () => { window.focus(); const s = sessionByKey(f.session); if (s) select(key(s)); n.close(); };
+    }
+  }
+  fleetFired = Math.max(fleetFired || 0, latest);
+}
+async function loadFleet(){
+  let d;
+  try { d = await get("/api/fleet/book"); } catch (e) { return; }
+  if (!d || !d.ok) return;
+  fleetNews(d);
+  fleetBook = d;
+  fleetBadge();
+  if (view === "fleet") drawFleet();
+}
+async function fleetDo(kind, op, id){
+  const r = await post(kind === "watch" ? "/api/fleet/watch" : "/api/fleet/action", {op, id});
+  if (!r.ok) $("#flnote").textContent = r.error || (r.result && r.result.error) || "refused";
+  else $("#flnote").textContent = kind === "action" && op === "confirm" ? "done" : "";
+  await loadFleet();
+}
+async function addWatch(){
+  const kind = $("#wkind").value, t = $("#wtarget").value, body = {op: "add", kind};
+  if (t.startsWith("s:")) body.session = t.slice(2); else if (t.startsWith("p:")) body.project = t.slice(2);
+  const num = WATCH_NUM[kind];
+  if (num && $("#wnum").value.trim()) body[num[0]] = +$("#wnum").value;
+  const r = await post("/api/fleet/watch", body);
+  $("#flnote").textContent = r.ok ? "" : r.error || "refused";
+  if (r.ok) $("#wnum").value = "";
+  await loadFleet();
+}
+// Ask, from the prompt box while Fleet is showing: the question and its
+// answer join the Fleet chat (this page only; at most the last 20).
+async function askFleet(){
+  const q = $("#prompt").value.trim();
+  if (!q || fleetAsking) return;
+  fleetAsking = true;
+  $("#send").disabled = true;
+  clearPrompt("fleet");
+  const turn = {q, html: ""};
+  fleetChat.push(turn);
+  if (fleetChat.length > 20) fleetChat.shift();
+  drawFleet();
+  fleetScroll();
+  let r;
+  try { r = await post("/api/ask", {question: q}, undefined, 200000); } catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  fleetAsking = false;
+  if (view === "fleet") $("#send").disabled = false;
+  if (!r.ok) turn.html = `<div class=flerr>${esc(r.error || "no answer")}</div>`;
+  else {
+    const meta = [r.model, r.seconds != null ? r.seconds + " s" : "", typeof r.cost_usd === "number" ? "~" + usd(r.cost_usd) : ""].filter(Boolean).join(" - ");
+    const extra = (r.proposals || []).length ? `<div class=flwhy>${r.proposals.length} proposal${r.proposals.length === 1 ? "" : "s"} above, waiting for you to confirm</div>` : "";
+    const refused = (r.refused || []).length ? `<div class=flwhy>not proposed: ${esc(r.refused.join("; "))}</div>` : "";
+    turn.html = `<div class="flans md">${citeHtml(renderText(r.answer))}</div>${extra}${refused}<small>${esc(meta)}</small>`;
+  }
+  await loadFleet();
+  drawFleet();
+  fleetScroll();
+}
+function fleetScroll(){ const l = $("#fllog"); l.scrollTop = l.scrollHeight; }
+// Into Fleet and out of it. The session stays selected behind it, so
+// leaving (a tile, j/k, a link in an answer) goes straight back to one.
+function openFleetView(){
+  if (view !== "fleet"){
+    closeTask();
+    if (!$("#findpop").hidden) openFind(false);
+    view = "fleet";
+    $("#app").classList.add("fleet");
+    $("#sessionpane").hidden = true;
+    $("#fleetview").hidden = false;
+    setText($("#title"), "Fleet");
+    $("#sub").innerHTML = "every session at once - ask in the box below; nothing proposed happens until you confirm it here";
+    $("#sub").dataset.sig = "";
+    $("#sub").title = "";
+    $("#prompt").placeholder = FLEET_PH;
+    $("#send").textContent = "Ask";
+    $("#send").title = "a model with no tools reads a snapshot of every session and answers (Enter)";
+    $("#send").disabled = fleetAsking;
+    $("#flwfold").open = fleetWatchesOpen;
+    drawSessions();
+  }
+  drawFleet();
+  fleetScroll();
+  loadFleet();
+  $("#prompt").focus();
+}
+function leaveFleet(){
+  if (view !== "fleet") return;
+  view = "session";
+  $("#app").classList.remove("fleet");
+  $("#fleetview").hidden = true;
+  $("#sessionpane").hidden = false;
+  $("#prompt").placeholder = PROMPT_PH;
+  $("#send").textContent = "Send";
+  $("#send").title = "Enter";
+  drawFleetRow();
+}
+$("#fleetview").addEventListener("click", e => {
+  const b = e.target.closest("[data-fl]");
+  if (b){ const [kind, op, ...id] = b.dataset.fl.split(":"); b.disabled = true; fleetDo(kind, op, id.join(":")); return; }
+  const c = e.target.closest("[data-cite]");
+  if (c){
+    e.preventDefault();
+    const s = sessionByKey(c.dataset.cite);
+    if (s) select(key(s));
+  }
+});
+$("#flwfold").addEventListener("toggle", () => {
+  fleetWatchesOpen = $("#flwfold").open;
+  try { localStorage.setItem("imperatorium.fleetWatches", fleetWatchesOpen ? "1" : "0"); } catch (e) {}
+});
+$("#wkind").onchange = drawFleet;
+$("#wadd").onclick = addWatch;
+$("#fleetbtn").onclick = openFleetView;
+$("#fleetrow").onclick = openFleetView;
+$("#fleetrow").addEventListener("keydown", e => {
+  if (e.key === "Enter" || e.key === " "){ e.preventDefault(); openFleetView(); }
+});
 
 // -- chat matrix ---------------------------------------------------------
 // Its own window, so it can sit on another screen. The matrix page says it is
@@ -4630,13 +5030,14 @@ $("#sessions").addEventListener("click", e => {
   if ((el = t.closest("[data-fam]"))) return famClicked(el.dataset.fam);
   const s = t.closest(".s");
   if (!s) return;
+  if (t.closest("[data-hookerr]")) return openHookHelp();
   if (t.closest("[data-tasks-toggle]")) return foldTasks(!tasksOpen);
   if (t.closest("[data-done-toggle]")) return foldDone(!doneOpen);
   if (t.closest("[data-idle-toggle]")) return foldIdle(!idleOpen);
   const item = t.closest("[data-task]");
-  if (item && s.dataset.k === selected) return openTask(item.dataset.task);
+  if (item && s.dataset.k === selected) return item.dataset.task === "hooks" ? openHookHelp() : openTask(item.dataset.task);
   closeTask();
-  selected = s.dataset.k; showCached(); drawSessions(); refreshTab(true); loadStatus(true); loadProcs();
+  select(s.dataset.k);
 });
 
 $("#jlist").addEventListener("click", e => {
@@ -4648,7 +5049,7 @@ document.addEventListener("keydown", e => {
   const k = (e.key || "").toLowerCase(), ctl = (e.ctrlKey || e.metaKey) && !e.altKey;
   if (ctl && k === "k"){ e.preventDefault(); openJump($("#jumpbox").hidden); return; }
   if (ctl && k === "f" && view === "session" && tab === "log"){ e.preventDefault(); openFind(true); return; }
-  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden || !$("#projbox").hidden) return;
+  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden || !$("#projbox").hidden || !$("#hookbox").hidden) return;
   if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)){ e.preventDefault(); pick(visibleKeys()[+e.key - 1]); return; }
   if (e.altKey && !e.ctrlKey && k === "n"){ e.preventDefault(); goWaiting(); return; }
   // Esc in the prompt box stops a working session's turn, as at its

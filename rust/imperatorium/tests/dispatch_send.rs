@@ -239,6 +239,46 @@ fn background_runs_in_a_worktree_of_the_chosen_sessions_branch() {
 }
 
 #[test]
+fn a_fork_runs_in_a_worktree_of_its_sessions_branch() {
+    // A fork runs beside the session it came from: in a window or in the
+    // background, it gets a worktree made from that session's branch.
+    let rig = Rig::with(json!({}), fakes);
+    let feat = repo_with_a_feature_checkout(&rig);
+    rig.live(SID, "idle", json!({"cwd": feat.to_string_lossy()}));
+    let norm = |s: &str| s.to_lowercase().replace('/', "\\");
+    let out = rig.d.post("/api/resume", &json!({"session_id": SID, "where": "background", "fork": true})).1;
+    assert_eq!(out["ok"], json!(true), "{out}");
+    assert_eq!(out["base"], json!("feat"), "{out}");
+    let wt = out["worktree"].as_str().unwrap().to_string();
+    assert!(std::path::Path::new(&wt).is_dir(), "{wt}");
+    assert!(wt.contains("fork-"), "{wt}");
+    let calls = bg_calls(&rig);
+    assert_eq!(norm(calls[0]["cwd"].as_str().unwrap()), norm(&wt));
+    let fork = rig.events().into_iter().find(|e| e["kind"] == "fork").expect("a fork event");
+    assert_eq!(norm(fork["worktree"].as_str().unwrap()), norm(&wt));
+    // A second fork of it gets a worktree of its own.
+    let out = rig.d.post("/api/resume", &json!({"session_id": SID, "where": "window", "fork": true})).1;
+    assert_eq!(out["ok"], json!(true), "{out}");
+    let wt2 = out["worktree"].as_str().unwrap().to_string();
+    assert_ne!(norm(&wt2), norm(&wt));
+    // The tab is started and let go, so its log line comes a moment later.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let tab = loop {
+        if let Some(t) = rig.fake_log().into_iter().rfind(|e| e["prog"] == "wt") {
+            break t;
+        }
+        assert!(std::time::Instant::now() < until, "no tab was opened");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(norm(tab["cwd"].as_str().unwrap()), norm(&wt2));
+    // A plain resume does not make one.
+    let before = std::fs::read_dir(rig.projects.join("laser-ledger").join(".claude").join("worktrees")).unwrap().count();
+    let _ = rig.d.post("/api/resume", &json!({"session_id": SID, "where": "background"}));
+    let after = std::fs::read_dir(rig.projects.join("laser-ledger").join(".claude").join("worktrees")).unwrap().count();
+    assert_eq!(before, after);
+}
+
+#[test]
 fn a_worktree_whose_session_never_started_is_removed() {
     // No `claude` on the PATH: the start fails, and the worktree made for
     // it goes again.
