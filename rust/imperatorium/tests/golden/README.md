@@ -258,3 +258,20 @@ point the tests at a release build).
   u64/i64): Python keeps exact ints, the binary gives a float or saturates.
 - Synthetic session 25: Python's stats fold raises (a string `message`);
   the binary answers. Recorded as `raises`, not compared.
+
+## Changed on purpose
+
+- `slash_compare/cases.jsonl` (2026-11-22): `refusal` and `typed_refusal`
+  re-recorded from the binary, not Python. The menu lists were the
+  2026-10 hand-kept ones; they are now `slash::classify` over the
+  audit of Claude Code 2.1.330 (docs/slash-commands-terminal-gaps.md).
+  Gone: `/agents` (removed from Claude Code) and `/doctor` (a skill now);
+  `/config k=v`, `/settings k=v`, `/mcp <args>` and `/permissions <args>`
+  run. New: `/rewind <args>` and `/checkpoint <args>` (no text form) and
+  `/cost` (a view) are refused. Each refusal now says what it is (a
+  picker or view the window shows, a window feature, account or display).
+  `parse` and `clean` are unchanged.
+- `session_twin/steps.jsonl` (2026-11-22): "typed, a menu" and "dispatch,
+  a menu by name" used `/help` and `/config`, which are now window views.
+  They use `/plugin` (still a terminal menu), and record its new refusal.
+  The dispatch reply also carries `how`, `what`, `name` and `show_window`.

@@ -13,6 +13,13 @@
 // Esc there): it cancels the main loop's turn with `$.turn.abort`, as Esc at
 // the terminal does, and says on its next beat what came of it.
 //
+// A reply can carry ops (0.4.0): a slash command the person sent from the
+// window, run with `$.command.run` as if typed so its output goes back to
+// the window; and reads of the session's context, usage, status, settings
+// and /config rows, or one /config change, for the window to show. Each
+// answer goes back on the next beat (`results`). It also lists the
+// session's slash commands (`commands`) for the window's prompt box.
+//
 // It also answers `tool.check` from the dispatcher's permission policy
 // (POST /api/mod/check), for the calls the session's rules and mode would put
 // to the person. Anything unsure, slow or broken leaves the session's own
@@ -24,8 +31,11 @@ import type { EngineInterface, Register } from 'claude-code'
 
 type Engine = EngineInterface
 
-const MOD_VERSION = '0.3.1'
+const MOD_VERSION = '0.4.0'
 const BEAT_MS = 2000
+// How often the session's command list is sent again: a dispatcher that
+// restarted has forgotten it, and plugins come and go.
+const COMMANDS_MS = 60000
 // How long a permission check waits for the dispatcher before leaving the
 // decision to the session: a tool call should never wait on it for long.
 const CHECK_WAIT_MS = 1500
@@ -35,7 +45,9 @@ const PERSON_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
 type Offered = { id: string; text: string; as_user: boolean }
 type Ack = { id: string; outcome: 'accepted' | 'submitted' | 'dropped'; reason?: string }
-type BeatReply = { ok?: boolean; deliver?: Offered[]; status?: string | null; stop?: string | null }
+type Op = { id: string; op: string; args?: Record<string, unknown> }
+type OpResult = { id: string; ok: boolean; data?: unknown; error?: string }
+type BeatReply = { ok?: boolean; deliver?: Offered[]; status?: string | null; stop?: string | null; ops?: Op[] }
 // What came of a stop the dispatcher asked for, by its id.
 type Stopped = { id: string; outcome: 'aborted' | 'idle' | 'failed'; reason?: string }
 type CheckReply = { verdict?: string; reason?: string }
@@ -62,6 +74,11 @@ let beating = false
 let failures = 0
 let shown: string | undefined
 const seen = new Set<string>()
+let results: OpResult[] = []
+const opsSeen = new Set<string>()
+let commands: unknown[] | null = null
+let commandsSig = ''
+let commandsSentAt = -Infinity
 
 // Where the dispatcher keeps its state, as dispatcher.default_state_path
 // decides it: %LOCALAPPDATA%, $XDG_STATE_HOME, or ~/.local/state, then
@@ -179,6 +196,11 @@ async function beatOnce($: Engine) {
       acks: sending,
     }
     if (reporting.length) body.stopped = reporting
+    const answering = results
+    results = []
+    if (answering.length) body.results = answering
+    const listing = await commandsToSend($)
+    if (listing) body.commands = listing
     if (usageDirty && usage) {
       body.usage = usage
       usageDirty = false
@@ -188,6 +210,8 @@ async function beatOnce($: Engine) {
       // Not delivered: keep the acks and the usage for the next beat.
       acks = sending.concat(acks)
       stopped = reporting.concat(stopped)
+      results = answering.concat(results)
+      if (listing) commandsSentAt = -Infinity
       if (body.usage) usageDirty = true
       failures += 1
       if (failures >= 3) show($, undefined)
@@ -197,7 +221,102 @@ async function beatOnce($: Engine) {
     show($, reply.status ? 'Imperatorium · ' + reply.status : undefined)
     if (reply.stop) stop($, reply.stop)
     for (const offered of reply.deliver || []) deliver($, offered)
+    for (const op of reply.ops || []) runOp($, op)
   }
+}
+
+// The session's slash commands when they changed, or once a minute.
+async function commandsToSend($: Engine): Promise<unknown[] | null> {
+  const now = await $.clock.now()
+  if (commands && now - commandsSentAt < COMMANDS_MS) return null
+  try {
+    const list = (await $.command.list()).map(c => ({
+      name: c.name, description: c.description, source: c.source,
+    }))
+    const sig = JSON.stringify(list)
+    if (sig === commandsSig && now - commandsSentAt < COMMANDS_MS) return null
+    commands = list
+    commandsSig = sig
+    commandsSentAt = now
+    return list
+  } catch {
+    return null
+  }
+}
+
+// What the session's context holds, as /context breaks it down, estimated
+// locally (no token-count requests); the grid itself is the terminal's.
+async function contextNow($: Engine) {
+  const got = await $.session.usage({ breakdown: 'summary' })
+  const b = got.context.breakdown
+  return {
+    context: { tokens: got.context.tokens, window: got.context.window, percent: got.context.percent },
+    breakdown: b && {
+      categories: b.categories, totalTokens: b.totalTokens, maxTokens: b.maxTokens,
+      percentage: b.percentage, model: b.model, memoryFiles: b.memoryFiles, mcpTools: b.mcpTools,
+    },
+  }
+}
+
+async function statusNow($: Engine) {
+  const quiet = <T>(p: Promise<T>) => p.catch(() => null)
+  const id = await quiet($.session.identity())
+  const tools = (await quiet($.tool.list())) || []
+  const servers = [...new Set(tools.map(t => /^mcp__(.+?)__/.exec(t.name)?.[1]).filter(Boolean))]
+  return {
+    version: await quiet($.session.version()),
+    model: await quiet($.session.model()),
+    cwd: await quiet($.session.cwd()),
+    root: await quiet($.session.root()),
+    repo: await quiet($.session.repo()),
+    identity: id && !('deny' in id && id.deny) ? id : null,
+    surfaces: await quiet($.session.surfaces()),
+    mcp_servers: servers,
+    mod_version: MOD_VERSION,
+  }
+}
+
+async function opData($: Engine, op: Op): Promise<unknown> {
+  const args = op.args || {}
+  switch (op.op) {
+    case 'command': {
+      const got = await $.command.run({ command: String(args.command), args: String(args.args ?? '') })
+      return { text: got.text }
+    }
+    case 'context':
+      return contextNow($)
+    case 'usage':
+      return { ...(await $.session.usage()), model: await $.session.model() }
+    case 'status':
+      return statusNow($)
+    case 'config':
+      return { rows: await $.config.list() }
+    case 'config_set': {
+      const got = await $.config.set({ key: String(args.key), value: args.value as never })
+      if (got && 'deny' in got && got.deny) throw new Error(String(got.deny))
+      return got
+    }
+    case 'settings':
+      return {
+        permissions: await $.settings.read({ key: 'permissions' }).catch(() => null),
+        hooks: await $.settings.read({ key: 'hooks' }).catch(() => null),
+      }
+    default:
+      throw new Error('unknown op ' + op.op)
+  }
+}
+
+// Runs one op, once: a command offered again is never run twice.
+function runOp($: Engine, op: Op) {
+  if (opsSeen.has(op.id)) return
+  opsSeen.add(op.id)
+  opData($, op).then(
+    data => { results.push({ id: op.id, ok: true, data }); void beat($) },
+    (error: unknown) => {
+      results.push({ id: op.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+      void beat($)
+    },
+  )
 }
 
 // Ends the main loop's running turn, once per request: its tools stop, as

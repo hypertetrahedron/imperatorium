@@ -96,7 +96,7 @@ describe("HookErrorsPopup", () => {
     assertIn('if (t.closest("[data-hookerr]")) return openHookHelp();', SCRIPT);
     assertIn('item.dataset.task === "hooks" ? openHookHelp() : openTask(item.dataset.task)', SCRIPT);
     assertIn('hooks: "#hookbox"', SCRIPT);
-    assertIn('!$("#projbox").hidden || !$("#hookbox").hidden) return;', SCRIPT);
+    assertIn('!$("#projbox").hidden || !$("#hookbox").hidden || !$("#slashbox").hidden) return;', SCRIPT);
     const html = renderShell();
     assertIn("<div id=hookbox class=popup hidden>", html);
     assertIn("<div id=hookpane class=panel></div>", html);

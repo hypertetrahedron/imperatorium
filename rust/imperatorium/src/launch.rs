@@ -227,11 +227,53 @@ pub fn new_command(session_id: &str, permission_mode: Option<&str>) -> Result<Ve
     Ok(cmd)
 }
 
+/// How a new session starts: its permission mode, model and effort (none:
+/// Claude Code's own default).
+#[derive(Default, Clone, Copy)]
+pub struct Start<'a> {
+    pub permission_mode: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
+}
+
+/// The effort levels `claude --effort` takes.
+pub const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+/// Pure: `--model` and `--effort` added to a command line. A model is an
+/// alias or an id (`opus`, `claude-opus-5-5`, `opus[1m]`): anything else is
+/// refused, so nothing but a name reaches the command line.
+pub fn add_model(cmd: &mut Vec<String>, model: Option<&str>, effort: Option<&str>) -> Result<(), String> {
+    if let Some(m) = model.filter(|m| !m.is_empty() && *m != "default") {
+        let ok = m.len() <= 80
+            && !m.starts_with('-')
+            && m.chars().all(|c| c.is_ascii_alphanumeric() || "-._[]:@/".contains(c));
+        if !ok {
+            return Err(format!("not a model name: {m}"));
+        }
+        cmd.extend(["--model".into(), m.to_string()]);
+    }
+    if let Some(e) = effort.filter(|e| !e.is_empty()) {
+        if !EFFORTS.contains(&e) {
+            return Err(format!("unknown effort level: {e}"));
+        }
+        cmd.extend(["--effort".into(), e.to_string()]);
+    }
+    Ok(())
+}
+
 /// history.new_session: a fresh `claude` in a new tab, given its id up front
-/// so the window can select it as soon as it appears.
-pub fn new_session(cwd: Option<&str>, session_id: &str, permission_mode: Option<&str>) -> Result<Value, String> {
+/// so the window can select it as soon as it appears; on `model` at
+/// `effort` when given.
+pub fn new_session(
+    cwd: Option<&str>,
+    session_id: &str,
+    permission_mode: Option<&str>,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Result<Value, String> {
     let cwd = dir_ok(cwd)?;
-    let cmd = new_command(session_id, permission_mode)?;
+    let mut cmd = new_command(session_id, permission_mode)?;
+    add_model(&mut cmd, model, effort)?;
     let terminal = open_terminal(cwd, &cmd)?;
     Ok(
         json!({"ok": true, "action": "new", "where": "window", "terminal": terminal,
@@ -253,5 +295,19 @@ mod tests {
         // Never an argument of its own choosing on claude's command line.
         assert!(new_command("s1", Some("--dangerously-skip-permissions")).is_err());
         assert!(new_command("s1", Some("plan --x")).is_err());
+    }
+
+    #[test]
+    fn a_new_session_starts_on_the_model_and_effort_asked_for() {
+        let mut c = new_command("s1", None).unwrap();
+        add_model(&mut c, Some("opus[1m]"), Some("high")).unwrap();
+        assert_eq!(c, ["claude", "--session-id", "s1", "--model", "opus[1m]", "--effort", "high"]);
+        let mut c = new_command("s1", None).unwrap();
+        add_model(&mut c, Some("default"), Some("")).unwrap();
+        assert_eq!(c, ["claude", "--session-id", "s1"]);
+        for bad in ["--dangerously-skip-permissions", "opus --x", "a;b"] {
+            assert!(add_model(&mut vec![], Some(bad), None).is_err(), "{bad}");
+        }
+        assert!(add_model(&mut vec![], None, Some("ultra")).is_err());
     }
 }

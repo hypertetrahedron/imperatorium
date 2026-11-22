@@ -434,7 +434,7 @@ fn a_parked_permission_prompt_is_never_answered_by_it() {
 #[test]
 fn a_menu_command_is_refused() {
     let r = ready("idle");
-    let out = r.rig.dispatch(json!({"prompt": "/config", "session_id": SID}));
+    let out = r.rig.dispatch(json!({"prompt": "/plugin", "session_id": SID}));
     assert!(out["error"].as_str().unwrap().contains("menu"), "{out}");
     assert!(typed(&r.rig).is_empty());
 }
@@ -516,7 +516,7 @@ fn never_into_a_busy_session() {
 fn a_command_goes_the_command_way() {
     let r = ready_with(json!({"chat": {"send_as_typed": true}}), "idle");
     assert_eq!(typed_call(&r.rig, "/compact")["action"], json!("command"));
-    assert!(typed_call(&r.rig, "/config")["error"].as_str().unwrap().contains("menu"));
+    assert!(typed_call(&r.rig, "/plugin")["error"].as_str().unwrap().contains("menu"));
     assert_eq!(typed(&r.rig), vec!["/compact"]);
 }
 

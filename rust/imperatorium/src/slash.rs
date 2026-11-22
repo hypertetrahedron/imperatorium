@@ -8,44 +8,312 @@ use serde_json::{json, Map, Value};
 
 use crate::pyish::{strip, truthy};
 
-/// Open a menu or panel in the terminal whatever follows them.
-const MENU: &[&str] = &[
-    "agents",
-    "allowed-tools",
-    "bashes",
-    "config",
-    "doctor",
-    "help",
-    "hooks",
-    "ide",
-    "login",
-    "logout",
-    "mcp",
-    "memory",
-    "permissions",
-    "plugin",
-    "plugins",
-    "privacy-settings",
-    "settings",
-    "status",
-    "tasks",
-    "terminal-setup",
-    "theme",
-    "upgrade",
+use std::collections::HashSet;
+
+/// What happens to a slash command sent from the window (`classify`).
+/// The audit behind these tables: docs/slash-commands-terminal-gaps.md
+/// (Claude Code 2.1.330's command table).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum How {
+    /// Typed (or run through the mod) as it is.
+    Run,
+    /// The terminal would show a picker; the window shows its own.
+    Picker(&'static str),
+    /// The terminal would draw a panel; the window shows its own view.
+    View(&'static str),
+    /// One of the window's own features does this.
+    Window(&'static str),
+    /// Needs the terminal: (group, hint). Groups: ui, account, display,
+    /// detach, unknown.
+    Terminal(&'static str, &'static str),
+    /// Ending the session is the window's Close.
+    Close,
+}
+
+impl How {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            How::Run => "run",
+            How::Picker(_) => "picker",
+            How::View(_) => "view",
+            How::Window(_) => "window",
+            How::Terminal(..) => "terminal",
+            How::Close => "close",
+        }
+    }
+
+    /// The picker, view or window action; for the terminal, its group.
+    pub fn what(&self) -> &'static str {
+        match self {
+            How::Picker(w) | How::View(w) | How::Window(w) => w,
+            How::Terminal(g, _) => g,
+            How::Run | How::Close => "",
+        }
+    }
+}
+
+/// What Claude Code says about its own commands, where it has been asked:
+/// `text` - the commands that run without a terminal (the headless
+/// `initialize` probe, claude_catalog.rs); `builtin` - the built-in ones the
+/// session can run (its mod's `$.command.list()`). Either may be empty.
+#[derive(Debug, Default, Clone)]
+pub struct Known {
+    pub text: HashSet<String>,
+    pub builtin: HashSet<String>,
+}
+
+/// Alias -> the command it names (2.1.330).
+const ALIASES: &[(&str, &str)] = &[
+    ("settings", "config"),
+    ("allowed-tools", "permissions"),
+    ("plugins", "plugin"),
+    ("marketplace", "plugin"),
+    ("bashes", "tasks"),
+    ("continue", "resume"),
+    ("checkpoint", "rewind"),
+    ("undo", "rewind"),
+    ("cost", "usage"),
+    ("stats", "usage"),
+    ("quit", "exit"),
+    ("rc", "remote-control"),
+    ("tp", "teleport"),
+    ("bg", "background"),
+    ("share", "bug"),
+    ("app", "desktop"),
+    ("ios", "mobile"),
+    ("android", "mobile"),
+    ("remote", "session"),
+    ("breaks", "wellbeing"),
+    ("break-reminder", "wellbeing"),
+    ("downtime", "wellbeing"),
+    ("memory-pause", "pause-memory"),
+    ("toggle-memory", "pause-memory"),
+    ("update", "restart"),
+    ("reset", "clear"),
+    ("new", "clear"),
+    ("name", "rename"),
+    ("checkup", "doctor"),
+    ("extra-usage", "usage-credits"),
+    ("peers", "list-agents"),
+    ("routines", "schedule"),
 ];
-/// Open one only when given nothing to act on.
-const MENU_BARE: &[&str] = &[
-    "add-dir",
-    "checkpoint",
-    "continue",
-    "export",
-    "model",
-    "output-style",
-    "resume",
-    "rewind",
+
+/// The command an alias names, or the name itself.
+pub fn canonical(name: &str) -> &str {
+    ALIASES
+        .iter()
+        .find(|(a, _)| *a == name)
+        .map(|(_, c)| *c)
+        .unwrap_or(name)
+}
+
+/// The aliases of `name`.
+pub fn aliases_of(name: &str) -> Vec<&'static str> {
+    ALIASES
+        .iter()
+        .filter(|(_, c)| *c == name)
+        .map(|(a, _)| *a)
+        .collect()
+}
+
+/// Whether a rule holds always or only with nothing after the name.
+#[derive(Clone, Copy, PartialEq)]
+enum When {
+    Always,
+    Bare,
+}
+
+/// The built-ins that do not simply run when typed. Anything not here runs,
+/// except a built-in Claude Code itself lists as needing a terminal (Known).
+const RULES: &[(&str, When, How)] = &[
+    ("exit", When::Always, How::Close),
+    // Pickers, shown in the window.
+    ("model", When::Bare, How::Picker("model")),
+    ("effort", When::Bare, How::Picker("effort")),
+    ("fast", When::Bare, How::Picker("fast")),
+    ("output-style", When::Bare, How::Picker("output-style")),
+    // Panels, shown in the window.
+    ("context", When::Always, How::View("context")),
+    ("usage", When::Always, How::View("usage")),
+    ("status", When::Always, How::View("status")),
+    ("version", When::Always, How::View("status")),
+    ("help", When::Always, How::View("help")),
+    ("skills", When::Always, How::View("skills")),
+    ("hooks", When::Always, How::View("hooks")),
+    ("permissions", When::Bare, How::View("permissions")),
+    ("config", When::Bare, How::View("config")),
+    ("release-notes", When::Always, How::View("release-notes")),
+    ("diff", When::Always, How::View("diff")),
+    ("tasks", When::Always, How::View("tasks")),
+    ("workflows", When::Always, How::View("tasks")),
+    // The window's own features.
+    ("resume", When::Bare, How::Window("history")),
+    ("export", When::Bare, How::Window("export")),
+    ("branch", When::Bare, How::Window("fork")),
+    ("add-dir", When::Bare, How::Window("add-dir")),
+    ("copy", When::Always, How::Window("copy")),
+    // A terminal menu, panel or wizard, whatever follows.
+    ("rewind", When::Always, How::Terminal("ui", "")),
+    ("plugin", When::Always, How::Terminal("ui", "")),
+    ("memory", When::Always, How::Terminal("ui", "")),
+    ("ide", When::Always, How::Terminal("ui", "")),
+    ("teleport", When::Always, How::Terminal("ui", "")),
+    ("cloud-plugins", When::Always, How::Terminal("ui", "")),
+    ("daemon", When::Always, How::Terminal("ui", "")),
+    ("remote-control", When::Always, How::Terminal("ui", "")),
+    ("desktop", When::Always, How::Terminal("ui", "")),
+    ("chrome", When::Always, How::Terminal("ui", "")),
+    ("feedback", When::Always, How::Terminal("ui", "")),
+    ("bug", When::Always, How::Terminal("ui", "")),
+    ("btw", When::Always, How::Terminal("ui", "its answer is drawn over the terminal's prompt, never written to the conversation")),
+    ("sandbox", When::Always, How::Terminal("ui", "")),
+    ("powerup", When::Always, How::Terminal("ui", "")),
+    ("artifacts", When::Always, How::Terminal("ui", "")),
+    ("access", When::Always, How::Terminal("ui", "")),
+    ("keybindings", When::Always, How::Terminal("ui", "")),
+    // The same, unless given what to act on.
+    ("mcp", When::Bare, How::Terminal("ui", "/mcp reconnect|enable|disable <server> runs from here")),
+    ("import", When::Bare, How::Terminal("ui", "/import codex|gemini|cursor runs from here")),
+    ("auto-mode-setup", When::Bare, How::Terminal("ui", "")),
+    ("advisor", When::Bare, How::Terminal("ui", "")),
+    ("autocompact", When::Bare, How::Terminal("ui", "/autocompact auto|<tokens> runs from here")),
+    ("color", When::Bare, How::Terminal("ui", "/color <name> runs from here")),
+    ("remote-env", When::Bare, How::Terminal("ui", "")),
+    ("use-case", When::Bare, How::Terminal("ui", "")),
+    ("cd", When::Bare, How::Terminal("ui", "/cd <path> runs from here")),
+    // Account, plan and setup: in a terminal, once.
+    ("login", When::Always, How::Terminal("account", "")),
+    ("logout", When::Always, How::Terminal("account", "")),
+    ("upgrade", When::Always, How::Terminal("account", "")),
+    ("usage-credits", When::Always, How::Terminal("account", "")),
+    ("rate-limit-options", When::Always, How::Terminal("account", "")),
+    ("web-setup", When::Always, How::Terminal("account", "")),
+    ("install-github-app", When::Always, How::Terminal("account", "")),
+    ("install-slack-app", When::Always, How::Terminal("account", "")),
+    ("setup-bedrock", When::Always, How::Terminal("account", "")),
+    ("setup-vertex", When::Always, How::Terminal("account", "")),
+    ("design-login", When::Always, How::Terminal("account", "")),
+    ("privacy-settings", When::Always, How::Terminal("account", "")),
+    ("pro-trial-expired", When::Always, How::Terminal("account", "")),
+    ("passes", When::Always, How::Terminal("account", "")),
+    // The terminal's own look and features.
+    ("theme", When::Always, How::Terminal("display", "")),
+    ("tui", When::Always, How::Terminal("display", "")),
+    ("scroll-speed", When::Always, How::Terminal("display", "")),
+    ("focus", When::Always, How::Terminal("display", "")),
+    ("brief", When::Always, How::Terminal("display", "")),
+    ("terminal-setup", When::Always, How::Terminal("display", "")),
+    ("wellbeing", When::Always, How::Terminal("display", "")),
+    ("voice", When::Always, How::Terminal("display", "")),
+    ("radio", When::Always, How::Terminal("display", "")),
+    ("stickers", When::Always, How::Terminal("display", "")),
+    ("mobile", When::Always, How::Terminal("display", "")),
+    ("session", When::Always, How::Terminal("display", "")),
+    // They move the session out from under the window.
+    ("background", When::Always, How::Terminal("detach", "")),
+    ("stop", When::Always, How::Terminal("detach", "Close ends it from here")),
+    ("restart", When::Always, How::Terminal("detach", "")),
 ];
-/// Ending the session is the window's Close, which closes its tab too.
-const EXIT: &[&str] = &["exit", "quit"];
+
+/// The built-ins Claude Code runs itself (its `local` and `local-jsx`
+/// commands, read from the 2.1.330 binary). Any other command — a bundled
+/// skill such as /doctor or /simplify, a plugin's skill, an MCP prompt, the
+/// `prompt` built-ins /init and /insights — becomes a model turn.
+const LOCAL: &[&str] = &[
+    "__remote-workflow", "access", "add-dir", "advisor", "agents", "artifacts",
+    "auto-mode-setup", "autocompact", "autofix-pr", "background", "branch", "brief",
+    "btw", "bug", "cd", "clear", "cloud-plugins", "color", "compact", "config",
+    "context", "copy", "daemon", "design-consent", "design-login", "design-revoke",
+    "desktop", "diff", "effort", "exit", "export", "extra-usage", "fast", "feedback",
+    "focus", "fork", "goal", "heapdump", "help", "hooks", "ide", "import",
+    "install", "install-github-app", "install-slack-app", "list-agents", "login",
+    "logout", "mcp", "memory", "mobile", "model", "output-style", "passes",
+    "pause-memory", "permissions", "plan", "plugin", "powerup", "privacy-settings",
+    "pro-trial-expired", "project", "radio", "rate-limit-options", "recap",
+    "reload-plugins", "reload-skills", "remote-control", "remote-env", "rename",
+    "restart", "resume", "scroll-speed", "session", "setup-bedrock", "setup-vertex",
+    "skill-doctor", "skills", "status", "stickers", "stop", "subtask", "tasks",
+    "teleport", "terminal-setup", "theme", "tui", "ultraplan", "ultrareview",
+    "upgrade", "usage", "usage-credits", "use-case", "version", "voice",
+    "web-setup", "wellbeing", "workflow-launch-exec", "workflows",
+];
+
+/// slash.starts_turn: whether sending `/name` starts a model turn (it
+/// prompts the model) rather than Claude Code answering it itself.
+pub fn starts_turn(name: &str) -> bool {
+    let name = canonical(name);
+    !LOCAL.contains(&name) && !RULES.iter().any(|(n, _, _)| *n == name)
+}
+
+/// Every built-in RULES names, for the window's list.
+pub fn ruled() -> impl Iterator<Item = &'static str> {
+    RULES.iter().map(|(n, _, _)| *n)
+}
+
+/// slash.classify: what becomes of `/name rest` sent from the window.
+pub fn classify(name: &str, rest: &str, known: Option<&Known>) -> How {
+    let name = canonical(name);
+    let bare = rest.trim().is_empty();
+    if let Some((_, when, how)) = RULES.iter().find(|(n, _, _)| *n == name) {
+        if *when == When::Always || bare {
+            return how.clone();
+        }
+        return How::Run;
+    }
+    // A built-in these tables do not know (a newer Claude Code's): when
+    // Claude Code says it has no form without a terminal, it opens one.
+    if let Some(k) = known {
+        if bare && !k.text.is_empty() && k.builtin.contains(name) && !k.text.contains(name) {
+            return How::Terminal("unknown", "");
+        }
+    }
+    How::Run
+}
+
+/// Why `/name` cannot go as typed, for one classified otherwise.
+pub fn explain(name: &str, how: &How) -> Option<String> {
+    let hint = |h: &str| if h.is_empty() { String::new() } else { format!(" ({h})") };
+    Some(match how {
+        How::Run => return None,
+        How::Close => "use Close to end the session - it closes the terminal tab too".into(),
+        How::Picker(_) => format!(
+            "/{name} on its own opens a picker in the terminal - type it in the Imperatorium chat to pick there, or name it (/{name} <value>)"
+        ),
+        How::View(_) => format!(
+            "/{name} draws a panel in the terminal - type it in the Imperatorium chat to see it there"
+        ),
+        How::Window("add-dir") => format!("/{name} needs the folder after it (/{name} <path>)"),
+        How::Window(w) => {
+            let feature = match *w {
+                "history" => "History",
+                "export" => "View > Export as Markdown",
+                "fork" => "New / Fork > Fork",
+                "copy" => "the copy button on the reply",
+                _ => "a window feature",
+            };
+            format!("/{name} on its own is {feature} in the Imperatorium window")
+        }
+        How::Terminal("account", h) => format!(
+            "/{name} is account or setup - run it once in a terminal: use Show Window{}",
+            hint(h)
+        ),
+        How::Terminal("display", h) => format!(
+            "/{name} changes the terminal itself - it has no effect in the window; use Show Window to run it there{}",
+            hint(h)
+        ),
+        How::Terminal("detach", h) => format!(
+            "/{name} moves the session out from under the window - use Show Window to run it there{}",
+            hint(h)
+        ),
+        How::Terminal("unknown", _) => format!(
+            "/{name} is not one Claude Code runs without a terminal - use Show Window and run it there"
+        ),
+        How::Terminal(_, h) => format!(
+            "/{name} opens a menu in the terminal, which the window cannot drive - use Show Window and run it there{}",
+            hint(h)
+        ),
+    })
+}
 
 /// Long enough for any prompt worth typing; the typer passes it on a
 /// child's command line, which Windows caps at 32,767 characters.
@@ -101,8 +369,15 @@ pub fn is_command(text: &str) -> bool {
     parse(text).is_some()
 }
 
-/// slash.refusal: why `text` cannot be typed at a prompt, or None.
+
+/// slash.refusal: why `text` cannot be typed at a prompt, or None - by the
+/// tables alone (what Claude Code says of itself left out).
 pub fn refusal(text: &str) -> Option<String> {
+    refusal_in(text, None)
+}
+
+/// `refusal`, with what Claude Code says of its commands where known.
+pub fn refusal_in(text: &str, known: Option<&Known>) -> Option<String> {
     let Some((name, rest)) = parse(text) else {
         return Some("not a slash command".into());
     };
@@ -110,21 +385,14 @@ pub fn refusal(text: &str) -> Option<String> {
     if t.contains('\n') || t.contains('\r') {
         return Some("a slash command is one line".into());
     }
-    if EXIT.contains(&name.as_str()) {
-        return Some("use Close to end the session - it closes the terminal tab too".into());
-    }
-    let bare = MENU_BARE.contains(&name.as_str());
-    if MENU.contains(&name.as_str()) || (bare && rest.is_empty()) {
-        let hint = if bare {
-            format!(" - give it an argument (e.g. /{name} <name>)")
-        } else {
-            String::new()
-        };
-        return Some(format!(
-            "/{name} opens a menu in the terminal, which the window cannot drive; use Focus and run it there{hint}"
-        ));
-    }
-    None
+    explain(&name, &classify(&name, &rest, known))
+}
+
+/// The command's name and what becomes of it, for a one-line command.
+pub fn how_of(text: &str, known: Option<&Known>) -> Option<(String, How)> {
+    let (name, rest) = parse(text)?;
+    let how = classify(&name, &rest, known);
+    Some((name, how))
 }
 
 /// slash.unreachable: why `row` can never be typed into from here.
@@ -238,6 +506,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn skills_and_prompt_commands_start_a_turn() {
+        for n in ["doctor", "simplify", "code-review", "init", "insights", "my-skill"] {
+            assert!(starts_turn(n), "{n}");
+        }
+        for n in ["compact", "clear", "reset", "list-agents", "model", "context", "cost", "recap"] {
+            assert!(!starts_turn(n), "{n}");
+        }
+    }
+
+    #[test]
     fn parse_matches_python() {
         assert_eq!(
             parse("  /Model opus "),
@@ -291,11 +569,14 @@ mod py_ported {
         for text in [
             "/compact",
             "/clear",
-            "/context",
-            "/cost",
             "/model opus",
+            "/effort high",
             "/resume abc123",
             "/code-review high",
+            "/config verbose=true",
+            "/mcp reconnect github",
+            "/doctor",
+            "/agents",
         ] {
             assert_eq!(refusal(text), None, "{text}");
         }
@@ -303,14 +584,39 @@ mod py_ported {
 
     #[test]
     fn a_menu_the_window_cannot_drive_is_refused() {
-        for text in ["/config", "/permissions", "/mcp", "/model", "/rewind"] {
+        for text in ["/plugin", "/mcp", "/rewind", "/rewind 3", "/checkpoint", "/memory"] {
             assert!(refusal(text).unwrap().contains("opens a menu"), "{text}");
         }
     }
 
     #[test]
-    fn a_bare_menu_command_is_told_to_take_an_argument() {
-        assert!(refusal("/model").unwrap().contains("/model <name>"));
+    fn a_picker_or_panel_is_the_windows_own() {
+        assert_eq!(classify("model", "", None), How::Picker("model"));
+        assert_eq!(classify("model", "opus", None), How::Run);
+        assert_eq!(classify("cost", "", None), How::View("usage"));
+        assert_eq!(classify("context", "all", None), How::View("context"));
+        assert_eq!(classify("settings", "", None), How::View("config"));
+        assert_eq!(classify("continue", "", None), How::Window("history"));
+        assert!(refusal("/model").unwrap().contains("/model <value>"));
+        assert!(refusal("/context").unwrap().contains("Imperatorium chat"));
+    }
+
+    #[test]
+    fn account_and_display_commands_say_so() {
+        assert!(refusal("/login").unwrap().contains("account"));
+        assert!(refusal("/theme").unwrap().contains("no effect in the window"));
+        assert!(refusal("/bg").unwrap().contains("out from under"));
+    }
+
+    #[test]
+    fn a_builtin_claude_code_lists_as_terminal_only_is_refused_bare() {
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
+        let k = Known { text: set(&["compact", "model"]), builtin: set(&["compact", "model", "brand-new"]) };
+        assert_eq!(classify("brand-new", "", Some(&k)), How::Terminal("unknown", ""));
+        assert_eq!(classify("brand-new", "x", Some(&k)), How::Run);
+        assert_eq!(classify("brand-new", "", None), How::Run);
+        // A plugin's or a skill's (not a built-in) always runs.
+        assert_eq!(classify("my-skill", "", Some(&k)), How::Run);
     }
 
     #[test]
@@ -426,6 +732,6 @@ mod py_ported {
 
     #[test]
     fn a_command_gets_the_command_rules() {
-        assert!(typed_refusal("/config").unwrap().contains("menu"));
+        assert!(typed_refusal("/plugin").unwrap().contains("menu"));
     }
 }

@@ -32,14 +32,36 @@ pub const STOP_CLAIM_FOR: f64 = 3.0;
 /// The first mod that ends a turn when its beat's reply says `stop`.
 pub const STOP_SINCE: (u64, u64, u64) = (0, 3, 0);
 
-/// Pure: whether a mod of `version` ("0.3.0") can stop a turn.
-pub fn can_stop(version: Option<&Value>) -> bool {
+/// The first mod that runs the ops a beat's reply carries (`ops`): slash
+/// commands, and reads of the session's context, status and settings.
+pub const OPS_SINCE: (u64, u64, u64) = (0, 4, 0);
+/// An op its mod has not answered by then is dropped.
+pub const OP_FOR: f64 = 30.0;
+/// A read handed out and not answered is handed out again after this. A
+/// change (a command, a setting) is handed out once only: run twice, it
+/// would do its work twice.
+pub const OP_CLAIM_FOR: f64 = 5.0;
+/// Ops that change the session; the rest only read.
+const CHANGES: &[&str] = &["command", "config_set"];
+const RESULTS_KEEP: usize = 100;
+
+fn at_least(version: Option<&Value>, since: (u64, u64, u64)) -> bool {
     let v = version.and_then(Value::as_str).unwrap_or("");
     let mut parts = v.split(['.', '-']).map(|p| p.parse::<u64>().ok());
     match (parts.next().flatten(), parts.next().flatten(), parts.next().flatten()) {
-        (Some(a), Some(b), c) => (a, b, c.unwrap_or(0)) >= STOP_SINCE,
+        (Some(a), Some(b), c) => (a, b, c.unwrap_or(0)) >= since,
         _ => false,
     }
+}
+
+/// Pure: whether a mod of `version` ("0.3.0") can stop a turn.
+pub fn can_stop(version: Option<&Value>) -> bool {
+    at_least(version, STOP_SINCE)
+}
+
+/// Pure: whether a mod of `version` runs ops.
+pub fn can_ops(version: Option<&Value>) -> bool {
+    at_least(version, OPS_SINCE)
 }
 
 type Obj = Map<String, Value>;
@@ -276,11 +298,17 @@ struct Inner {
     stops: HashMap<String, (String, f64, Option<f64>)>,
     /// What came of each session's last stop: {id, outcome, reason, at}.
     stopped: HashMap<String, Obj>,
+    /// The ops waiting for each session's mod: {id, op, args, at, given_at}.
+    ops: HashMap<String, Vec<Obj>>,
+    /// What each op came to, by id: ({ok, data | error}, when).
+    results: HashMap<String, (Value, f64)>,
 }
 
 pub struct ModLink {
     pub token: String,
     inner: Mutex<Inner>,
+    /// Woken when an op's result arrives.
+    answered: std::sync::Condvar,
 }
 
 impl ModLink {
@@ -288,7 +316,120 @@ impl ModLink {
         ModLink {
             token,
             inner: Mutex::default(),
+            answered: std::sync::Condvar::new(),
         }
+    }
+
+    /// Ask the session's mod to run `op` (command, context, status,
+    /// usage, config, config_set, settings) with `args`; the op's id.
+    pub fn request_op(&self, sid: &str, op: &str, args: Value, now: f64) -> String {
+        let mut raw = [0u8; 6];
+        getrandom::getrandom(&mut raw).expect("random bytes");
+        let id: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let item = json!({"id": id, "op": op, "args": args, "at": now, "given_at": null});
+        self.inner
+            .lk()
+            .ops
+            .entry(sid.to_string())
+            .or_default()
+            .push(item.as_object().unwrap().clone());
+        id
+    }
+
+    /// The ops to hand the session's mod with this beat's reply.
+    pub fn take_ops(&self, sid: &str, now: f64) -> Vec<Value> {
+        let mut inner = self.inner.lk();
+        let Some(list) = inner.ops.get_mut(sid) else {
+            return vec![];
+        };
+        let mut expired = vec![];
+        list.retain(|o| {
+            let keep = now - o["at"].as_f64().unwrap_or(now) <= OP_FOR;
+            if !keep {
+                expired.push(py_str(&o["id"]));
+            }
+            keep
+        });
+        let mut give = vec![];
+        for o in list.iter_mut() {
+            let changes = CHANGES.contains(&o["op"].as_str().unwrap_or(""));
+            match o.get("given_at").and_then(Value::as_f64) {
+                Some(_) if changes => continue,
+                Some(g) if now - g < OP_CLAIM_FOR => continue,
+                _ => {}
+            }
+            o.insert("given_at".into(), json!(now));
+            give.push(json!({"id": o["id"], "op": o["op"], "args": o["args"]}));
+        }
+        if list.is_empty() {
+            inner.ops.remove(sid);
+        }
+        for id in expired {
+            inner.results.insert(id, (json!({"ok": false, "error": "the session's mod did not answer in time"}), now));
+        }
+        give
+    }
+
+    /// Record what the mod's beat says its ops came to.
+    fn take_results(&self, inner: &mut Inner, sid: &str, beat: &Obj, now: f64) {
+        let Some(list) = beat.get("results").and_then(Value::as_array) else {
+            return;
+        };
+        for r in list {
+            let Some(id) = r.get("id").and_then(Value::as_str) else { continue };
+            if let Some(ops) = inner.ops.get_mut(sid) {
+                ops.retain(|o| o["id"].as_str() != Some(id));
+            }
+            let mut got = r.as_object().cloned().unwrap_or_default();
+            got.remove("id");
+            got.entry("ok").or_insert(json!(true));
+            inner.results.insert(id.to_string(), (Value::Object(got), now));
+        }
+        if inner.results.len() > RESULTS_KEEP {
+            let mut by_age: Vec<(String, f64)> =
+                inner.results.iter().map(|(k, (_, t))| (k.clone(), *t)).collect();
+            by_age.sort_by(|a, b| a.1.total_cmp(&b.1));
+            for (k, _) in by_age.iter().take(inner.results.len() - RESULTS_KEEP) {
+                inner.results.remove(k);
+            }
+        }
+        self.answered.notify_all();
+    }
+
+    /// What op `id` came to, once its mod has answered.
+    pub fn result(&self, id: &str) -> Option<Value> {
+        self.inner.lk().results.get(id).map(|(v, _)| v.clone())
+    }
+
+    /// Wait up to `limit` for op `id`'s result.
+    pub fn wait_result(&self, id: &str, limit: std::time::Duration) -> Option<Value> {
+        let until = std::time::Instant::now() + limit;
+        let mut inner = self.inner.lk();
+        loop {
+            if let Some((v, _)) = inner.results.get(id) {
+                return Some(v.clone());
+            }
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return None;
+            }
+            inner = self
+                .answered
+                .wait_timeout(inner, left)
+                .map(|(g, _)| g)
+                .unwrap_or_else(|e| e.into_inner().0);
+        }
+    }
+
+    /// The slash commands the session's mod last listed ($.command.list()).
+    pub fn commands(&self, sid: &str) -> Option<Value> {
+        self.inner
+            .lk()
+            .mods
+            .get(sid)
+            .and_then(|m| m.get("commands"))
+            .filter(|c| c.is_array())
+            .cloned()
     }
 
     /// ModLink.authentic, in constant time.
@@ -326,6 +467,7 @@ impl ModLink {
             "version": get("version"),
             "mod_version": get("mod_version"),
             "usage": or("usage"),
+            "commands": or("commands"),
         });
         inner
             .mods
@@ -346,6 +488,7 @@ impl ModLink {
             got.insert("at".into(), json!(now));
             inner.stopped.insert(sid.clone(), got);
         }
+        self.take_results(&mut inner, &sid, beat, now);
         let mut give = vec![];
         for item in inner.outbox.get_mut(&sid).into_iter().flatten() {
             if truthy(item.get("accepted_at")) {
@@ -659,5 +802,66 @@ mod python_tests {
         assert_eq!(got["rate_limits"]["five_hour"]["resets_at"].as_f64(), Some(1793736000.0));
         assert!(got["rate_limits"].get("seven_day").is_none());
         assert_eq!(statusline_payload(&Value::Null)["rate_limits"], json!({}));
+    }
+
+    fn beat_with(m: &ModLink, extra: Value, at: f64) -> Vec<Value> {
+        let mut b = json!({"session_id": "s"});
+        for (k, v) in extra.as_object().unwrap() {
+            b[k] = v.clone();
+        }
+        m.beat(b.as_object().unwrap(), at)
+    }
+
+    #[test]
+    fn ops_need_mod_0_4() {
+        assert!(can_ops(Some(&json!("0.4.0"))));
+        assert!(can_ops(Some(&json!("1.0"))));
+        assert!(!can_ops(Some(&json!("0.3.1"))));
+        assert!(!can_ops(None));
+    }
+
+    #[test]
+    fn a_command_is_handed_out_once_and_its_output_comes_back() {
+        let m = ModLink::new("t".repeat(40));
+        let id = m.request_op("s", "command", json!({"command": "model", "args": "opus"}), 0.0);
+        let given = m.take_ops("s", 1.0);
+        assert_eq!(given, vec![json!({"id": id, "op": "command", "args": {"command": "model", "args": "opus"}})]);
+        // Never again, even long after: run twice, it would act twice.
+        assert!(m.take_ops("s", 20.0).is_empty());
+        assert_eq!(m.result(&id), None);
+        beat_with(&m, json!({"results": [{"id": id, "ok": true, "data": {"text": "Set model to Opus"}}]}), 21.0);
+        assert_eq!(m.result(&id).unwrap()["data"]["text"], "Set model to Opus");
+        assert_eq!(m.wait_result(&id, std::time::Duration::from_millis(1)).unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn a_read_is_handed_out_again_when_unanswered_and_dropped_late() {
+        let m = ModLink::new("t".repeat(40));
+        let id = m.request_op("s", "context", json!({}), 0.0);
+        assert_eq!(m.take_ops("s", 0.0).len(), 1);
+        assert!(m.take_ops("s", 1.0).is_empty());
+        assert_eq!(m.take_ops("s", OP_CLAIM_FOR + 0.5).len(), 1);
+        assert!(m.take_ops("s", OP_FOR + 1.0).is_empty());
+        assert_eq!(m.result(&id).unwrap()["ok"], false);
+    }
+
+    #[test]
+    fn a_waiting_request_wakes_when_the_answer_arrives() {
+        let m = std::sync::Arc::new(ModLink::new("t".repeat(40)));
+        let id = m.request_op("s", "status", json!({}), 0.0);
+        let (m2, id2) = (std::sync::Arc::clone(&m), id.clone());
+        let t = std::thread::spawn(move || m2.wait_result(&id2, std::time::Duration::from_secs(5)));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        beat_with(&m, json!({"results": [{"id": id, "data": {"model": "opus"}}]}), 1.0);
+        let got = t.join().unwrap().unwrap();
+        assert_eq!(got, json!({"ok": true, "data": {"model": "opus"}}));
+    }
+
+    #[test]
+    fn the_command_list_is_kept_from_the_beat_that_sent_it() {
+        let m = ModLink::new("t".repeat(40));
+        beat_with(&m, json!({"commands": [{"name": "compact", "source": "builtin"}]}), 0.0);
+        beat_with(&m, json!({}), 2.0);
+        assert_eq!(m.commands("s").unwrap(), json!([{"name": "compact", "source": "builtin"}]));
     }
 }

@@ -834,7 +834,8 @@ function pendingHtml(p){
   const note = p.state === "sending" ? "sending…" : p.state === "failed" ? "not sent - " + p.note : p.note;
   return `<div class="turn you-turn pend ${p.state}" data-pend="${p.id}"><div class="who you">${esc(SPEAKER.you)}<span class="pnote">${
     esc(note)}</span>${p.state === "sending" ? "" : `<button class="ghost tiny" data-unpend="${p.id}" title="${
-    p.state === "failed" ? "dismiss - the text is still in the prompt box" : "stop showing this here - it was sent"}" aria-label="dismiss">&#10005;</button>`}</div>${
+    p.state === "failed" ? "dismiss - the text is still in the prompt box" : "stop showing this here - it was sent"}" aria-label="dismiss">&#10005;</button>`}${
+    p.state === "failed" && p.show ? `<button class="ghost tiny" data-showwin title="bring this session's terminal window to the front, to run it there">Show Window</button>` : ""}</div>${
     renderText(p.text)}</div>`;
 }
 
@@ -3591,7 +3592,7 @@ const PROMPT_PH = $("#prompt").placeholder;
 // New Session dialog is: the chat stays where it was behind them, and Esc,
 // their ✕ or a click outside them goes back to it. They used to take the
 // main area's place, with no plain way back. `view` stays "session".
-const POPUPS = {history: "#histbox", insights: "#insightbox", project: "#projbox", hooks: "#hookbox"};
+const POPUPS = {history: "#histbox", insights: "#insightbox", project: "#projbox", hooks: "#hookbox", slash: "#slashbox"};
 function openPopup(which, open){
   const box = $(POPUPS[which]);
   if (!box || box.hidden === !open) return;
@@ -3605,6 +3606,7 @@ function openPopup(which, open){
   if (which === "history"){ $("#hq").focus(); search(); }
   else if (which === "project"){ $("#pjrefresh").focus(); loadProject(); }
   else if (which === "hooks") drawHookHelp();
+  else if (which === "slash") {}
   else loadInsights();
 }
 // Kept for its callers: "session" closes the pop-ups and leaves Fleet;
@@ -4271,9 +4273,418 @@ function outcome(r){
   if (r.action === "typed")
     return "typed into " + (r.session_name || "the session") + "'s prompt" +
            (r.cleaned ? " (made one line)" : "");
+  if (r.action === "command" && r.via === "mod")
+    return (r.turn ? "started a turn with " : "ran ") + r.command + " in " + (r.session_name || "the session");
   if (r.action === "command")
     return "typed " + r.command + " into " + (r.session_name || "the session") + "'s terminal";
   return r.action + id;
+}
+
+// -- slash commands the window does itself (2026-11-22) ---------------------
+// Claude Code draws some commands as pickers or panels in its terminal,
+// which the window cannot drive (docs/slash-commands-terminal-gaps.md). The
+// dispatcher says what each one is (slash::classify): a picker, a view or a
+// window feature is done here instead; one only the terminal can do comes
+// back refused with Show Window. The lists come from Claude Code itself -
+// its models, effort levels and output styles (/api/claude/catalog) and the
+// session's own commands, through its mod (/api/slash/commands).
+let claudeCatalog = null, catalogAt = 0;
+const slashLists = {};   // session key -> {at, commands}
+
+async function loadCatalog(force){
+  if (!force && claudeCatalog && Date.now() - catalogAt < 600000) return claudeCatalog;
+  try {
+    const r = await get("/api/claude/catalog");
+    if (r.catalog){ claudeCatalog = r.catalog; catalogAt = Date.now(); }
+  } catch (e) {}
+  return claudeCatalog;
+}
+
+async function loadSlashList(k){
+  const got = slashLists[k];
+  if (got && Date.now() - got.at < 60000) return got.commands;
+  try {
+    const r = await get("/api/slash/commands?session=" + encodeURIComponent(k));
+    if (r.ok){ slashLists[k] = {at: Date.now(), commands: r.commands || []}; return r.commands || []; }
+  } catch (e) {}
+  return got ? got.commands : [];
+}
+
+// Pure: the commands whose name or alias starts with what is typed after
+// the slash, the exact one first, then by name; at most `max`.
+function slashMatches(list, typed, max){
+  const q = String(typed || "").toLowerCase();
+  const hit = (list || []).filter(c => c.name.startsWith(q) || (c.aliases || []).some(a => a.startsWith(q)));
+  hit.sort((a, b) => (b.name === q) - (a.name === q) || a.name.localeCompare(b.name));
+  return hit.slice(0, max || 12);
+}
+
+// Pure: what a command will do from here, as its list entry says.
+const HOW_TAG = {run: "runs here", picker: "picker here", view: "shown here", window: "window feature",
+                 terminal: "terminal only", close: "use Close"};
+function howTag(c){ return c.turn ? "starts a turn" : HOW_TAG[c.how] || c.how || ""; }
+
+// Pure: the catalog's model for `current` (an id, an alias or a display
+// name), else null.
+function catalogModel(cat, current){
+  const m = String(current || "").toLowerCase();
+  if (!cat || !m) return null;
+  return (cat.models || []).find(x => x.value !== "default" && [x.value, x.resolvedModel, x.displayName]
+    .some(v => v && String(v).toLowerCase() === m)) ||
+    (cat.models || []).find(x => x.value !== "default" && x.displayName && m.includes(String(x.displayName).toLowerCase())) || null;
+}
+
+// Pure: the effort levels to offer: the current model's, else every one any
+// model takes, in Claude Code's order.
+function effortLevels(cat, current){
+  const m = catalogModel(cat, current);
+  if (m && m.supportedEffortLevels) return m.supportedEffortLevels;
+  const all = [];
+  for (const x of (cat && cat.models) || []) for (const l of x.supportedEffortLevels || []) if (!all.includes(l)) all.push(l);
+  return all.length ? all : ["low", "medium", "high", "xhigh", "max"];
+}
+
+// The pop-up the pickers and views draw in.
+function openSheet(title, sub, html){
+  $("#sltitle").textContent = title;
+  $("#slsub").textContent = sub || "";
+  $("#slashpane").innerHTML = html;
+  openPopup("slash", true);
+  const first = $("#slashpane").querySelector("button, select, input");
+  (first || $("#slashbox [data-popclose]")).focus();
+}
+
+// Send `/name value` for the selected session, as the chat's Send would.
+async function sendSlash(s, text){
+  openPopup("slash", false);
+  const p = addPending(key(s), text);
+  let r;
+  try { r = await post("/api/dispatch", {session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: "auto"}); }
+  catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  slashSettled(s, p, r);
+}
+
+// The answer to a slash command sent: its output, or what the window does
+// in its place. True when that was not a send at all (the note goes).
+function slashSettled(s, p, r){
+  if (r.ok){
+    p.state = "sent";
+    p.note = r.via === "mod" ? (r.turn ? "started a turn in the session" : "ran in the session" + (r.pending ? " - its output follows" : "")) : "typed at its prompt";
+    if (r.output) p.note += " - " + firstLine(r.output);
+    if (key(s) === selected) drawLog();
+    say(r.output ? firstLine(r.output) : outcome(r), key(s));
+    if (r.pending && r.op) followOp(s, p, r.op);
+    lastSig = ""; loadLog(true);
+    return false;
+  }
+  if (r.how && r.how !== "terminal"){
+    dropPending(p.id);
+    // "sending…" is over; and the caller clears the prompt box when this
+    // returns, so the window feature (which may fill it in) runs after.
+    say("", key(s));
+    queueMicrotask(() => slashHere(s, r.how, r.what, r.name));
+    return true;
+  }
+  p.show = !!r.show_window;
+  settleSend(key(s), p, r, "sent");
+  say(r.error || "refused", key(s));
+  return false;
+}
+
+const firstLine = t => String(t || "").split("\n").find(l => l.trim()) || "";
+
+// A command run through the mod whose output came after the send's wait.
+async function followOp(s, p, op){
+  for (let i = 0; i < 15; i++){
+    await new Promise(res => setTimeout(res, 2000));
+    let r;
+    try { r = await get("/api/session/op?id=" + encodeURIComponent(op)); } catch (e) { continue; }
+    if (!r.done) continue;
+    const res = r.result || {};
+    if (res.ok === false){ p.state = "failed"; p.note = res.error || "it failed"; }
+    else {
+      const out = res.data && res.data.text;
+      p.note = "ran in the session" + (out ? " - " + firstLine(out) : "");
+      if (out) say(firstLine(out), key(s));
+    }
+    if (key(s) === selected) drawLog();
+    return;
+  }
+}
+
+// What the window does for a command the dispatcher says is its own.
+async function slashHere(s, how, what, name){
+  if (how === "picker") return openPicker(s, what);
+  if (how === "view") return openSlashView(s, what, name);
+  if (how === "close") return say("to end the session use Close (its menu in the list) - it closes the terminal tab too", key(s));
+  if (how === "window"){
+    if (what === "history") return openPopup("history", true);
+    if (what === "export") return exportMarkdown(s);
+    if (what === "fork") return act("fork-window");
+    if (what === "copy") return copyLastReply(s);
+    if (what === "add-dir"){
+      $("#prompt").value = "/add-dir "; $("#prompt").focus();
+      return say("type the folder after /add-dir, then Send", key(s));
+    }
+  }
+  say("/" + name + " is not something the window can do", key(s));
+}
+
+async function copyLastReply(s){
+  const it = [...logItems].reverse().find(x => x.speaker !== "you" && !x.note &&
+    (x.blocks || []).some(b => b.kind === "text"));
+  const text = it ? it.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n\n") : "";
+  if (!text) return say("no reply to copy yet", key(s));
+  say(await copyText(text) ? "copied the last reply" : "the browser would not copy it", key(s));
+}
+
+// /copy runs after the dispatcher answers, past the keypress, and Chrome can
+// then hold navigator.clipboard.writeText unsettled: give it two seconds,
+// then copy the old way, from a selected text box.
+async function copyText(text){
+  const late = new Promise((_, no) => setTimeout(() => no(new Error("late")), 2000));
+  try { await Promise.race([navigator.clipboard.writeText(text), late]); return true; }
+  catch (e) {
+    const t = document.createElement("textarea");
+    t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+    document.body.appendChild(t); t.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (x) { ok = false; }
+    t.remove(); $("#prompt").focus();
+    return ok;
+  }
+}
+
+// -- pickers ----
+async function openPicker(s, what){
+  openSheet("/" + what, "loading Claude Code's list…", "");
+  const cat = await loadCatalog();
+  const cur = (s.usage && s.usage.model) || "";
+  const row = (value, label, desc, on) => `<button class="slpick${on ? " on" : ""}" data-slval="${esc(value)}">` +
+    `<b>${esc(label)}</b>${on ? ' <span class="badge">now</span>' : ""}${desc ? `<small>${esc(desc)}</small>` : ""}</button>`;
+  let rows = "", sub = "";
+  if (what === "model"){
+    const now = catalogModel(cat, cur);
+    rows = cat ? (cat.models || []).map(m => row(m.value, m.displayName || m.value, m.description,
+      now && m.value === now.value)).join("") : "";
+    sub = cur ? "now: " + cur : "";
+  } else if (what === "effort"){
+    rows = effortLevels(cat, cur).map(l => row(l, l, "")).join("");
+    const m = catalogModel(cat, cur);
+    sub = m ? (rows ? "the levels " + (m.displayName || m.value) + " takes"
+                    : (m.displayName || m.value) + " takes no effort level") : "";
+  } else if (what === "fast"){
+    const m = catalogModel(cat, cur);
+    rows = row("on", "on", "faster output on this model") + row("off", "off", "");
+    sub = m && m.supportsFastMode === false ? (m.displayName || m.value) + " has no fast mode" :
+      cat && cat.fast_mode ? "Claude Code started with it " + cat.fast_mode : "";
+  } else if (what === "output-style"){
+    rows = ((cat && cat.output_styles) || []).map(o => row(o, o, "", cat.output_style === o)).join("");
+  }
+  const typed = `<div class="slrow"><input id=slother placeholder="or type it: /${esc(what)} …" autocomplete=off>` +
+    `<button class=sm id=slgo>Set</button></div>`;
+  openSheet("/" + what, sub || (cat ? "" : "Claude Code's list is not loaded yet - type the value"),
+    `<div class="slpicks">${rows || '<div class="note">nothing listed</div>'}</div>${typed}`);
+  const pick = v => { if (v) sendSlash(s, "/" + what + " " + v); };
+  $("#slashpane").querySelectorAll("[data-slval]").forEach(b => b.onclick = () => pick(b.dataset.slval));
+  $("#slgo").onclick = () => pick($("#slother").value.trim());
+  $("#slother").addEventListener("keydown", e => { if (e.key === "Enter"){ e.preventDefault(); pick($("#slother").value.trim()); } });
+}
+
+// -- views ----
+// A read through the session's mod (/api/session/op); null after saying why.
+async function sessionOp(s, op, args){
+  let r;
+  try { r = await post("/api/session/op", {session_id: key(s), op, args: args || {}}, undefined, 15000); }
+  catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  if (r.ok) return r.data || {};
+  $("#slashpane").innerHTML = `<div class="note">${esc(r.error || "it failed")}</div>` +
+    (r.no_mod ? `<button class=sm data-slshow>Show Window</button>` : "");
+  const b = $("#slashpane").querySelector("[data-slshow]");
+  if (b) b.onclick = () => { openPopup("slash", false); act("show"); };
+  return null;
+}
+
+const pct = n => typeof n === "number" ? (Math.round(n * 10) / 10) + "%" : "-";
+const kv = rows => `<table class="t">${rows.filter(r => r[1] != null && r[1] !== "").map(([k, v]) =>
+  `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>`;
+
+async function openSlashView(s, what, name){
+  if (what === "diff"){ setTab("changes"); return say("the Changes tab is this session's diff", key(s)); }
+  if (what === "tasks"){ setTab("activity"); return say("the Activity tab is this session's background work", key(s)); }
+  if (what === "release-notes"){
+    window.open("https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md", "_blank", "noopener");
+    return say("opened Claude Code's changelog", key(s));
+  }
+  if (what === "help" || what === "skills") return openCommandList(s, what);
+  openSheet("/" + name, "asking the session…", "");
+  if (what === "context") return drawContext(s, await sessionOp(s, "context"));
+  if (what === "usage") return drawUsage(s, await sessionOp(s, "usage"));
+  if (what === "status") return drawStatusView(s, await sessionOp(s, "status"));
+  if (what === "hooks" || what === "permissions") return drawSettingsView(s, what, await sessionOp(s, "settings"));
+  if (what === "config") return drawConfig(s, await sessionOp(s, "config"));
+}
+
+function drawContext(s, d){
+  if (!d) return;
+  const c = d.context || {}, b = d.breakdown;
+  $("#slsub").textContent = (b && b.model ? b.model + " · " : "") + "estimated, as /context counts it";
+  let html = `<div class="slbar"><i style="width:${Math.min(100, c.percent || 0)}%"></i></div>` +
+    kv([["used", pct(c.percent)], ["tokens", c.tokens != null ? kfmt(c.tokens) + " of " + kfmt(c.window) : null]]);
+  if (b && b.categories){
+    html += `<table class="t"><tr><th>what</th><th>tokens</th><th>share</th></tr>${b.categories.map(x =>
+      `<tr><td>${esc(x.name)}${x.isDeferred && !/deferred/i.test(x.name) ? " <small>(deferred)</small>" : ""}</td><td class="n">${kfmt(x.tokens)}</td><td class="n">${
+        b.maxTokens ? pct(100 * x.tokens / b.maxTokens) : ""}</td></tr>`).join("")}</table>`;
+  }
+  if (b && (b.memoryFiles || []).length){
+    html += `<h4>Memory files</h4><table class="t">${b.memoryFiles.map(f =>
+      `<tr><td>${esc(f.path || f.name || "")}</td><td class="n">${kfmt(f.tokens || 0)}</td></tr>`).join("")}</table>`;
+  }
+  if (b && (b.mcpTools || []).length){
+    const by = {};
+    for (const t of b.mcpTools) { const k = t.serverName || t.server || "mcp"; by[k] = (by[k] || 0) + (t.tokens || 0); }
+    html += `<h4>MCP tools</h4><table class="t">${Object.entries(by).map(([k, n]) =>
+      `<tr><td>${esc(k)}</td><td class="n">${kfmt(n)}</td></tr>`).join("")}</table>`;
+  }
+  $("#slashpane").innerHTML = html;
+}
+
+function drawUsage(s, d){
+  if (!d) return;
+  const c = d.context || {};
+  $("#slsub").textContent = d.model || "";
+  const limits = (d.rateLimits || []).map(w => [w.kind.replace(/_/g, " "), pct(w.percentUsed) +
+    (w.resetsAt ? " · resets " + new Date(w.resetsAt).toLocaleString() : "")]);
+  $("#slashpane").innerHTML = kv([["cost so far", d.cost && typeof d.cost.usd === "number" ? "$" + d.cost.usd.toFixed(2) : null],
+    ["context", pct(c.percent)], ...limits]) +
+    `<button class=sm data-slins>Insights - cost across sessions</button>`;
+  $("#slashpane [data-slins]").onclick = () => openPopup("insights", true);
+}
+
+function drawStatusView(s, d){
+  if (!d) return;
+  const v = d.version || {}, id = d.identity || {}, repo = d.repo || {};
+  $("#slsub").textContent = "Claude Code " + (v.version || "");
+  $("#slashpane").innerHTML = kv([["version", v.version], ["built", v.builtAt], ["model", d.model],
+    ["directory", d.cwd], ["project root", d.root !== d.cwd ? d.root : null],
+    ["repository", repo.name || repo.url || repo.root || null], ["signed in", [id.kind, id.email, id.organizationType].filter(Boolean).join(" · ")],
+    ["drawn on", (d.surfaces || []).join(", ")], ["MCP servers", (d.mcp_servers || []).join(", ") || "none"],
+    ["Imperatorium mod", d.mod_version]]);
+}
+
+function drawSettingsView(s, what, d){
+  if (!d) return;
+  let html = "";
+  if (what === "permissions"){
+    const p = d.permissions || {};
+    $("#slsub").textContent = "merged over every settings file" + (p.defaultMode ? " · default mode " + p.defaultMode : "");
+    for (const k of ["allow", "ask", "deny"]){
+      const list = p[k] || [];
+      html += `<h4>${k}</h4>` + (list.length ? `<ul class="sllist">${list.map(r => `<li><code>${esc(r)}</code></li>`).join("")}</ul>` : `<div class="note">none</div>`);
+    }
+    if ((p.additionalDirectories || []).length) html += `<h4>extra folders</h4><ul class="sllist">${p.additionalDirectories.map(r => `<li><code>${esc(r)}</code></li>`).join("")}</ul>`;
+  } else {
+    const h = d.hooks || {};
+    $("#slsub").textContent = "merged over every settings file";
+    const evs = Object.keys(h);
+    if (!evs.length) html = `<div class="note">no hooks</div>`;
+    for (const ev of evs){
+      html += `<h4>${esc(ev)}</h4><ul class="sllist">`;
+      for (const m of h[ev] || []) for (const x of m.hooks || [])
+        html += `<li>${m.matcher ? `<b>${esc(m.matcher)}</b> ` : ""}<code>${esc(x.command || x.url || x.type || "")}</code></li>`;
+      html += `</ul>`;
+    }
+  }
+  $("#slashpane").innerHTML = html + `<div class="note">change these in the settings files, or with /${what} in the terminal</div>`;
+}
+
+// /config as a form: each row the menu would draw, changed as if there.
+function drawConfig(s, d){
+  if (!d) return;
+  const rows = d.rows || [];
+  $("#slsub").textContent = rows.length + " settings, as the /config menu has them";
+  const input = (r, i) => {
+    const dis = r.isLocked ? " disabled" : "";
+    if (r.kind === "boolean") return `<input type=checkbox data-ci="${i}"${r.value ? " checked" : ""}${dis}>`;
+    if (r.kind === "choice") return `<select data-ci="${i}"${dis}>${(r.options || []).map(o =>
+      `<option${String(o) === String(r.value) ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+    return `<input data-ci="${i}" value="${esc(Array.isArray(r.value) ? r.value.join(", ") : r.value)}"${
+      r.kind === "number" ? " inputmode=decimal" : ""}${dis}>`;
+  };
+  $("#slashpane").innerHTML = `<table class="t slcfg">${rows.map((r, i) =>
+    `<tr><th>${esc(r.label || r.key)}${r.description ? `<small>${esc(r.description)}</small>` : ""}</th><td>${input(r, i)}${
+      r.isLocked ? ' <small>set by your organization</small>' : ""}<span class="slsaid" data-cs="${i}"></span></td></tr>`).join("")}</table>`;
+  $("#slashpane").querySelectorAll("[data-ci]").forEach(el => el.addEventListener("change", async () => {
+    const r = rows[+el.dataset.ci];
+    let value = r.kind === "boolean" ? el.checked : r.kind === "number" ? Number(el.value) : el.value;
+    if (Array.isArray(r.value) && r.kind === "text") value = el.value.split(",").map(x => x.trim()).filter(Boolean);
+    const said = $(`#slashpane [data-cs="${el.dataset.ci}"]`);
+    said.textContent = " saving…";
+    let got;
+    try { got = await post("/api/session/op", {session_id: key(s), op: "config_set", args: {key: r.key, value}}, undefined, 15000); }
+    catch (e) { got = {ok: false, error: "the dispatcher did not answer"}; }
+    said.textContent = got.ok ? " saved" : " " + (got.error || "refused");
+    said.classList.toggle("fail", !got.ok);
+    if (got.ok) r.value = value;
+  }));
+}
+
+// /help and /skills: the session's commands and what each does from here.
+async function openCommandList(s, what){
+  openSheet(what === "skills" ? "Skills" : "Slash commands", "loading…", "");
+  let list = await loadSlashList(key(s));
+  if (what === "skills") list = list.filter(c => c.source && c.source !== "builtin");
+  $("#slsub").textContent = list.length + (what === "skills" ? " from plugins, skills and MCP" : " commands") +
+    " - click one to put it in the prompt box";
+  $("#slashpane").innerHTML = `<input id=slfilter placeholder="filter…" autocomplete=off><table class="t slcmds">${list.map(c =>
+    `<tr data-slcmd="${esc(c.name)}"><td><code>/${esc(c.name)}</code>${c.argumentHint ? ` <small>${esc(c.argumentHint)}</small>` : ""}</td>` +
+    `<td>${esc(c.description || "")}</td><td><span class="sltag ${esc(c.how)}">${esc(howTag(c))}</span></td></tr>`).join("")}</table>`;
+  $("#slfilter").addEventListener("input", () => {
+    const q = $("#slfilter").value.toLowerCase();
+    $("#slashpane").querySelectorAll("[data-slcmd]").forEach(tr => tr.hidden = q && !tr.textContent.toLowerCase().includes(q));
+  });
+  $("#slashpane").querySelectorAll("[data-slcmd]").forEach(tr => tr.onclick = () => {
+    openPopup("slash", false);
+    $("#prompt").value = "/" + tr.dataset.slcmd + " "; $("#prompt").focus(); noteDraft();
+  });
+  $("#slfilter").focus();
+}
+
+// -- the prompt box's list ----
+// Typing a slash at the start of the box lists the session's commands that
+// match, each with what it does from here. Tab or a click completes one;
+// Enter completes one only while what is typed is not a whole command yet.
+let slashSel = 0, slashShown = [];
+async function drawSlashList(){
+  const box = $("#slashlist"), v = $("#prompt").value, s = current();
+  const m = /^\/([a-z0-9_:-]*)$/i.exec(v);
+  if (!m || !s || view === "fleet"){ box.hidden = true; slashShown = []; return; }
+  const list = await loadSlashList(key(s));
+  if ($("#prompt").value !== v) return;
+  slashShown = slashMatches(list, m[1], 12);
+  if (!slashShown.length){ box.hidden = true; return; }
+  slashSel = Math.min(slashSel, slashShown.length - 1);
+  box.innerHTML = slashShown.map((c, i) => `<div class="slopt${i === slashSel ? " on" : ""}" data-sli="${i}">` +
+    `<code>/${esc(c.name)}</code>${c.argumentHint ? ` <small>${esc(c.argumentHint)}</small>` : ""}` +
+    `<span class="sldesc">${esc(c.description || "")}</span><span class="sltag ${esc(c.how)}">${esc(howTag(c))}</span></div>`).join("");
+  box.hidden = false;
+}
+function completeSlash(i){
+  const c = slashShown[i];
+  if (!c) return;
+  $("#prompt").value = "/" + c.name + (c.argumentHint || c.how === "run" ? " " : "");
+  $("#slashlist").hidden = true; slashShown = [];
+  $("#prompt").focus(); noteDraft();
+}
+// Pure: whether a key in the prompt box belongs to the list: true to
+// complete, "move" to move the selection, "close", or false.
+function slashKey(open, typed, names, key){
+  if (!open) return false;
+  if (key === "Escape") return "close";
+  if (key === "ArrowDown" || key === "ArrowUp") return "move";
+  if (key === "Tab") return true;
+  if (key === "Enter") return !names.includes(String(typed).slice(1).toLowerCase());
+  return false;
 }
 
 async function send(mode){
@@ -4291,6 +4702,12 @@ async function send(mode){
     });
   } catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
   busy = false;
+  if (p && /^\/[^\s/]/.test(text)){
+    // A slash command: its output, or the picker or view the window shows.
+    $("#slashlist").hidden = true;
+    if (slashSettled(s, p, r) || r.ok) clearPrompt(key(s));
+    return;
+  }
   if (p) settleSend(key(s), p, r, r.action === "typed" ? "typed at its prompt" : "sent");
   if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
   else say(r.error || "refused", key(s));
@@ -4439,7 +4856,29 @@ async function dictate(){
 // a remote host has no terminal here, so it starts as a background session
 // there (/api/dispatch), in the mode Settings gives background sessions.
 let projects = [], psel = 0;
-const MODE_KEY = "imperatorium.newMode";
+const MODE_KEY = "imperatorium.newMode", MODEL_KEY = "imperatorium.newModel";
+
+// The New Session dialog's model and effort, from Claude Code's own list;
+// "" is Claude Code's default. The effort levels follow the model chosen.
+async function fillModelPicks(){
+  const cat = await loadCatalog();
+  let want = ["", ""];
+  try { want = JSON.parse(localStorage.getItem(MODEL_KEY) || "[]") || want; } catch (e) {}
+  const models = ((cat && cat.models) || []).filter(m => m.value !== "default");
+  $("#nmodel").innerHTML = `<option value="">Default${cat && cat.models && cat.models[0] && cat.models[0].value === "default"
+    ? " - " + esc(cat.models[0].description || "") : ""}</option>` +
+    models.map(m => `<option value="${esc(m.value)}">${esc(m.displayName || m.value)}${m.description ? " - " + esc(m.description) : ""}</option>`).join("");
+  $("#nmodel").value = models.some(m => m.value === want[0]) ? want[0] : "";
+  const efforts = () => {
+    const cur = $("#neffort").value || want[1] || "";
+    const chosen = models.find(m => m.value === $("#nmodel").value);
+    const levels = chosen ? chosen.supportedEffortLevels || [] : effortLevels(cat, "");
+    $("#neffort").innerHTML = `<option value="">Default effort</option>` + levels.map(l => `<option>${esc(l)}</option>`).join("");
+    $("#neffort").value = levels.includes(cur) ? cur : "";
+  };
+  $("#nmodel").onchange = efforts;
+  efforts();
+}
 
 // Pure: the catalogue entries matching `q`, at most 40.
 function projectHits(list, q){
@@ -4464,7 +4903,7 @@ function drawProjects(){
   $("#nbnote").textContent = !p ? "" : p.host
     ? "on " + p.host + ": starts as a background session there, in the mode Settings gives background sessions"
     : "";
-  $("#nmode").disabled = !!(p && p.host);
+  $("#nmode").disabled = $("#nmodel").disabled = $("#neffort").disabled = !!(p && p.host);
   return hit;
 }
 async function startProject(p){
@@ -4482,7 +4921,9 @@ async function startProject(p){
     return;
   }
   $("#say").textContent = "starting " + p.name + (mode !== "default" ? " in " + mode + " mode" : "") + "…";
-  const r = await post("/api/new", {cwd: p.path, permission_mode: mode});
+  const model = $("#nmodel").value, effort = $("#neffort").value;
+  try { localStorage.setItem(MODEL_KEY, JSON.stringify([model, effort])); } catch (e) {}
+  const r = await post("/api/new", {cwd: p.path, permission_mode: mode, model, effort});
   if (!r.ok){ $("#say").textContent = r.error || "refused"; return; }
   follow(r.session_id);
   openNew(false);
@@ -4496,6 +4937,7 @@ async function openNew(show){
   try { $("#nmode").value = localStorage.getItem(MODE_KEY) || "default"; } catch (e) {}
   if (!$("#nmode").value) $("#nmode").value = "default";
   $("#find").value = ""; psel = 0; drawProjects(); $("#find").focus();
+  fillModelPicks();
   try { projects = (await get("/api/projects")).projects || []; } catch (e) {}
   if (!$("#newbox").hidden) drawProjects();
 }
@@ -4863,6 +5305,15 @@ $("#sendtyped").onclick = sendTyped;
 $("#bg").onclick = () => send("background");
 $("#queue").onclick = queue;
 $("#prompt").addEventListener("keydown", e => {
+  const sk = e.ctrlKey || e.altKey || e.shiftKey ? false :
+    slashKey(!$("#slashlist").hidden && slashShown.length > 0, $("#prompt").value, slashShown.map(c => c.name), e.key);
+  if (sk === "close"){ e.preventDefault(); e.stopPropagation(); $("#slashlist").hidden = true; return; }
+  if (sk === "move"){
+    e.preventDefault();
+    slashSel = (slashSel + (e.key === "ArrowDown" ? 1 : -1) + slashShown.length) % slashShown.length;
+    drawSlashList(); return;
+  }
+  if (sk === true){ e.preventDefault(); completeSlash(slashSel); return; }
   if (quick.key && comboOf(e) === quick.key){ e.preventDefault(); openQuick(true); return; }
   if (e.key === "Enter" && e.altKey){ e.preventDefault(); queue(); return; }
   if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(e.ctrlKey ? "background" : "auto"); }
@@ -4988,6 +5439,7 @@ $("#tvtext").addEventListener("click", pathClicked);
 
 $("#log").addEventListener("click", e => {
   if (pathClicked(e)) return;
+  if (e.target.closest && e.target.closest("[data-showwin]")){ act("show"); return; }
   const un = e.target.closest && e.target.closest("[data-unpend]");
   if (un){ dropPending(+un.dataset.unpend); return; }
   const b = e.target.closest && e.target.closest("[data-earlier]");
@@ -5029,6 +5481,12 @@ document.addEventListener("keydown", e => {
   if (e.key === "ArrowDown"){ e.preventDefault(); jump(1); }
 });
 $("#prompt").addEventListener("input", noteDraft);
+$("#prompt").addEventListener("input", () => { slashSel = 0; drawSlashList(); });
+$("#prompt").addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== $("#prompt")) $("#slashlist").hidden = true; }, 150));
+$("#slashlist").addEventListener("mousedown", e => {
+  const o = e.target.closest("[data-sli]");
+  if (o){ e.preventDefault(); completeSlash(+o.dataset.sli); }
+});
 document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => openPopup(b.dataset.view, true));
 for (const [which, sel] of Object.entries(POPUPS)){
   $(sel).addEventListener("click", e => {
@@ -5162,7 +5620,7 @@ document.addEventListener("keydown", e => {
   const k = (e.key || "").toLowerCase(), ctl = (e.ctrlKey || e.metaKey) && !e.altKey;
   if (ctl && k === "k"){ e.preventDefault(); openJump($("#jumpbox").hidden); return; }
   if (ctl && k === "f" && view === "session" && tab === "log"){ e.preventDefault(); openFind(true); return; }
-  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden || !$("#projbox").hidden || !$("#hookbox").hidden) return;
+  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden || !$("#projbox").hidden || !$("#hookbox").hidden || !$("#slashbox").hidden) return;
   if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)){ e.preventDefault(); pick(visibleKeys()[+e.key - 1]); return; }
   if (e.altKey && !e.ctrlKey && k === "n"){ e.preventDefault(); goWaiting(); return; }
   // Esc in the prompt box stops a working session's turn, as at its

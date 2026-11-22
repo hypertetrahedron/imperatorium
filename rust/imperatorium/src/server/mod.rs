@@ -86,6 +86,8 @@ pub struct Shared {
     /// waiting for it. Only with a store of our own: the token lives beside
     /// the state, and the live dispatcher's is not ours to answer for.
     modlink: Option<crate::modlink::ModLink>,
+    /// What Claude Code says about its models and commands (claude_catalog).
+    catalog: crate::claude_catalog::Catalog,
     /// Permission requests parked by the hook, waiting for the window.
     pending: crate::pending::Pending,
     /// Statusline readings and the account's windows (usage.Usage).
@@ -179,7 +181,18 @@ impl Shared {
                 .unwrap_or_default();
             format!("{:x}{:x}", t.as_secs(), std::process::id())
         };
+        let catalog = {
+            let dir = store
+                .as_ref()
+                .and_then(|s| s.path.parent().map(PathBuf::from))
+                .unwrap_or_else(paths::state_dir);
+            // Only the dispatcher itself runs a real claude; a test copy
+            // reads a catalog put in its folder, or asks with the variable.
+            let asked = std::env::var("IMPERATORIUM_CLAUDE_PROBE").is_ok_and(|v| !v.is_empty());
+            crate::claude_catalog::Catalog::new(&dir, has_store && (live || asked))
+        };
         Shared {
+            catalog,
             window_token: token_urlsafe(24),
             pending: Default::default(),
             notifier: Default::default(),

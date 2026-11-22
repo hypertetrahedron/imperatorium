@@ -949,3 +949,37 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
 .pjf{cursor:pointer;overflow-wrap:anywhere}
 .pjf:hover{text-decoration:underline}
 .pjf.shared{color:var(--warn)}
+
+/* Slash commands the window does itself (2026-11-22): the prompt box's
+   list, and the pop-up its pickers and views draw in. */
+#ask{position:relative}
+#slashlist{position:absolute;left:16px;right:16px;bottom:100%;max-height:46vh;overflow-y:auto;background:var(--bg);
+  border:1px solid var(--line);border-radius:6px;box-shadow:0 -4px 16px rgba(0,0,0,.18);z-index:30;font-size:13px}
+#slashlist[hidden]{display:none}
+#slashlist .slopt{display:flex;align-items:baseline;gap:8px;padding:4px 10px;cursor:pointer}
+#slashlist .slopt.on,#slashlist .slopt:hover{background:var(--panel)}
+#slashlist .sldesc{flex:1;min-width:0;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sltag{font-size:12px;padding:0 6px;border-radius:8px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.sltag.terminal{color:var(--warn);border-color:var(--warn)}
+.sltag.picker,.sltag.view,.sltag.window{color:var(--busy)}
+.popup .slbox{width:min(720px,94vw)}
+#slashpane{padding:10px 14px}
+#slashpane h4{margin:12px 0 4px;font-size:13px}
+#slashpane .slpicks{display:flex;flex-direction:column;gap:4px}
+#slashpane .slpick{display:flex;flex-direction:column;align-items:flex-start;text-align:left;padding:6px 10px}
+#slashpane .slpick.on{border-color:var(--busy)}
+#slashpane .slpick small{color:var(--muted);font-weight:400}
+#slashpane .slrow{display:flex;gap:6px;margin-top:10px}
+#slashpane .slrow input{flex:1;min-width:0}
+#slashpane .slbar{height:8px;background:var(--panel);border-radius:4px;overflow:hidden;margin-bottom:8px}
+#slashpane .slbar i{display:block;height:100%;background:var(--ok)}
+#slashpane table.t th{font-weight:400;color:var(--muted);vertical-align:top}
+#slashpane .slcfg th small{display:block;font-size:12px}
+#slashpane .slcfg input:not([type=checkbox]){width:100%;min-width:12em}
+#slashpane .slsaid{font-size:12px;color:var(--muted)}
+#slashpane .slsaid.fail{color:var(--fail)}
+#slashpane .slcmds tr{cursor:pointer}
+#slashpane .slcmds tr:hover td{background:var(--panel)}
+#slashpane #slfilter{width:100%;margin-bottom:6px}
+#slashpane .sllist{margin:2px 0 6px;padding-left:18px;font-size:12.5px}
+#newbox .nbopts #neffort{flex:0 0 auto;width:auto}

@@ -587,6 +587,17 @@ turn as Esc at its terminal does: through the mod (0.3.0 and later) with
 saying what came of it; for a session without one, Esc is pressed in its
 console, never twice within 3 s (Esc Esc there opens the rewind menu).
 
+From 0.4.0 the beat's reply can also carry **ops**:
+- a slash command from the window, run once with `$.command.run`;
+- a read of the session's context breakdown, usage, status, settings or
+  `/config` rows;
+- one `/config` change, through `$.config.set`.
+
+Each answer goes back on the next beat (`results`). Beats also carry the
+session's command list (`commands`) for the prompt box. Only the window
+can ask for a read or a change (`POST /api/session/op`, which needs its
+origin and token).
+
 `claude plugin validate mod/imperatorium` and `claude plugin test
 mod/imperatorium` check and test it. `IMPERATORIUM_MOD_ENDPOINT` and
 `IMPERATORIUM_MOD_TOKEN_FILE` point one session's mod at another dispatcher,
@@ -661,16 +672,48 @@ pending permission prompt, cannot change settings or `CLAUDE.md`, and a slash
 command in its text arrives as inert text. What the token buys is delivery
 *without an approval dialog*, not authority.
 
-**Slash commands are typed, not sent.** Because an inbox message cannot run a
-command, a chat message that starts with `/` (`/compact`, `/clear`,
-`/model opus`, a skill's command) is instead typed at the session's prompt
-through its console, the way `/exit` is typed to close a session. That is
-real terminal input, so it only happens when the session is idle at its
-prompt with no permission decision parked for it - Enter would otherwise
-answer the dialog. A draft at the prompt is cleared first. Commands that open
-a menu in the terminal (`/config`, `/permissions`, `/model` with no
-argument, ...) are refused, since the window cannot drive the menu. Queued, a
-command is typed when the turn ends. Local Windows sessions only for now.
+**Slash commands run in the session, not sent.** Because an inbox message
+cannot run a command, a chat message that starts with `/` (`/compact`,
+`/clear`, `/model opus`, a skill's command) goes another way. With the
+Imperatorium mod 0.4 or later in the session, the mod runs it as if typed
+(`$.command.run`), and its output comes back to the chat. Without the mod,
+it is typed at the session's prompt through its console, the way `/exit`
+is typed to close a session. That is real terminal input, so it only
+happens when the session is idle at its prompt with no permission decision
+parked for it - Enter would otherwise answer the dialog. A draft at the
+prompt is cleared first. Queued, a command runs when the turn ends. Local
+sessions only for now.
+
+Some commands draw a picker or a panel in the terminal, which the window
+cannot drive. The window does those itself (`docs/slash-commands-terminal-gaps.md`):
+
+- **Pickers.** `/model`, `/effort`, `/fast` and `/output-style` with
+  nothing after them open a picker in the window, filled from Claude
+  Code's own lists. Picking sends `/model <value>`.
+- **Views.** `/context`, `/usage` (`/cost`, `/stats`), `/status`,
+  `/version`, `/help`, `/skills`, `/hooks` and `/permissions` open a view
+  in the window. `/config` (`/settings`) opens a form whose rows change as
+  in the menu. `/diff`, `/tasks` and `/workflows` open the Changes and
+  Activity tabs. All of these except `/help`, `/skills` and the tabs read
+  through the mod.
+- **Window features.** Bare `/resume` is History, bare `/export` is Export
+  as Markdown, bare `/branch` is Fork, and `/copy` copies the last reply.
+- **Terminal only.** The rest (`/rewind`, `/plugin`, `/memory`, `/login`,
+  `/theme`, ...) are refused with a **Show Window** button. The refusal
+  says whether the command is account setup or only changes the terminal's
+  look.
+
+Typing `/` in the prompt box lists the session's commands, built-in,
+plugin, skill and MCP alike. Each says what it does from here. Tab
+completes one.
+
+Which commands need a terminal comes partly from Claude Code itself. The
+live dispatcher asks a headless `claude -p` once per Claude Code version
+(one `initialize` request, no API call; cached in
+`claude-catalog.json` in the state folder). That answer lists its models,
+the effort levels each takes, its output styles, and the commands that run
+without a terminal. The New session dialog takes its model and effort
+choices from it too.
 
 **Send As Typed** (the arrow beside Send) does the same for an ordinary
 prompt, so it arrives as you typing at that terminal rather than as a peer -

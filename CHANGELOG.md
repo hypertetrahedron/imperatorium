@@ -56,6 +56,15 @@ The first release of the native build: 0.4.0.
   scripts to one release.
 - The state folder is versioned, so an older binary refuses to read state that a
   newer one wrote instead of misreading it, which is what makes a rollback safe.
+- Slash commands work from the window. Bare `/model`, `/effort`, `/fast` and
+  `/output-style` open pickers fed by Claude Code's own list of models and
+  levels. `/context`, `/usage`, `/status`, `/help`, `/skills`, `/hooks` and
+  `/permissions` open views, and `/config` opens a form. `/resume`, `/export`,
+  `/branch`, `/copy` and `/add-dir` use the window's own features. With mod 0.4.0
+  a command runs inside the session and its output comes back to the chat.
+  Typing `/` in the prompt box lists the session's commands and says which ones
+  start a model turn. Commands only the terminal can do are refused with Show
+  Window and the reason. New session lets you choose the model and effort.
 
 ### Changed
 
