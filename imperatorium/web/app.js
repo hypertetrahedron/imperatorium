@@ -86,12 +86,16 @@ function workParts(w, now, all){
   if (wake > 0) out.push({text: "wakes " + span(wake), cls: "wake",
     title: `it scheduled its own next turn, in ${span(wake)} (${w.wakeups || 1} pending)`});
   const left = w.cache_expires_at ? w.cache_expires_at - now : 0;
-  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "-" + Math.ceil(left / 60), cls: "cache",
+  // `fill`: what is left of the cache's lifetime (work.cache_ttl), drawn as
+  // a bar draining under the minutes (2026-11-21, from the survey).
+  const fill = w.cache_ttl > 0 ? Math.max(0, Math.min(1, left / w.cache_ttl)) : null;
+  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "-" + Math.ceil(left / 60), cls: "cache", fill,
     title: `prompt cache expires in ${Math.ceil(left / 60)} min; a prompt after that re-sends the whole context`});
   return out;
 }
 const workHtml = (w, now, cls, all) => workParts(w, now, all).map(p =>
-  `<span class="${cls} ${p.cls}" title="${esc(p.title)}">${esc(p.text)}</span>`).join("");
+  `<span class="${cls} ${p.cls}${p.fill != null ? " drain" : ""}"${
+    p.fill != null ? ` style="--fill:${Math.round(p.fill * 100)}%"` : ""} title="${esc(p.title)}">${esc(p.text)}</span>`).join("");
 
 // How long a session has been idle: whole minutes and up ("<1m", "4m",
 // "2h 5m"); seconds are more resolution than a wait needs.
@@ -3974,6 +3978,55 @@ async function dismissSession(k){
   drawSessions();
 }
 
+// -- export as Markdown ------------------------------------------------------
+// Pure: a conversation's items as Markdown - each prompt and reply under a
+// heading, tool calls as a list under the reply that made them (a failed
+// one with its error's first line), thinking and successful results left
+// out; Claude Code's own notes in italics. `meta` heads the file.
+function convMarkdown(items, meta){
+  const out = [`# ${meta.name || "Conversation"}`, ""];
+  if (meta.cwd || meta.id) out.push([meta.cwd && "`" + meta.cwd + "`", meta.id && "session `" + meta.id + "`"]
+    .filter(Boolean).join(" · "), "");
+  const failed = new Map();
+  for (const it of items) for (const b of it.blocks || [])
+    if (b.kind === "result" && b.is_error && b.id) failed.set(b.id, String(b.text || "").split("\n")[0].slice(0, 200));
+  let last = "";
+  for (const it of items){
+    const who = it.note ? "note" : it.speaker === "you" ? "You" : SPEAKER[it.speaker] || it.speaker || it.role || "";
+    const texts = [], tools = [];
+    for (const b of it.blocks || []){
+      if (b.kind === "text" && String(b.text || "").trim()) texts.push(String(b.text).trim());
+      else if (b.kind === "tool"){
+        const err = b.id && failed.get(b.id);
+        tools.push("- `" + (b.name || "tool") + "`" + (b.summary ? " " + String(b.summary).replace(/\s+/g, " ").slice(0, 200) : "") +
+          (err ? " - **failed:** " + err : ""));
+      }
+    }
+    if (!texts.length && !tools.length) continue;
+    if (who === "note"){ out.push("_" + texts.join(" ").replace(/\s+/g, " ") + "_", ""); continue; }
+    // A heading when the speaker changes: a reply's steps stay under one.
+    if (who !== last){ out.push(`## ${who}`, ""); last = who; }
+    if (texts.length) out.push(texts.join("\n\n"), "");
+    if (tools.length) out.push(...tools, "");
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+// The file's name: the session's name, made safe for any file system.
+const mdName = s => (nameOf(s).replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "conversation") + ".md";
+async function exportMarkdown(s){
+  let data;
+  try { data = await get("/api/conversation?session=" + encodeURIComponent(key(s))); }
+  catch (e) { say("could not read the conversation", key(s)); return; }
+  if (!data.items || !data.items.length){ say(data.error || "nothing to export", key(s)); return; }
+  const md = convMarkdown(data.items, {name: nameOf(s), cwd: s.cwd, id: key(s)});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([md], {type: "text/markdown;charset=utf-8"}));
+  a.download = mdName(s);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  say("saved " + a.download + " (" + data.items.length + " turns)", key(s));
+}
+
 // -- resume, fork --------------------------------------------------------
 async function act(what){
   const s = current();
@@ -3983,6 +4036,7 @@ async function act(what){
     catch (e) { $("#say").textContent = s.resume_command; }
     return;
   }
+  if (what === "markdown"){ exportMarkdown(s); return; }
   if (what === "show"){
     const r = await post("/api/focus", {session_id: key(s)});
     say(r.ok ? (r.note || "raised its window") : (r.error || "refused"), key(s));

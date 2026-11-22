@@ -512,6 +512,11 @@ impl Shared {
             "cache_expires_at".into(),
             cache.get("expires_at").cloned().unwrap_or(Value::Null),
         );
+        // Its whole lifetime (300 or 3600 s), so the tile can draw what is
+        // left of it as a draining bar.
+        if let Some(ttl) = cache.get("ttl").filter(|t| t.is_number()) {
+            out.insert("cache_ttl".into(), ttl.clone());
+        }
         out.insert(
             "context_tokens".into(),
             stat.get("context_tokens").cloned().unwrap_or(Value::Null),

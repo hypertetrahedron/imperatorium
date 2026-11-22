@@ -733,6 +733,10 @@ select.tiny{background:var(--panel);color:var(--muted);border:1px solid var(--li
 .work.busy{color:var(--busy)}
 #status .hd .work+.work{margin-left:6px}
 .badge.work.cache{border-color:var(--ok)}
+/* The cache countdown drains: a bar along its foot, as long as what is left
+   of the cache's lifetime (--fill, from work.cache_ttl). */
+.work.cache.drain{background-image:linear-gradient(var(--ok),var(--ok));background-repeat:no-repeat;
+  background-position:left bottom;background-size:var(--fill,0%) 2px}
 .badge.work.busy{border-color:var(--busy)}
 
 /* -- main: tabs and panels ------------------------------------------- */
