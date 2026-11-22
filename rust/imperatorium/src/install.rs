@@ -125,10 +125,23 @@ fn is_ours(block: &Value) -> bool {
             if mark.is_some_and(|m| m == MARK || LEGACY_MARKS.contains(&m)) {
                 return true;
             }
-            h.get("args").and_then(Value::as_array).into_iter().flatten().any(|a| {
-                let a = a.as_str().unwrap_or("").to_lowercase();
-                a.ends_with("cc_hook.py") || a.ends_with("cc_permission.py")
-            })
+            let script = |a: &str| {
+                let a = a.to_lowercase();
+                a.contains("cc_hook.py") || a.contains("cc_permission.py")
+            };
+            // In its args, or written into the command line itself.
+            h.get("command").and_then(Value::as_str).is_some_and(script)
+                || h.get("args").and_then(Value::as_array).into_iter().flatten().any(|a| script(a.as_str().unwrap_or("")))
+        })
+}
+
+/// One of ours that still runs a Python hook script (the Python install's).
+fn is_python_era(block: &Value) -> bool {
+    is_ours(block)
+        && block.get("hooks").and_then(Value::as_array).into_iter().flatten().any(|h| {
+            let all = format!("{} {}", h.get("command").map(crate::pyish::py_str).unwrap_or_default(),
+                h.get("args").map(|a| a.to_string()).unwrap_or_default()).to_lowercase();
+            all.contains("cc_hook.py") || all.contains("cc_permission.py")
         })
 }
 
@@ -141,11 +154,12 @@ pub fn apply_hooks(settings: &mut Map<String, Value>, uninstall: bool, tool_hook
     let Some(hooks) = hooks.as_object_mut() else {
         return vec!["SKIP hooks: existing value is not an object".into()];
     };
-    let events: Vec<_> = EVENTS
-        .iter()
-        .chain(if tool_hooks || uninstall { TOOL_EVENTS } else { &[] }.iter())
-        .collect();
-    for (event, matcher, sub, is_async) in events {
+    // The tool events always: without tool hooks, ours there are taken out
+    // and nothing put back. An older install's (the Python one's ran
+    // `python3`/its venv's python) were left firing on every tool call once
+    // the binary was installed without them (2026-11-21).
+    for (event, matcher, sub, is_async) in EVENTS.iter().chain(TOOL_EVENTS.iter()) {
+        let only_clean = !uninstall && !tool_hooks && TOOL_EVENTS.iter().any(|t| t.0 == *event);
         let blocks = hooks.get(*event).cloned().unwrap_or(json!([]));
         let Some(blocks) = blocks.as_array() else {
             changes.push(format!("SKIP {event}: existing value is not a list"));
@@ -153,7 +167,10 @@ pub fn apply_hooks(settings: &mut Map<String, Value>, uninstall: bool, tool_hook
         };
         let mut kept: Vec<Value> = blocks.iter().filter(|b| !is_ours(b)).cloned().collect();
         let removed = blocks.len() - kept.len();
-        if uninstall {
+        if only_clean && removed == 0 {
+            continue;
+        }
+        if uninstall || only_clean {
             if removed > 0 {
                 changes.push(format!("remove {event} ({removed} entry)"));
             }
@@ -1118,8 +1135,11 @@ pub fn check_main(args: &[String], home: Option<&str>) -> i32 {
     let gh = found("gh");
     check_row(gh.is_some(), false, "gh (GitHub CLI)", &gh.unwrap_or_else(|| "optional - PR badges and 'open PR' need it".into()));
     if cfg!(windows) {
-        let wt = found("wt");
-        check_row(wt.is_some(), false, "Windows Terminal (wt)", &wt.unwrap_or_else(|| "optional - Resume and Fork open a tab in it".into()));
+        let wt = crate::launch::find_wt();
+        check_row(wt.is_some(), false, "Windows Terminal (wt)", &wt.unwrap_or_else(|| {
+            "optional - not found (not installed, or its App execution alias is off): \
+             new, resumed and forked sessions open in a plain console window instead".into()
+        }));
     }
     let edge = edge_path();
     check_row(edge.is_some(), false, "Microsoft Edge", &edge.unwrap_or_else(|| "optional - opens the window without browser chrome".into()));
@@ -1150,6 +1170,16 @@ pub fn check_main(args: &[String], home: Option<&str>) -> i32 {
         if events.iter().any(|e| e == "SessionStart") { "ok " } else { "MISSING" },
         if events.is_empty() { "none".to_string() } else { events.join(", ") }
     );
+    // Hooks of the Python install that ran a script, not this binary: they
+    // fail ("python3: command not found") once that Python is gone.
+    let old: Vec<String> = settings
+        .get("hooks")
+        .and_then(Value::as_object)
+        .map(|h| h.iter().filter(|(_, b)| b.as_array().is_some_and(|b| b.iter().any(is_python_era))).map(|(e, _)| e.clone()).collect())
+        .unwrap_or_default();
+    if !old.is_empty() {
+        println!("   {:<8} old Python hooks on {} - run `imperatorium install` to replace them", "OLD", old.join(", "));
+    }
     println!("   {:<8} statusline (usage meter)", mark(is_our_statusline(settings.get("statusLine"))));
     let dirs = settings.get("env").and_then(|e| e.get(PLUGIN_DIRS)).map(crate::pyish::py_str).unwrap_or_default();
     let sep = if cfg!(windows) { ';' } else { ':' };
@@ -1246,6 +1276,27 @@ mod tests {
         let ch = apply_hooks(&mut s, true, false, "", Path::new("C:/h"));
         assert!(ch.iter().any(|c| c == "remove Stop (1 entry)"));
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    /// 2026-11-21 (reports of "python3 command not found"): an older install's
+    /// tool hooks are taken out even when tool hooks are not put back, and a
+    /// stranger's tool hook is left alone.
+    #[test]
+    fn old_tool_hooks_go_even_without_tool_hooks() {
+        let mut s: Map<String, Value> = serde_json::from_value(json!({"hooks": {
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "python3", "args": ["/h/.claude/imperatorium/cc_hook.py"]}]},
+                           {"hooks": [{"type": "command", "command": "lint"}]}],
+            "PostToolUse": [{"hooks": [{"type": "command", "command": "python3 /h/imp/cc_hook.py"}]}],
+            "PostToolUseFailure": [{"hooks": [{"type": "command", "command": "imp", "statusMessage": "ccontrol"}]}]
+        }})).unwrap();
+        let ch = apply_hooks(&mut s, false, false, "C:/bin/imperatorium.exe", Path::new("C:/h"));
+        assert!(ch.contains(&"remove PreToolUse (1 entry)".to_string()), "{ch:?}");
+        assert!(ch.contains(&"remove PostToolUse (1 entry)".to_string()), "{ch:?}");
+        assert_eq!(s["hooks"]["PreToolUse"], json!([{"hooks": [{"type": "command", "command": "lint"}]}]));
+        assert!(s["hooks"].get("PostToolUse").is_none() && s["hooks"].get("PostToolUseFailure").is_none(), "{s:?}");
+        // With none of ours there, nothing is said about them.
+        let ch = apply_hooks(&mut s, false, false, "C:/bin/imperatorium.exe", Path::new("C:/h"));
+        assert!(!ch.iter().any(|c| c.contains("ToolUse")), "{ch:?}");
     }
 
     #[test]

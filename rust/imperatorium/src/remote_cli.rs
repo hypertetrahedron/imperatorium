@@ -543,7 +543,11 @@ pub fn check_rows(facts: &Facts, tunnel: bool) -> Vec<(&'static str, &'static st
         (
             if hooks_ok { "ok " } else { "MISSING" },
             "hooks",
-            if facts.hooks {
+            if facts.hooks && facts.pyhooks {
+                // Both: the old ones fail ("python3: command not found")
+                // where the host has no python3 (2026-11-21 reports).
+                "installed, but the Python hook script is still there too - `remote add` takes it out".to_string()
+            } else if facts.hooks {
                 "installed".to_string()
             } else if facts.pyhooks {
                 "the Python hook script - `remote add` moves them to the binary".to_string()
@@ -723,6 +727,9 @@ mod tests {
         assert_eq!(check_rows(&f, false)[3].2, "not used (no tunnel)");
         f.pyhooks = true;
         assert!(check_rows(&f, true)[3].2.contains("Python hook script"));
+        f.hooks = true;
+        assert!(check_rows(&f, true)[3].2.starts_with("installed, but the Python hook script"), "{:?}", check_rows(&f, true)[3]);
+        f.hooks = false;
         f.version = Some((2, 1, 100));
         assert_eq!(marks(&f, true)[1], "MISSING");
         f.version = None;

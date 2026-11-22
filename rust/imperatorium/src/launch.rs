@@ -77,11 +77,30 @@ pub fn resume_command(session_id: &str, fork: bool) -> Vec<String> {
     cmd
 }
 
+/// Windows Terminal's `wt.exe`: on PATH, else its App Execution Alias in
+/// `%LOCALAPPDATA%\Microsoft\WindowsApps` (a zero-byte stub there). Managed
+/// machines often leave that folder off PATH, which made "wt.exe is not on
+/// PATH" with Windows Terminal installed (corporate reports, 2026-11-21).
+pub fn find_wt() -> Option<String> {
+    which("wt").or_else(|| which("wt.exe")).or_else(|| {
+        if !cfg!(windows) {
+            return None;
+        }
+        let local = std::env::var_os("LOCALAPPDATA")?;
+        let alias = std::path::Path::new(&local).join("Microsoft").join("WindowsApps").join("wt.exe");
+        // The alias is a reparse point: it exists, but it is no plain file.
+        std::fs::symlink_metadata(&alias).ok().map(|_| alias.to_string_lossy().into_owned())
+    })
+}
+
+/// Why a session could not be opened without Windows Terminal, said so the
+/// person can do something about it.
+const NO_WT: &str = "Windows Terminal (wt.exe) was not found - install it, or turn on its alias \
+    (Settings > Apps > Advanced app settings > App execution aliases)";
+
 /// history.terminal_command: a new tab in the most recent window, in `cwd`.
 pub fn terminal_command(cwd: &str, cmd: &[String]) -> Result<Vec<String>, String> {
-    let wt = which("wt")
-        .or_else(|| which("wt.exe"))
-        .ok_or("Windows Terminal (wt.exe) is not on PATH")?;
+    let wt = find_wt().ok_or(NO_WT)?;
     let mut out = vec![
         wt,
         "-w".into(),
@@ -106,6 +125,32 @@ fn popen(cmd: &[String], cwd: &str) -> Result<(), String> {
         .stderr(Stdio::null());
     crate::proc::no_window(&mut c);
     c.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// `cmd` in a console window of its own (Windows' plain console), for a
+/// machine with no Windows Terminal. Started and let go, like a tab.
+fn popen_console(cmd: &[String], cwd: &str) -> Result<(), String> {
+    let mut c = Command::new(&cmd[0]);
+    c.args(&cmd[1..]).current_dir(cwd).env_clear().envs(launch_env());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+    }
+    c.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Opens `cmd` in `cwd` for the person to see: a Windows Terminal tab, else
+/// (Windows only) a console window of its own. Which it was: "tab" or
+/// "console". Neither on this machine: the reason.
+pub fn open_terminal(cwd: &str, cmd: &[String]) -> Result<&'static str, String> {
+    match terminal_command(cwd, cmd) {
+        Ok(tab) => popen(&tab, cwd).map(|_| "tab"),
+        Err(no_wt) if cfg!(windows) => popen_console(cmd, cwd)
+            .map(|_| "console")
+            .map_err(|e| format!("{no_wt}; starting {} in a console window failed too: {e}", cmd[0])),
+        Err(no_wt) => Err(no_wt),
+    }
 }
 
 fn dir_ok(cwd: Option<&str>) -> Result<&str, String> {
@@ -133,8 +178,9 @@ pub fn resume(
     match where_ {
         "window" => {
             let cmd = resume_command(session_id, fork);
-            popen(&terminal_command(cwd, &cmd)?, cwd)?;
-            Ok(json!({"ok": true, "action": action, "where": "window", "command": cmd.join(" ")}))
+            let terminal = open_terminal(cwd, &cmd)?;
+            Ok(json!({"ok": true, "action": action, "where": "window", "terminal": terminal,
+                      "command": cmd.join(" ")}))
         }
         "background" => {
             let mut extra = vec![json!("--resume"), json!(session_id)];
@@ -186,10 +232,10 @@ pub fn new_command(session_id: &str, permission_mode: Option<&str>) -> Result<Ve
 pub fn new_session(cwd: Option<&str>, session_id: &str, permission_mode: Option<&str>) -> Result<Value, String> {
     let cwd = dir_ok(cwd)?;
     let cmd = new_command(session_id, permission_mode)?;
-    popen(&terminal_command(cwd, &cmd)?, cwd)?;
+    let terminal = open_terminal(cwd, &cmd)?;
     Ok(
-        json!({"ok": true, "action": "new", "where": "window", "command": cmd.join(" "),
-              "session_id": session_id}),
+        json!({"ok": true, "action": "new", "where": "window", "terminal": terminal,
+              "command": cmd.join(" "), "session_id": session_id}),
     )
 }
 

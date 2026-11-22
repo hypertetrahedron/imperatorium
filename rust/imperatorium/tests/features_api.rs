@@ -401,6 +401,24 @@ fn features_launching_needs_wt_and_claude_on_the_path() {
     assert!(out["error"].as_str().is_some_and(|e| !e.is_empty()));
 }
 
+/// 2026-11-21 (corporate reports: "wt.exe is not on PATH"): with no Windows
+/// Terminal, a new or resumed session opens in a console window of its own,
+/// in its folder, and the answer says so.
+#[test]
+fn features_without_windows_terminal_a_console_window_opens() {
+    let fx = Fx::start("nowt", vec!["claude.exe"], vec![], &[]);
+    let work = fx.proj_a.to_string_lossy().into_owned();
+    let out = fx.post("/api/new", json!({"cwd": work}));
+    assert_eq!((out["ok"].clone(), out["terminal"].clone()), (json!(true), json!("console")), "{out}");
+    let out = fx.post("/api/resume", json!({"session_id": "sid1", "cwd": work, "where": "window"}));
+    assert_eq!(out["terminal"], "console", "{out}");
+    let runs = fx.launched_n("claude", 2);
+    assert_eq!(runs.len(), 2);
+    assert_eq!(norm_path(runs[0]["cwd"].as_str().unwrap()), norm_path(&work));
+    let args: Vec<&str> = runs[1]["args"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert_eq!(args, ["--resume", "sid1"]);
+}
+
 #[test]
 fn features_resume_of_running_and_dead_sessions_and_new_beside_one() {
     let dead = "dead0000-0000-4000-8000-00000000000d";

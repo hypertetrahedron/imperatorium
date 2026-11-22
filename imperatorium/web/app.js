@@ -2531,27 +2531,68 @@ const HOOK_OTHER = {what: "The hook reported an error", why: "Claude Code record
                     fix: "Run it yourself to see all of its output (below)."};
 const hookKind = text => HOOK_KINDS.find(k => k.re.test(text || "")) || HOOK_OTHER;
 
+// Pure: the program an error says could not be found - bash's "python3:
+// command not found", sh's "python3: not found", cmd's and PowerShell's
+// "'python3' is not recognized", Windows' Store stub "Python was not
+// found" - or null.
+function missingProgram(text){
+  const t = String(text || "");
+  const m = /(?:^|[\s:])([\w.\-\/\\]+): (?:command )?not found/m.exec(t)
+    || /'([^']+)' is not recognized as/.exec(t)
+    || /The term '([^']+)' is not recognized/.exec(t);
+  if (m) return m[1].split(/[\\\/]/).pop();
+  return /Python was not found/i.test(t) ? "python" : null;
+}
+// Pure: which of `hooks` (their commands) the error `text` came from, when
+// it names a program that could not be found and one hook runs it; else
+// null. (2026-11-21: users read a plugin's missing python3 as Imperatorium's
+// error, because the pop-up listed every hook and said one was ours.)
+function failingHook(text, hooks){
+  const prog = missingProgram(text);
+  if (!prog) return null;
+  const runs = c => {
+    const first = String(c).trim().replace(/^"([^"]+)".*$/, "$1").split(/\s+/)[0];
+    const name = first.split(/[\\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
+    const want = prog.toLowerCase().replace(/\.exe$/, "");
+    return name === want || (want === "python" && /^python3?$/.test(name));
+  };
+  return (hooks || []).find(runs) || null;
+}
+
 // Pure: the pop-up's body for the hooks row `h` of session `s`.
 function hookHelpHtml(h, s){
   const errors = (h && h.errors) || [], now = hookErrorsNow(h);
   if (!errors.length) return `<p class=none>No hook errors recorded for this session.</p>`;
   const cwd = (s && s.cwd) || "the session's folder";
   const hooks = [...new Set(errors.flatMap(e => e.hooks || []))];
-  const ours = hooks.some(c => /imperatorium/i.test(c));
+  const isOurs = c => /imperatorium/i.test(c);
+  // The hooks the current errors came from, where the error names them.
+  const culprits = [...new Set(now.map(e => failingHook(e.error, e.hooks || hooks)).filter(Boolean))];
+  // Ours may be to blame: a named culprit is, or an error that names none
+  // came while ours ran.
+  const loose = now.filter(e => !failingHook(e.error, e.hooks || hooks));
+  const ours = culprits.some(isOurs) || (now.length ? loose : errors).some(e => (e.hooks || hooks).some(isOurs));
+  const notOurs = culprits.length > 0 && !ours;
   const kinds = [...new Set(now.map(e => hookKind(e.error)))];
-  const errHtml = e => `<li class="${now.includes(e) ? "" : "old"}"><span class=when>${
-    esc(e.at ? clock(e.at) : "")}</span> <b>${esc(e.event || "Stop")}</b> - ${esc(hookKind(e.error).what)}<pre>${esc(e.error || "")}</pre></li>`;
+  const errHtml = e => {
+    const from = failingHook(e.error, e.hooks || hooks);
+    return `<li class="${now.includes(e) ? "" : "old"}"><span class=when>${
+      esc(e.at ? clock(e.at) : "")}</span> <b>${esc(e.event || "Stop")}</b> - ${esc(hookKind(e.error).what)}${
+      from ? ` - from <code>${esc(from)}</code>${isOurs(from) ? "" : " (not an Imperatorium hook)"}` : ""}<pre>${esc(e.error || "")}</pre></li>`;
+  };
   return [
     now.length
       ? `<p>A hook is a command Claude Code runs at a point in a session - these ran when a turn ended (Stop). One that fails does not stop the session, but whatever it was for (a check, a notification, a log) did not happen.</p>`
       : `<p class=ok>The Stop hooks ran without an error at ${esc(clock(h.ok_at))}: these are earlier ones, kept for reference.</p>`,
     kinds.map(k => `<div class=hkkind><b>${esc(k.what)}.</b> ${esc(k.why)} ${esc(k.fix)}</div>`).join(""),
+    culprits.length ? `<p class=hkfrom>The failing hook: ${culprits.map(c => `<code>${esc(c)}</code>`).join(", ")}${
+      notOurs ? " - not one of Imperatorium's; it comes from your settings or a plugin (run <code>/hooks</code> to see which)." : "."}</p>` : "",
     hooks.length ? `<h4>Stop hooks that ran</h4><ul class=hkcmds>${hooks.map(c => `<li><code>${esc(c)}</code></li>`).join("")}</ul>` : "",
     `<h4>What to do</h4><ol class=hksteps>`,
     `<li>Find the hook: in the session's terminal (View &gt; Show Window) run <code>/hooks</code> - it lists each hook and the settings file it comes from.</li>`,
     `<li>See why it fails: run its command yourself in <code>${esc(cwd)}</code>; or start the session with <code>claude --debug</code>, which logs each hook's full output.</li>`,
     `<li>Fix or remove it where it is set: <code>~/.claude/settings.json</code> (every project), <code>.claude/settings.json</code> or <code>.claude/settings.local.json</code> in the project, or the plugin that adds it (<code>/plugin</code>).</li>`,
-    ours ? `<li>One of them is Imperatorium's own hook. Check the dispatcher answers with <code>imperatorium status</code>; <code>imperatorium install</code> puts its hooks back as they should be.</li>` : "",
+    ours ? `<li>${culprits.some(isOurs) && !loose.length ? "It is" : "One of them is"} Imperatorium's own hook. Check the dispatcher answers with <code>imperatorium status</code>; <code>imperatorium install</code> puts its hooks back as they should be.</li>` : "",
     `<li>The chip goes once a later turn's Stop hooks run without an error.</li></ol>`,
     `<h4>Errors (newest last)</h4><ul class=hkerrs>${errors.map(errHtml).join("")}</ul>`,
   ].join("");
@@ -4075,6 +4116,7 @@ async function act(what){
   const r = await post("/api/resume", {session_id: key(s), where, fork: kind === "fork",
     prompt: $("#prompt").value.trim() || null});
   say(r.ok ? (r.where === "background" ? kind + "ed in the background · " + (r.id || "")
+    : r.terminal === "console" ? "opened a console window (no Windows Terminal found): " + r.command
     : "opened a new tab: " + r.command) : (r.error || "refused"), key(s));
   if (r.ok && where === "background") clearPrompt(key(s));
 }
