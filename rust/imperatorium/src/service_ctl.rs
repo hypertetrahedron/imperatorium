@@ -51,9 +51,16 @@ pub fn windows_control_script(exe: &Path, sub: &str, op: Op, only: Option<&str>)
              foreach ($t in $mine) {{ Enable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName | Out-Null; Start-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName }}\n\
              'ok' }}"
         ),
+        // The processes ended are those running the subcommand itself: the
+        // exe's path, then the subcommand as its first argument. Never the
+        // caller (this script's parent): `imperatorium restart hotkey` has
+        // " hotkey" in its own command line, and ending it ended the restart
+        // before its start, leaving the tasks Disabled (2026-11-21).
         Op::Stop => format!(
             "{find}foreach ($t in $mine) {{ Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName | Out-Null; Stop-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName }}\n\
-             Get-CimInstance Win32_Process -Filter \"Name='{i}'\" | Where-Object {{ $_.CommandLine -and $_.CommandLine.ToLower().Contains($p) -and $_.CommandLine -match (' ' + $sub + '( |$)') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+             $caller = (Get-CimInstance Win32_Process -Filter \"ProcessId=$PID\").ParentProcessId\n\
+             $runs = [regex]::Escape($p) + '\"?\\s+' + [regex]::Escape($sub) + '(\\s|$)'\n\
+             Get-CimInstance Win32_Process -Filter \"Name='{i}'\" | Where-Object {{ $_.ProcessId -ne $caller -and $_.CommandLine -and $_.CommandLine.ToLower() -match $runs }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
             i = lit(image),
         ),
     }
@@ -156,6 +163,39 @@ mod tests {
         let stray = script.find("Get-CimInstance Win32_Process -Filter \"Name='it''s.exe'\"").unwrap();
         assert!(disable < stop && stop < stray);
         assert!(!script.contains("Enable-ScheduledTask"));
+    }
+
+    /// 2026-11-21: `imperatorium restart hotkey` ended itself at its stop
+    /// (its own command line has " hotkey"), so the tasks stayed Disabled.
+    /// The stray match, run by PowerShell itself: the helper, quoted or not,
+    /// is ended; the CLI asking for it, or another subcommand, is not.
+    #[cfg(windows)]
+    #[test]
+    fn stop_ends_the_helper_but_not_the_restart_asking_for_it() {
+        let exe = Path::new(r"C:\Apps\imperatorium.exe");
+        let script = windows_control_script(exe, "hotkey", Op::Stop, None);
+        assert!(script.contains("$_.ProcessId -ne $caller"), "{script}");
+        let keep: Vec<&str> = script.lines().filter(|l| l.starts_with("$p =") || l.starts_with("$sub =") || l.starts_with("$runs =")).collect();
+        assert_eq!(keep.len(), 3, "{script}");
+        let lines = [
+            r#""C:\Apps\imperatorium.exe" hotkey --home C:\h"#,
+            r"C:\Apps\imperatorium.exe hotkey",
+            r"C:\Apps\imperatorium.exe restart hotkey",
+            r"C:\Apps\imperatorium.exe stop hotkey",
+            r"C:\Apps\imperatorium.exe hotkeys",
+            r"C:\Apps\imperatorium.exe serve --live",
+        ];
+        let probe = format!(
+            "{}\n{}",
+            keep.join("\n"),
+            lines.iter().map(|l| format!("[int]('{}'.ToLower() -match $runs)", l.replace('\'', "''"))).collect::<Vec<_>>().join("\n")
+        );
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &probe])
+            .output()
+            .expect("powershell");
+        let got: Vec<String> = String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect();
+        assert_eq!(got, ["1", "1", "0", "0", "0", "0"], "{}", String::from_utf8_lossy(&out.stderr));
     }
 
     #[test]

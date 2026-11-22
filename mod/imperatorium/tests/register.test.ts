@@ -8,7 +8,7 @@ type Sent = { path: string; body: Record<string, unknown>; headers: Record<strin
 // The world beneath the mod: a session, a token on disk, and a dispatcher
 // whose answers each test chooses. Returns what the mod sent and submitted.
 function world(on: On, reply: (path: string, body: Record<string, unknown>) => unknown,
-               opts: { token?: boolean } = {}) {
+               opts: { token?: boolean; id?: () => string } = {}) {
   const sent: Sent[] = []
   const submitted: { text: string; asUser?: true }[] = []
   const status: (string | undefined)[] = []
@@ -20,7 +20,7 @@ function world(on: On, reply: (path: string, body: Record<string, unknown>) => u
     }
     throw new Error('no such file')
   })
-  on('session.id', () => ({ value: 'sess-1' }))
+  on('session.id', () => ({ value: opts.id ? opts.id() : 'sess-1' }))
   on('session.cwd', () => ({ value: 'C:/proj' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.version', () => ({ value: { version: '2.1.317' } }))
@@ -88,6 +88,22 @@ test('a prompt from the window goes in as the person; others go in framed', asyn
   expect(acks).toContainEqual({ id: 'p1', outcome: 'accepted' })
   expect(acks).toContainEqual({ id: 'p2', outcome: 'accepted' })
   expect(acks).toContainEqual({ id: 'p1', outcome: 'submitted' })
+})
+
+test('after a /clear the beats carry the new session id', async ($, on) => {
+  // A /clear goes on under a new id and fires no session.start.
+  const clock = mock.clock(on)
+  let id = 'sess-1'
+  const w = world(on, () => ({ ok: true }), { id: () => id })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  id = 'sess-2'
+  await clock.advance(2000)
+
+  const ids = w.sent.filter(s => s.path === '/api/mod/beat').map(s => s.body.session_id)
+  expect(ids[0]).toBe('sess-1')
+  expect(ids[ids.length - 1]).toBe('sess-2')
 })
 
 test('the same prompt offered twice is submitted once', async ($, on) => {
