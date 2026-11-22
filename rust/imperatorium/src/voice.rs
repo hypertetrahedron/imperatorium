@@ -387,9 +387,13 @@ fn exe_of_command(command: &str) -> Option<String> {
 }
 
 /// A Chromium browser, which takes `--app=` for a window without tabs.
+/// The name is the text after the last `\` or `/`: a Windows path read off
+/// the registry, whatever platform the test runs on (`Path` off Windows
+/// splits on `/` only).
 fn is_chromium(exe: &Path) -> bool {
-    let name = exe.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-    ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "chromium.exe"].contains(&name.as_str())
+    let full = exe.to_string_lossy().to_lowercase();
+    let name = full.rsplit(['\\', '/']).next().unwrap_or("");
+    ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "chromium.exe"].contains(&name)
 }
 
 #[cfg(test)]

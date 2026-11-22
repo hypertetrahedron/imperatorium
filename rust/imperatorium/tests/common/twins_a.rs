@@ -13,6 +13,7 @@ use std::time::Duration;
 const CLOCKS: &[&str] = &[
     "seen_at",
     "last_event_at",
+    "last_stop_at",
     "attention_since",
     "at",
     "start",
