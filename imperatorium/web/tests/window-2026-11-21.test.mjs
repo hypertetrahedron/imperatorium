@@ -87,3 +87,14 @@ describe("ExportMarkdown", () => {
     assert.deepEqual(names, ["a-b-c.md", "conversation.md"]);
   });
 });
+// A prompt the session's mod takes is not said to be in its inbox.
+describe("SentVia", () => {
+  it("says the mod took it, else the inbox", () => {
+    const fn = between(SCRIPT, "function outcome(r){", "\n}\n") + "\n}\n";
+    const got = evalJson(cat(fn, "process.stdout.write(JSON.stringify([",
+      "outcome({action: 'inject', via: 'mod', session_name: 'die-reader-0d'}),",
+      "outcome({action: 'inject', via: 'inbox', session_name: 'die-reader-0d'})]));"));
+    assert.equal(got[0], "handed to die-reader-0d's mod - it goes in as your own words once the session is idle");
+    assert.equal(got[1], "delivered to the inbox of die-reader-0d - it runs once the session accepts it");
+  });
+});

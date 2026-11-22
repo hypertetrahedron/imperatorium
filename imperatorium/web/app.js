@@ -4202,6 +4202,9 @@ async function loadInsights(){
 function outcome(r){
   const where = r.host ? " on " + r.host : "";
   const id = r.bg_id ? " · " + r.bg_id : "";
+  if (r.action === "inject" && r.via === "mod")
+    return "handed to " + (r.session_name || "the session") + "'s mod" + where +
+           " - it goes in as your own words once the session is idle";
   if (r.action === "inject")
     return "delivered to the inbox of " + (r.session_name || "the session") +
            where + " - it runs once the session accepts it";
