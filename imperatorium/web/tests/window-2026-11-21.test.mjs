@@ -107,4 +107,14 @@ describe("SentVia", () => {
     assert.equal(got[0], "handed to die-reader-0d's mod - it goes in as your own words once the session is idle");
     assert.equal(got[1], "delivered to the inbox of die-reader-0d - it runs once the session accepts it");
   });
+
+  it("says a slash command ran through the mod, not typed (2026-11-22)", () => {
+    const fn = between(SCRIPT, "function outcome(r){", "\n}\n") + "\n}\n";
+    const got = evalJson(cat(fn, "process.stdout.write(JSON.stringify([",
+      "outcome({action: 'command', via: 'mod', command: '/effort high', session_name: 'tapes-88'}),",
+      "outcome({action: 'command', via: 'mod', turn: true, command: '/simplify', session_name: 'tapes-88'}),",
+      "outcome({action: 'command', command: '/effort high', session_name: 'tapes-88'})]));"));
+    assert.deepEqual(got, ["ran /effort high in tapes-88", "started a turn with /simplify in tapes-88",
+      "typed /effort high into tapes-88's terminal"]);
+  });
 });

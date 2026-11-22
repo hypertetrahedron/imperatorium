@@ -117,7 +117,7 @@ describe("SidebarMenu", () => {
     assertIn("<div id=newbox hidden>", page);
     for (const m of ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"])
       assertIn(`<option value=${m}>`, page);
-    assertIn('post("/api/new", {cwd: p.path, permission_mode: mode})', SCRIPT);
+    assertIn('post("/api/new", {cwd: p.path, permission_mode: mode, model, effort})', SCRIPT);
   });
 
   it("projects are found by name or folder", () => {
@@ -173,7 +173,7 @@ describe("HistoryInsightsPopups", () => {
 
   /** openPopup against stub boxes: which are shown after `calls`. */
   const shown = (calls) => evalJson(cat(
-    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hookbox': {hidden: true}, '#hq': {focus() {}}};\n",
+    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hookbox': {hidden: true}, '#slashbox': {hidden: true}, '#hq': {focus() {}}};\n",
     "let projFor = null; const openFleetView = () => {}, leaveFleet = () => {};\n",
     "const $ = s => els[s]; const document = {querySelectorAll: () => []};\n",
     "let searched = 0, loaded = 0; const search = () => searched++, loadInsights = () => loaded++, closeMenus = () => {};\n",

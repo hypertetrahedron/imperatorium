@@ -81,18 +81,23 @@ fn drain<R: Read + Send + 'static>(r: Option<R>) -> std::thread::JoinHandle<Vec<
 /// stays suspended forever, one set per poll. [`run_timeout_keep`] is for a
 /// command whose point is to leave something running.
 pub fn run_timeout(cmd: &mut Command, limit: Duration) -> io::Result<Output> {
-    run_bounded(cmd, limit, false)
+    run_bounded(cmd, limit, false, Stdio::null())
+}
+
+/// [`run_timeout`] reading `stdin` in place of the null device.
+pub fn run_timeout_stdin(cmd: &mut Command, limit: Duration, stdin: Stdio) -> io::Result<Output> {
+    run_bounded(cmd, limit, false, stdin)
 }
 
 /// [`run_timeout`], except that a clean exit leaves what the command started
 /// running (a timeout still kills the whole tree).
 #[allow(dead_code)] // nothing run through here starts anything to keep yet
 pub fn run_timeout_keep(cmd: &mut Command, limit: Duration) -> io::Result<Output> {
-    run_bounded(cmd, limit, true)
+    run_bounded(cmd, limit, true, Stdio::null())
 }
 
-fn run_bounded(cmd: &mut Command, limit: Duration, keep: bool) -> io::Result<Output> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+fn run_bounded(cmd: &mut Command, limit: Duration, keep: bool, stdin: Stdio) -> io::Result<Output> {
+    cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped());
     let (mut child, job) = Job::spawn(cmd)?;
     let out = drain(child.stdout.take());
     let err = drain(child.stderr.take());

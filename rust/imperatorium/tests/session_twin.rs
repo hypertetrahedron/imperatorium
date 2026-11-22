@@ -273,7 +273,7 @@ fn session_twin_answers_as_python_did() {
                     "typed" => typed("hello\nworld  !"),
                     "typed, a command" => typed("/model opus"),
                     "typed, /exit" => typed("/exit"),
-                    "typed, a menu" => typed("/help"),
+                    "typed, a menu" => typed("/plugin"),
                     "typed, shell mode" => typed("!rm -rf build"),
                     "typed, blank" => typed(" \n "),
                     "typed, busy" => d.post_window(

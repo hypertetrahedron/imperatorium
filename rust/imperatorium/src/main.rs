@@ -28,6 +28,7 @@ mod account_spend;
 mod activity;
 mod background;
 mod changes;
+mod claude_catalog;
 mod cli;
 mod closing;
 mod conversation;

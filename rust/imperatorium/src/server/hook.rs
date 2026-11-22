@@ -361,6 +361,12 @@ impl Shared {
         if let Some(stop) = link.take_stop(&sid, now) {
             reply["stop"] = json!(stop);
         }
+        let ops = link.take_ops(&sid, now);
+        if !ops.is_empty() {
+            reply["ops"] = json!(ops);
+        }
+        // A newer Claude Code than the catalog's: ask it again.
+        self.catalog.ensure(beat.get("version").and_then(Value::as_str), now);
         reply
     }
 

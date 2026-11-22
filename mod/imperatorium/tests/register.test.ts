@@ -8,7 +8,7 @@ type Sent = { path: string; body: Record<string, unknown>; headers: Record<strin
 // The world beneath the mod: a session, a token on disk, and a dispatcher
 // whose answers each test chooses. Returns what the mod sent and submitted.
 function world(on: On, reply: (path: string, body: Record<string, unknown>) => unknown,
-               opts: { token?: boolean; id?: () => string } = {}) {
+               opts: { token?: boolean; id?: () => string; usage?: (e: { breakdown?: string }) => unknown } = {}) {
   const sent: Sent[] = []
   const submitted: { text: string; asUser?: true }[] = []
   const status: (string | undefined)[] = []
@@ -25,7 +25,7 @@ function world(on: On, reply: (path: string, body: Record<string, unknown>) => u
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.version', () => ({ value: { version: '2.1.317' } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.usage', () => ({
+  on('session.usage', (_, e) => opts.usage ? { value: opts.usage(e) as never } : ({
     value: { startedAt: 0, context: { tokens: 1000, window: 200000, percent: 0.5 },
              rateLimits: [{ kind: 'five_hour', percentUsed: 12 }], cost: { usd: 0.25 } },
   }))
@@ -229,4 +229,83 @@ test('a stop with nothing running is said to be idle', async ($, on) => {
   const said = w.sent.filter(s => s.path === '/api/mod/beat')
     .flatMap(s => (s.body.stopped as { id: string; outcome: string }[] | undefined) ?? [])
   expect(said).toEqual([{ id: 'st2', outcome: 'idle' }])
+})
+
+type Result = { id: string; ok: boolean; data?: Record<string, unknown>; error?: string }
+const resultsOf = (sent: Sent[]) => sent.filter(s => s.path === '/api/mod/beat')
+  .flatMap(s => (s.body.results as Result[] | undefined) ?? [])
+
+test('a command from the window runs as typed, once, and its output goes back', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = world(on, path => (path === '/api/mod/beat'
+    ? { ok: true, ops: [{ id: 'o1', op: 'command', args: { command: 'model', args: 'sonnet' } }] }
+    : {}))
+  const ran: string[] = []
+  on('command.run', (_, e) => {
+    ran.push(e.command + ' ' + e.args)
+    return { text: 'Set model to Sonnet 5.5' }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  await clock.advance(2000)
+  await clock.advance(2000)
+
+  // Offered on every beat here, it still ran only once.
+  expect(ran).toEqual(['model sonnet'])
+  expect(resultsOf(w.sent)).toEqual([{ id: 'o1', ok: true, data: { text: 'Set model to Sonnet 5.5' } }])
+})
+
+test('the session\'s slash commands go with its first beat', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = world(on, () => ({ ok: true }))
+  on('command.list', () => ({ value: [
+    { name: 'compact', description: 'Free up context', source: 'builtin' },
+    { name: 'deploy', description: 'Ship it', source: 'plugin', plugin: 'ops' },
+  ] }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  await clock.advance(2000)
+
+  const beats = w.sent.filter(s => s.path === '/api/mod/beat')
+  expect(beats[0].body.commands).toEqual([
+    { name: 'compact', description: 'Free up context', source: 'builtin' },
+    { name: 'deploy', description: 'Ship it', source: 'plugin' },
+  ])
+  // Unchanged within the minute: not sent again.
+  expect(beats[beats.length - 1].body.commands).toBe(undefined)
+})
+
+test('a /config change the session refuses comes back as an error', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = world(on, path => (path === '/api/mod/beat'
+    ? { ok: true, ops: [{ id: 'c1', op: 'config_set', args: { key: 'theme', value: 'dark' } }] }
+    : {}))
+  on('config.set', () => ({ deny: 'a trusted source owns this row' }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  await clock.advance(2000)
+  await clock.advance(2000)
+
+  expect(resultsOf(w.sent)).toEqual([{ id: 'c1', ok: false, error: 'a trusted source owns this row' }])
+})
+
+test('the context is read as /context breaks it down', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = world(on, path => (path === '/api/mod/beat' ? { ok: true, ops: [{ id: 'x1', op: 'context' }] } : {}), {
+    usage: e => ({ startedAt: 0, rateLimits: [],
+             context: { tokens: 5000, window: 200000, percent: 2.5,
+                        ...(e.breakdown ? { breakdown: { categories: [{ name: 'Messages', tokens: 4000 }],
+                                                          totalTokens: 5000, maxTokens: 200000, percentage: 2.5,
+                                                          gridRows: [[]], model: 'opus', memoryFiles: [], mcpTools: [] } } : {}) } }),
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  await clock.advance(2000)
+  await clock.advance(2000)
+
+  const got = resultsOf(w.sent).find(r => r.id === 'x1')
+  expect(got?.ok).toBe(true)
+  const b = (got?.data as { breakdown: Record<string, unknown> }).breakdown
+  expect(b.categories).toEqual([{ name: 'Messages', tokens: 4000 }])
+  expect(b.gridRows).toBe(undefined)
 })

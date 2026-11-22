@@ -339,6 +339,17 @@ impl Shared {
                 };
                 (200, Body::Json(self.focus(store, p.get("project"), p.get("session_id"))))
             }
+            "/api/session/op" => {
+                if object.is_none() {
+                    return (400, Body::Json(json!({"error": "expected an object"})));
+                }
+                // A /config change has the authority of the person at the
+                // menu: only the window, never a script or another session.
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window"})));
+                }
+                (200, Body::Json(self.session_op(p)))
+            }
             "/api/typed" => {
                 if object.is_none() {
                     return (400, Body::Json(json!({"error": "expected an object"})));
@@ -389,7 +400,11 @@ impl Shared {
                     ),
                     "/api/new" => {
                         self.new_session(store, sid.as_deref(), text("cwd"), truthy(p.get("close")),
-                                         text("permission_mode").as_deref())
+                                         crate::launch::Start {
+                                             permission_mode: text("permission_mode").as_deref(),
+                                             model: text("model").as_deref(),
+                                             effort: text("effort").as_deref(),
+                                         })
                     }
                     _ => self.close_session(store, sid.as_deref()),
                 };
@@ -525,6 +540,12 @@ impl Shared {
             ("GET", "/matrix") => (200, self.page(&ui::MATRIX, "", true)),
             ("GET", "/settings") => (200, self.page(&ui::SETTINGS, &self.window_token, false)),
             ("GET", "/api/history") => (200, Body::Json(self.api_history(&q))),
+            ("GET", "/api/claude/catalog") => (200, Body::Json(self.api_catalog())),
+            ("GET", "/api/session/op") => {
+                let got = self.modlink.as_ref().and_then(|l| l.result(&arg("id")));
+                (200, Body::Json(json!({"ok": true, "done": got.is_some(), "result": got})))
+            }
+            ("GET", "/api/slash/commands") => (200, Body::Json(self.api_slash_commands(&arg("session")))),
             // Remote hosts are phase 4: until then this dispatcher polls none.
             ("GET", "/api/hosts") => (200, Body::Json(self.hosts_status())),
             ("GET", "/api/update") => (200, Body::Json(self.updates.status(&self.config()))),

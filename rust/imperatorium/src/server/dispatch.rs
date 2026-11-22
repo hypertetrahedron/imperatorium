@@ -111,7 +111,7 @@ impl Shared {
         session_id: Option<&str>,
         cwd: Option<String>,
         close: bool,
-        permission_mode: Option<&str>,
+        start: crate::launch::Start,
     ) -> Value {
         let row = session_id.and_then(|s| self.row(s));
         if let Some(r) = row.as_ref().filter(|r| truthy(r.get("remote"))) {
@@ -132,7 +132,7 @@ impl Shared {
             return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
         }
         let sid = uuid4();
-        let mut got = match crate::launch::new_session(cwd.as_deref(), &sid, permission_mode) {
+        let mut got = match crate::launch::new_session(cwd.as_deref(), &sid, start.permission_mode, start.model, start.effort) {
             Ok(g) => g,
             Err(e) => return json!({"ok": false, "error": e}),
         };
@@ -281,7 +281,7 @@ impl Shared {
             // Refuse now what could never be typed, rather than leave it at
             // the head of the queue failing on every sweep.
             if let Some(why) =
-                crate::slash::refusal(prompt).or_else(|| crate::slash::unreachable(&row))
+                crate::slash::refusal_in(prompt, Some(&self.known_for(session_id))).or_else(|| crate::slash::unreachable(&row))
             {
                 return json!({"ok": false, "error": why});
             }
@@ -321,7 +321,7 @@ impl Shared {
         let item = store.take_queued(key)?;
         let prompt = item.get("prompt").and_then(Value::as_str).unwrap_or("");
         let error = if crate::slash::is_command(prompt) {
-            let got = self.run_command(store, &row, prompt);
+            let got = self.run_command(store, &row, prompt, false);
             if got["ok"] == json!(true) {
                 None
             } else {
@@ -466,7 +466,7 @@ impl Shared {
                     return json!({"ok": false, "error": "no such session"});
                 };
                 if crate::slash::is_command(pr) {
-                    return self.run_command(store, &row, pr);
+                    return self.run_command(store, &row, pr, true);
                 }
                 if !truthy(row.get("dispatchable")) {
                     // Claude Code relaunching a session (its daemon does, on an
@@ -562,7 +562,7 @@ impl Shared {
                 );
                 return out;
             };
-            let got = self.run_command(store, &target, &prompt);
+            let got = self.run_command(store, &target, &prompt, true);
             set(&mut out, got);
             return out;
         }
@@ -959,10 +959,91 @@ impl Shared {
         }
     }
 
-    /// Control.run_command: type slash command `text` at the row's prompt.
-    fn run_command(&self, store: &crate::store::Store, row: &Row, text: &str) -> Value {
-        if let Some(why) = crate::slash::refusal(text) {
-            return json!({"ok": false, "error": why});
+    /// What Claude Code says of its commands for session `sid`: the
+    /// catalog's terminal-free ones, and the built-ins its mod listed.
+    pub(super) fn known_for(&self, sid: &str) -> crate::slash::Known {
+        let text = self
+            .catalog
+            .get()
+            .map(|c| crate::claude_catalog::text_commands(&c))
+            .unwrap_or_default();
+        let builtin = self
+            .modlink
+            .as_ref()
+            .and_then(|l| l.commands(sid))
+            .and_then(|c| c.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter(|c| c["source"] == "builtin")
+            .filter_map(|c| c["name"].as_str().map(str::to_string))
+            .collect();
+        crate::slash::Known { text, builtin }
+    }
+
+    /// The live mod of a local session, when it runs ops.
+    fn ops_mod(&self, row: &Row) -> Option<&crate::modlink::ModLink> {
+        if truthy(row.get("remote")) {
+            return None;
+        }
+        let sid = row.get("sessionId").and_then(Value::as_str)?;
+        let link = self.modlink.as_ref()?;
+        let st = link.state(sid, Self::now())?;
+        crate::modlink::can_ops(st.get("mod_version")).then_some(link)
+    }
+
+    /// Control.run_command: slash command `text` in the row's session -
+    /// through its mod where it has one that can (the output comes back;
+    /// with `wait`, a few seconds are given for it), else typed at its
+    /// prompt. A command the window does itself, or one only the terminal
+    /// can, is refused with what it is (`how`, `what`) so the window can.
+    fn run_command(&self, store: &crate::store::Store, row: &Row, text: &str, wait: bool) -> Value {
+        let sid_s = row.get("sessionId").and_then(Value::as_str).unwrap_or("").to_string();
+        let known = self.known_for(&sid_s);
+        if let Some(why) = crate::slash::refusal_in(text, Some(&known)) {
+            let mut out = json!({"ok": false, "error": why});
+            if let Some((name, how)) = crate::slash::how_of(text, Some(&known)) {
+                if how != crate::slash::How::Run && !text.contains(['\n', '\r']) {
+                    out["how"] = json!(how.kind());
+                    out["what"] = json!(how.what());
+                    out["name"] = json!(name);
+                    out["show_window"] = json!(matches!(how, crate::slash::How::Terminal(..)));
+                }
+            }
+            return out;
+        }
+        if let Some(link) = self.ops_mod(row) {
+            let (name, rest) = crate::slash::parse(text).unwrap_or_default();
+            let t = crate::pyish::strip(text);
+            let id = link.request_op(&sid_s, "command", json!({"command": name, "args": rest}), Self::now());
+            store.add_event_json(json!({"kind": "command", "session_id": sid_s,
+                "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
+                "summary": crate::pyish::take(t, 280)}));
+            self.invalidate();
+            let mut out = json!({"ok": true, "action": "command", "via": "mod", "command": t,
+                                 "session": sid_s, "op": id,
+                                 "session_name": row.get("name").cloned().unwrap_or(Value::Null)});
+            // A prompt-type command answers with a turn, not text: say so
+            // rather than leave the window waiting for output.
+            let turn = crate::slash::starts_turn(&name);
+            if turn {
+                out["turn"] = json!(true);
+            }
+            if wait {
+                match link.wait_result(&id, std::time::Duration::from_secs(4)) {
+                    Some(r) if r["ok"] == json!(false) => {
+                        return json!({"ok": false, "error": format!("{t}: {}",
+                            crate::pyish::py_str(r.get("error").unwrap_or(&json!("it failed"))))});
+                    }
+                    Some(r) => {
+                        if let Some(o) = r["data"]["text"].as_str().filter(|o| !o.is_empty()) {
+                            out["output"] = json!(crate::pyish::take(o, 20_000));
+                        }
+                    }
+                    None if !turn => out["pending"] = json!(true),
+                    None => {}
+                }
+            }
+            return out;
         }
         // Status moves under us: decide on a fresh look.
         self.invalidate();
@@ -1034,7 +1115,7 @@ impl Shared {
             return json!({"ok": false, "error": why});
         }
         if crate::slash::is_command(&clean) {
-            let mut got = self.run_command(store, &row, &clean);
+            let mut got = self.run_command(store, &row, &clean, true);
             got["cleaned"] = json!(changed);
             return got;
         }
@@ -1159,6 +1240,109 @@ impl Shared {
         store.add_event_json(e);
         self.invalidate();
         json!({"ok": true, "how": "dismissed"})
+    }
+
+    /// GET /api/claude/catalog: Claude Code's models, effort levels, output
+    /// styles, agents and terminal-free commands (claude_catalog).
+    pub(super) fn api_catalog(&self) -> Value {
+        self.catalog.ensure(None, Self::now());
+        json!({"ok": true, "catalog": self.catalog.get(), "probing": self.catalog.probing()})
+    }
+
+    /// GET /api/slash/commands?session=: every slash command the window
+    /// knows of for the session, each with what becomes of it typed bare
+    /// (slash::classify) - for the prompt box's list.
+    pub(super) fn api_slash_commands(&self, session: &str) -> Value {
+        let row = (!session.is_empty()).then(|| self.row(session)).flatten();
+        let sid = row
+            .as_ref()
+            .and_then(|r| r.get("sessionId").and_then(Value::as_str))
+            .unwrap_or(session)
+            .to_string();
+        let known = self.known_for(&sid);
+        let mut seen: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
+        let mut add = |name: &str, description: &Value, hint: &Value, source: &str| {
+            let e = seen.entry(name.to_string()).or_insert_with(|| {
+                json!({"name": name, "description": "", "argumentHint": "", "source": source})
+            });
+            if e["description"] == "" && description.is_string() {
+                e["description"] = description.clone();
+            }
+            if e["argumentHint"] == "" && hint.is_string() {
+                e["argumentHint"] = hint.clone();
+            }
+        };
+        let from_mod = self
+            .modlink
+            .as_ref()
+            .and_then(|l| l.commands(&sid))
+            .and_then(|c| c.as_array().cloned())
+            .unwrap_or_default();
+        for c in &from_mod {
+            if let Some(n) = c["name"].as_str() {
+                add(n, &c["description"], &c["argumentHint"], c["source"].as_str().unwrap_or("builtin"));
+            }
+        }
+        if let Some(cat) = self.catalog.get() {
+            for c in cat["commands"].as_array().into_iter().flatten() {
+                if let Some(n) = c["name"].as_str() {
+                    add(n, &c["description"], &c["argumentHint"], "builtin");
+                }
+            }
+        }
+        for n in crate::slash::ruled() {
+            add(n, &Value::Null, &Value::Null, "builtin");
+        }
+        let commands: Vec<Value> = seen
+            .into_values()
+            .map(|mut e| {
+                let name = e["name"].as_str().unwrap_or("").to_string();
+                let how = crate::slash::classify(&name, "", Some(&known));
+                e["how"] = json!(how.kind());
+                e["what"] = json!(how.what());
+                e["aliases"] = json!(crate::slash::aliases_of(&name));
+                e["turn"] = json!(how == crate::slash::How::Run && crate::slash::starts_turn(&name));
+                e
+            })
+            .collect();
+        json!({"ok": true, "commands": commands, "from_mod": !from_mod.is_empty(),
+               "catalog": self.catalog.get().is_some()})
+    }
+
+    /// POST /api/session/op (the window only): read the session's context,
+    /// status, usage, settings or /config rows through its mod, or change
+    /// one /config row; waits a few seconds for the answer.
+    pub(super) fn session_op(&self, p: &Map<String, Value>) -> Value {
+        const OPS: &[&str] = &["context", "status", "usage", "config", "config_set", "settings"];
+        let op = p.get("op").and_then(Value::as_str).unwrap_or("");
+        if !OPS.contains(&op) {
+            return json!({"ok": false, "error": format!("unknown op: {op}")});
+        }
+        let id = p.get("session_id").filter(|v| truthy(Some(v))).map(crate::pyish::py_str);
+        let Some(row) = id.and_then(|i| self.row(&i)) else {
+            return json!({"ok": false, "error": "no such session"});
+        };
+        let Some(link) = self.ops_mod(&row) else {
+            return json!({"ok": false, "no_mod": true, "error":
+                "this needs the Imperatorium mod 0.4 or later in the session (a local one) - use Show Window and run it there"});
+        };
+        let args = p.get("args").filter(|a| a.is_object()).cloned().unwrap_or(json!({}));
+        if op == "config_set" && !args["key"].is_string() {
+            return json!({"ok": false, "error": "config_set needs a key"});
+        }
+        let sid = row.get("sessionId").and_then(Value::as_str).unwrap_or("").to_string();
+        let opid = link.request_op(&sid, op, args.clone(), Self::now());
+        if op == "config_set" {
+            if let Some(store) = &self.store {
+                store.add_event_json(json!({"kind": "config", "session_id": sid,
+                    "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
+                    "summary": crate::pyish::take(&format!("{} = {}", crate::pyish::py_str(&args["key"]), args["value"]), 280)}));
+            }
+        }
+        match link.wait_result(&opid, std::time::Duration::from_secs(8)) {
+            Some(r) => r,
+            None => json!({"ok": false, "error": "the session's mod did not answer in time - is the session busy starting up?"}),
+        }
     }
 }
 
