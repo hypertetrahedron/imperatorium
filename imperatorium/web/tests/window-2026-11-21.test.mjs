@@ -86,6 +86,16 @@ describe("ExportMarkdown", () => {
     const names = mdRun("[mdName({name: 'a/b: c'}), mdName({name: '***'})]");
     assert.deepEqual(names, ["a-b-c.md", "conversation.md"]);
   });
+
+  it("keeps a reply's order and reads a slash command as one", () => {
+    const md = mdRun(`convMarkdown([
+      {speaker: 'you', blocks: [{kind: 'text', text: '<command-name>/clear</command-name>\\n <command-message>clear</command-message>\\n <command-args></command-args>'}]},
+      {speaker: 'you', blocks: [{kind: 'text', text: 'run it'}]},
+      {speaker: 'claude', blocks: [{kind: 'tool', name: 'Bash', summary: 'git log'}, {kind: 'tool', name: 'Read', summary: 'a.txt'},
+        {kind: 'text', text: 'It printed one line.'}]}], {name: 'x'})`);
+    assert.equal(md, ["# x", "", "## You", "", "`/clear`", "", "run it", "",
+      "## Claude", "", "- `Bash` git log", "- `Read` a.txt", "", "It printed one line.", ""].join("\n"));
+  });
 });
 // A prompt the session's mod takes is not said to be in its inbox.
 describe("SentVia", () => {

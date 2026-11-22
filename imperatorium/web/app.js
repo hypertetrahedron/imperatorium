@@ -3990,24 +3990,38 @@ function convMarkdown(items, meta){
   const failed = new Map();
   for (const it of items) for (const b of it.blocks || [])
     if (b.kind === "result" && b.is_error && b.id) failed.set(b.id, String(b.text || "").split("\n")[0].slice(0, 200));
+  // A slash command as Claude Code records it (<command-name>/clear</...>
+  // <command-args>x</...>) reads as `/clear x`; its other tags go.
+  const plain = t => {
+    const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(t);
+    if (name){
+      const args = (/<command-args>([\s\S]*?)<\/command-args>/.exec(t) || [])[1] || "";
+      return "`" + (name[1].trim() + " " + args.trim()).trim() + "`";
+    }
+    return t.replace(/<\/?(command-[a-z]+|local-command-[a-z]+)>/g, "").trim();
+  };
   let last = "";
   for (const it of items){
     const who = it.note ? "note" : it.speaker === "you" ? "You" : SPEAKER[it.speaker] || it.speaker || it.role || "";
-    const texts = [], tools = [];
+    // In the order they came: a reply's text and its tool calls interleave.
+    const parts = [];
     for (const b of it.blocks || []){
-      if (b.kind === "text" && String(b.text || "").trim()) texts.push(String(b.text).trim());
+      if (b.kind === "text" && plain(String(b.text || ""))) parts.push({text: plain(String(b.text))});
       else if (b.kind === "tool"){
         const err = b.id && failed.get(b.id);
-        tools.push("- `" + (b.name || "tool") + "`" + (b.summary ? " " + String(b.summary).replace(/\s+/g, " ").slice(0, 200) : "") +
-          (err ? " - **failed:** " + err : ""));
+        parts.push({tool: "- `" + (b.name || "tool") + "`" + (b.summary ? " " + String(b.summary).replace(/\s+/g, " ").slice(0, 200) : "") +
+          (err ? " - **failed:** " + err : "")});
       }
     }
-    if (!texts.length && !tools.length) continue;
-    if (who === "note"){ out.push("_" + texts.join(" ").replace(/\s+/g, " ") + "_", ""); continue; }
+    if (!parts.length) continue;
+    if (who === "note"){ out.push("_" + parts.map(p => p.text || "").join(" ").replace(/\s+/g, " ").trim() + "_", ""); continue; }
     // A heading when the speaker changes: a reply's steps stay under one.
     if (who !== last){ out.push(`## ${who}`, ""); last = who; }
-    if (texts.length) out.push(texts.join("\n\n"), "");
-    if (tools.length) out.push(...tools, "");
+    // A run of tool calls is one list; text is its own paragraph.
+    parts.forEach((p, i) => {
+      if (p.text) out.push(p.text, "");
+      else { out.push(p.tool); if (!parts[i + 1] || !parts[i + 1].tool) out.push(""); }
+    });
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
