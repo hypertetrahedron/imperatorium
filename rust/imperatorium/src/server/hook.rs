@@ -197,6 +197,11 @@ impl Shared {
                     .unwrap_or_default();
                 if event == "Stop" {
                     meta.extend(stop_waits(payload));
+                    // When the turn ended, for a "finishes" watch: a turn
+                    // shorter than its 5 s look is never seen busy.
+                    if let Some(at) = meta.get("last_event_at").cloned() {
+                        meta.insert("last_stop_at".into(), at);
+                    }
                 }
                 store.register(&key, token.as_ref(), &meta);
                 if ["Stop", "SubagentStop", "TaskCompleted"].contains(&event.as_str()) {

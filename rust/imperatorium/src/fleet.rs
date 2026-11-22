@@ -568,6 +568,10 @@ pub struct Firing {
 pub struct Memory {
     /// (watch, session) -> was it in progress at the last look.
     busy: HashMap<(String, String), bool>,
+    /// (watch, session) -> its last Stop hook's time at the last look: a
+    /// turn shorter than the look between two is never seen busy, but its
+    /// Stop is (2026-11-21: a 2 s "OK" turn did not fire).
+    stops: HashMap<(String, String), f64>,
     /// What has fired already: (watch, session, raise) for waiting,
     /// (watch, session) for spend.
     done: HashSet<(String, String, String)>,
@@ -600,7 +604,10 @@ pub fn evaluate(
                     let k = key_of(r);
                     let now_busy = registry::in_progress(r);
                     let before = mem.busy.insert((id.clone(), k.clone()), now_busy);
-                    if before == Some(true) && !now_busy {
+                    let stop = r.get("last_stop_at").and_then(Value::as_f64).unwrap_or(0.0);
+                    let last_stop = mem.stops.insert((id.clone(), k.clone()), stop);
+                    let stopped = last_stop.is_some_and(|s| stop > s);
+                    if !now_busy && (before == Some(true) || stopped) {
                         let what = if registry::needs_attention(r) || truthy(r.get("attention")) {
                             "finished and is waiting for you"
                         } else {
@@ -820,6 +827,28 @@ mod tests {
         let got = evaluate(&w, &r, &HashMap::new(), &mut mem, 5.0);
         assert_eq!(got.len(), 1);
         assert!(got[0].text.ends_with("ended"), "{got:?}");
+    }
+
+    /// 2026-11-21, live: a 2 s turn between two 5 s looks was never seen
+    /// busy, so its finish was missed; its Stop hook's time is seen.
+    #[test]
+    fn finishes_fires_for_a_turn_too_short_to_be_seen_working() {
+        let w = vec![active(json!({"kind": "finishes", "project": "gem-trip"}), "w1")];
+        let mut mem = Memory::default();
+        let mut r = rows();
+        r[0].insert("status".into(), json!("idle"));
+        r[0].insert("last_stop_at".into(), json!(100.0));
+        assert!(evaluate(&w, &r, &HashMap::new(), &mut mem, 1.0).is_empty(), "an old Stop is the baseline");
+        r[0].insert("last_stop_at".into(), json!(103.0));
+        let got = evaluate(&w, &r, &HashMap::new(), &mut mem, 2.0);
+        assert_eq!(got, vec![Firing { watch: "w1".into(), session: "aaaaaaaa-1".into(), text: "gem-trip-4 finished".into() }]);
+        assert!(evaluate(&w, &r, &HashMap::new(), &mut mem, 3.0).is_empty(), "once per Stop");
+        // A Stop seen while it is already working again waits for that turn.
+        r[0].insert("status".into(), json!("busy"));
+        r[0].insert("last_stop_at".into(), json!(110.0));
+        assert!(evaluate(&w, &r, &HashMap::new(), &mut mem, 4.0).is_empty());
+        r[0].insert("status".into(), json!("idle"));
+        assert_eq!(evaluate(&w, &r, &HashMap::new(), &mut mem, 5.0).len(), 1);
     }
 
     #[test]

@@ -778,6 +778,7 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>, past: Option<f64>) -> bool
         "last_notification",
         "last_event",
         "last_event_at",
+        "last_stop_at",
         "last_failure",
         "last_failure_detail",
         "window_title",
