@@ -281,6 +281,57 @@ pub(crate) fn is_agent_worktree(main: &str, path: &str) -> bool {
 
 /// changes.worktrees(project).
 pub fn worktrees(project: &str) -> Value {
+    worktrees_for(project, None)
+}
+
+/// The tip's subject of every local branch, in one call: a worktree on a
+/// branch shows its branch's tip, so it needs no `log -1` of its own.
+fn branch_subjects(project: &str) -> std::collections::HashMap<String, String> {
+    let got = git(project, &["for-each-ref", "refs/heads", "--format=%(refname:short)%09%(subject)"], false)
+        .unwrap_or_default();
+    splitlines(&got)
+        .into_iter()
+        .filter_map(|l| l.split_once('\t').map(|(b, s)| (b.to_string(), crate::pyish::strip(s).to_string())))
+        .collect()
+}
+
+/// What `measure_worktree` adds to a worktree's entry, in order.
+type Measured = Result<Vec<(&'static str, Value)>, String>;
+
+/// One worktree's own numbers, in the order the answer has always had them:
+/// dirty, ahead, behind, subject. Ahead and behind come from one
+/// `rev-list --left-right --count` (it was two).
+fn measure_worktree(
+    project: &str,
+    path: &str,
+    base: Option<&str>,
+    branch: Option<&str>,
+    subjects: &std::collections::HashMap<String, String>,
+) -> Measured {
+    let mut got = Vec::new();
+    let dirty = !crate::pyish::strip(&git(path, &["status", "--porcelain"], true)?).is_empty();
+    got.push(("dirty", json!(dirty)));
+    if let (Some(b), Some(br)) = (base, branch) {
+        let t = git(project, &["rev-list", "--left-right", "--count", &format!("{b}...{br}")], true)?;
+        let mut n = crate::pyish::strip(&t).split_whitespace().map(|x| {
+            x.parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: '{x}'"))
+        });
+        let behind = n.next().transpose()?.unwrap_or(0);
+        let ahead = n.next().transpose()?.unwrap_or(0);
+        got.push(("ahead", json!(ahead)));
+        got.push(("behind", json!(behind)));
+    }
+    let subject = match branch.and_then(|br| subjects.get(br)) {
+        Some(s) => s.clone(),
+        None => crate::pyish::strip(&git(path, &["log", "-1", "--format=%s"], false)?).to_string(),
+    };
+    got.push(("subject", json!(subject)));
+    Ok(got)
+}
+
+/// `worktrees`, measuring only the worktree at `only` (and leaving the
+/// others out) when given: what `finish` needs to find one.
+fn worktrees_for(project: &str, only: Option<&str>) -> Value {
     if !is_repo(project) {
         return json!({"ok": true, "repo": false, "worktrees": []});
     }
@@ -298,9 +349,15 @@ pub fn worktrees(project: &str) -> Value {
         .and_then(Value::as_str)
         .map(str::to_string);
     let recorded = recorded_bases(project);
-    let mut out = Vec::new();
+    let want = only.map(|p| (norm(p), p));
+    let mut entries = Vec::new();
     for wt in &listed[1..] {
         let path = wt["path"].as_str().unwrap_or("").to_string();
+        if let Some((w, raw)) = &want {
+            if !same_dir(&path, w, raw) {
+                continue;
+            }
+        }
         let mut entry = wt.clone();
         entry.insert("agent".into(), json!(is_agent_worktree(&main_path, &path)));
         let exists = std::path::Path::new(&path).is_dir();
@@ -316,34 +373,41 @@ pub fn worktrees(project: &str) -> Value {
         let base = own.clone().or_else(|| base.clone());
         entry.insert("base".into(), json!(base));
         entry.insert("base_recorded".into(), json!(own.is_some()));
-        if exists {
-            let run = |entry: &mut Map<String, Value>| -> Result<(), String> {
-                let dirty =
-                    !crate::pyish::strip(&git(&path, &["status", "--porcelain"], true)?).is_empty();
-                entry.insert("dirty".into(), json!(dirty));
-                if let (Some(b), Some(br)) = (
-                    base.as_ref().filter(|b| !b.is_empty()),
-                    wt.get("branch").and_then(Value::as_str).filter(|b| !b.is_empty()),
-                ) {
-                    let count = |range: String| -> Result<i64, String> {
-                        let t = git(project, &["rev-list", "--count", &range], true)?;
-                        let t = crate::pyish::strip(&t);
-                        if t.is_empty() {
-                            return Ok(0);
-                        }
-                        t.parse::<i64>()
-                            .map_err(|_| format!("invalid literal for int() with base 10: '{t}'"))
-                    };
-                    entry.insert("ahead".into(), json!(count(format!("{b}..{br}"))?));
-                    entry.insert("behind".into(), json!(count(format!("{br}..{b}"))?));
+        entries.push((entry, path, exists, base));
+    }
+    // Each worktree's git calls at once, not one worktree after another
+    // (2026-11-21: ~34 git processes, one by one, per worktree request).
+    let subjects = if entries.iter().any(|e| e.2) { branch_subjects(project) } else { Default::default() };
+    let measured: Vec<Option<Measured>> = std::thread::scope(|s| {
+        let jobs: Vec<_> = entries
+            .iter()
+            .map(|(entry, path, exists, base)| {
+                let subjects = &subjects;
+                exists.then(|| {
+                    s.spawn(move || {
+                        let base = base.as_deref().filter(|b| !b.is_empty());
+                        let branch = entry.get("branch").and_then(Value::as_str).filter(|b| !b.is_empty());
+                        measure_worktree(project, path, base, branch, subjects)
+                    })
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|j| j.map(|h| h.join().unwrap_or_else(|_| Err("git measuring panicked".into()))))
+            .collect()
+    });
+    let mut out = Vec::new();
+    for ((mut entry, ..), got) in entries.into_iter().zip(measured) {
+        match got {
+            Some(Ok(fields)) => {
+                for (k, v) in fields {
+                    entry.insert(k.into(), v);
                 }
-                let subject = git(&path, &["log", "-1", "--format=%s"], false)?;
-                entry.insert("subject".into(), json!(crate::pyish::strip(&subject)));
-                Ok(())
-            };
-            if let Err(e) = run(&mut entry) {
+            }
+            Some(Err(e)) => {
                 entry.insert("error".into(), json!(e));
             }
+            None => {}
         }
         out.push(Value::Object(entry));
     }
@@ -612,7 +676,8 @@ pub const ACTIONS: &[&str] = &["merge", "pr", "discard"];
 /// changes._find: the worktree at `path` under `project`, and the base branch.
 type Found = (Map<String, Value>, Value, Map<String, Value>);
 fn find(project: &str, path: &str) -> Result<Found, Value> {
-    let listed = worktrees(project);
+    // Only that worktree measured: the others' git calls were wasted.
+    let listed = worktrees_for(project, Some(path));
     if listed["ok"] != json!(true) {
         return Err(listed);
     }

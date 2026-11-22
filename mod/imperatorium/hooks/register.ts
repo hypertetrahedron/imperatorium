@@ -24,7 +24,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 type Engine = EngineInterface
 
-const MOD_VERSION = '0.3.0'
+const MOD_VERSION = '0.3.1'
 const BEAT_MS = 2000
 // How long a permission check waits for the dispatcher before leaving the
 // decision to the session: a tool call should never wait on it for long.
@@ -150,7 +150,18 @@ async function beat($: Engine) {
   }
 }
 
+// The session's id now: a /clear goes on under a new id and fires no
+// session.start, so the id read there goes stale (2026-11-21: a session
+// /cleared at its start beat under its old id for hours, so the dispatcher
+// had no mod for it and sent the window's prompts framed as a peer's).
+async function currentId($: Engine) {
+  const now = await $.session.id().catch(() => sessionId)
+  if (now) sessionId = now
+  return sessionId
+}
+
 async function beatOnce($: Engine) {
+  await currentId($)
   {
     const sending = acks
     acks = []
@@ -317,7 +328,7 @@ export const register: Register = (on, options) => {
     const base = await next(e)
     if (base.decision !== 'ask' || PERSON_TOOLS.has(e.tool)) return base
     const asked = post($, '/api/mod/check', {
-      session_id: sessionId,
+      session_id: await currentId($),
       cwd: await $.session.cwd(),
       tool_name: e.tool,
       tool_input: e.input,

@@ -36,6 +36,10 @@ likewise, after `highlight.shape` and `highlight.colors.guide`, and
 `inbox_twin/steps.jsonl` (2026-11-21): a session's record gains
 `last_stop_at` (when its last Stop hook came, for a "finishes" watch)
 after `last_event_at`; masked as a clock in both twins.
+`session_twin/steps.jsonl` (2026-11-21): a session opened in a window says
+how - `"terminal": "tab"` in Windows Terminal (the twin's stand-in wt), or
+`"console"` in a console window of its own where there is no Windows
+Terminal - in the `/api/resume` and `/api/new` answers.
 `hooks_blackbox/cases.jsonl` (2026-11-15, user decision): a policy whose
 `park` sets no `wait_seconds` now holds the request until it is answered,
 so the `background_wait_seconds`-only case parks with `wait` 604800 (and

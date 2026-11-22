@@ -406,6 +406,17 @@ describe("WorkAtAGlance", () => {
     assert.deepEqual(parts({ ...w, alive: false }), []);
   });
 
+  it("the cache countdown drains as a bar of its lifetime", () => {
+    // An hour's cache with 15 min left: a quarter of the bar; none without a ttl.
+    const got = runTileJs(
+      `[workParts({cache_expires_at: 1900, cache_ttl: 3600}, 1000, true)[0].fill,` +
+      ` workParts({cache_expires_at: 1900}, 1000, true)[0].fill,` +
+      ` workHtml({cache_expires_at: 1900, cache_ttl: 3600}, 1000, "badge work", true)]`);
+    assert.equal(got[0], 0.25);
+    assert.equal(got[1], null);
+    assertIn('class="badge work cache drain" style="--fill:25%"', got[2]);
+  });
+
   it("the four counts are gone from the tile and status line", () => {
     assertIn('workHtml(s.work, now, "badge work", open)', SCRIPT);
     assertNotIn('n.join("/")', SCRIPT);

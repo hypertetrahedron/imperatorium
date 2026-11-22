@@ -184,7 +184,7 @@ fn every_local_row_carries_its_work_at_a_glance() {
     let work = rig.row(SID)["work"].clone();
     assert_eq!(
         work,
-        json!({"cache_expires_at": stat["cache"]["expires_at"], "context_tokens": 7,
+        json!({"cache_expires_at": stat["cache"]["expires_at"], "cache_ttl": stat["cache"]["ttl"], "context_tokens": 7,
                "cold_tokens": 0, "resume_cost_usd": work["resume_cost_usd"], "alive": true,
                "agents": 0, "shells": 1, "monitors": 0, "wakeups": 0, "wakes_at": null,
                "processes": 0})

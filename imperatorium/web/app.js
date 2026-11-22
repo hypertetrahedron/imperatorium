@@ -86,12 +86,16 @@ function workParts(w, now, all){
   if (wake > 0) out.push({text: "wakes " + span(wake), cls: "wake",
     title: `it scheduled its own next turn, in ${span(wake)} (${w.wakeups || 1} pending)`});
   const left = w.cache_expires_at ? w.cache_expires_at - now : 0;
-  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "-" + Math.ceil(left / 60), cls: "cache",
+  // `fill`: what is left of the cache's lifetime (work.cache_ttl), drawn as
+  // a bar draining under the minutes (2026-11-21, from the survey).
+  const fill = w.cache_ttl > 0 ? Math.max(0, Math.min(1, left / w.cache_ttl)) : null;
+  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "-" + Math.ceil(left / 60), cls: "cache", fill,
     title: `prompt cache expires in ${Math.ceil(left / 60)} min; a prompt after that re-sends the whole context`});
   return out;
 }
 const workHtml = (w, now, cls, all) => workParts(w, now, all).map(p =>
-  `<span class="${cls} ${p.cls}" title="${esc(p.title)}">${esc(p.text)}</span>`).join("");
+  `<span class="${cls} ${p.cls}${p.fill != null ? " drain" : ""}"${
+    p.fill != null ? ` style="--fill:${Math.round(p.fill * 100)}%"` : ""} title="${esc(p.title)}">${esc(p.text)}</span>`).join("");
 
 // How long a session has been idle: whole minutes and up ("<1m", "4m",
 // "2h 5m"); seconds are more resolution than a wait needs.
@@ -2527,27 +2531,68 @@ const HOOK_OTHER = {what: "The hook reported an error", why: "Claude Code record
                     fix: "Run it yourself to see all of its output (below)."};
 const hookKind = text => HOOK_KINDS.find(k => k.re.test(text || "")) || HOOK_OTHER;
 
+// Pure: the program an error says could not be found - bash's "python3:
+// command not found", sh's "python3: not found", cmd's and PowerShell's
+// "'python3' is not recognized", Windows' Store stub "Python was not
+// found" - or null.
+function missingProgram(text){
+  const t = String(text || "");
+  const m = /(?:^|[\s:])([\w.\-\/\\]+): (?:command )?not found/m.exec(t)
+    || /'([^']+)' is not recognized as/.exec(t)
+    || /The term '([^']+)' is not recognized/.exec(t);
+  if (m) return m[1].split(/[\\\/]/).pop();
+  return /Python was not found/i.test(t) ? "python" : null;
+}
+// Pure: which of `hooks` (their commands) the error `text` came from, when
+// it names a program that could not be found and one hook runs it; else
+// null. (2026-11-21: users read a plugin's missing python3 as Imperatorium's
+// error, because the pop-up listed every hook and said one was ours.)
+function failingHook(text, hooks){
+  const prog = missingProgram(text);
+  if (!prog) return null;
+  const runs = c => {
+    const first = String(c).trim().replace(/^"([^"]+)".*$/, "$1").split(/\s+/)[0];
+    const name = first.split(/[\\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
+    const want = prog.toLowerCase().replace(/\.exe$/, "");
+    return name === want || (want === "python" && /^python3?$/.test(name));
+  };
+  return (hooks || []).find(runs) || null;
+}
+
 // Pure: the pop-up's body for the hooks row `h` of session `s`.
 function hookHelpHtml(h, s){
   const errors = (h && h.errors) || [], now = hookErrorsNow(h);
   if (!errors.length) return `<p class=none>No hook errors recorded for this session.</p>`;
   const cwd = (s && s.cwd) || "the session's folder";
   const hooks = [...new Set(errors.flatMap(e => e.hooks || []))];
-  const ours = hooks.some(c => /imperatorium/i.test(c));
+  const isOurs = c => /imperatorium/i.test(c);
+  // The hooks the current errors came from, where the error names them.
+  const culprits = [...new Set(now.map(e => failingHook(e.error, e.hooks || hooks)).filter(Boolean))];
+  // Ours may be to blame: a named culprit is, or an error that names none
+  // came while ours ran.
+  const loose = now.filter(e => !failingHook(e.error, e.hooks || hooks));
+  const ours = culprits.some(isOurs) || (now.length ? loose : errors).some(e => (e.hooks || hooks).some(isOurs));
+  const notOurs = culprits.length > 0 && !ours;
   const kinds = [...new Set(now.map(e => hookKind(e.error)))];
-  const errHtml = e => `<li class="${now.includes(e) ? "" : "old"}"><span class=when>${
-    esc(e.at ? clock(e.at) : "")}</span> <b>${esc(e.event || "Stop")}</b> - ${esc(hookKind(e.error).what)}<pre>${esc(e.error || "")}</pre></li>`;
+  const errHtml = e => {
+    const from = failingHook(e.error, e.hooks || hooks);
+    return `<li class="${now.includes(e) ? "" : "old"}"><span class=when>${
+      esc(e.at ? clock(e.at) : "")}</span> <b>${esc(e.event || "Stop")}</b> - ${esc(hookKind(e.error).what)}${
+      from ? ` - from <code>${esc(from)}</code>${isOurs(from) ? "" : " (not an Imperatorium hook)"}` : ""}<pre>${esc(e.error || "")}</pre></li>`;
+  };
   return [
     now.length
       ? `<p>A hook is a command Claude Code runs at a point in a session - these ran when a turn ended (Stop). One that fails does not stop the session, but whatever it was for (a check, a notification, a log) did not happen.</p>`
       : `<p class=ok>The Stop hooks ran without an error at ${esc(clock(h.ok_at))}: these are earlier ones, kept for reference.</p>`,
     kinds.map(k => `<div class=hkkind><b>${esc(k.what)}.</b> ${esc(k.why)} ${esc(k.fix)}</div>`).join(""),
+    culprits.length ? `<p class=hkfrom>The failing hook: ${culprits.map(c => `<code>${esc(c)}</code>`).join(", ")}${
+      notOurs ? " - not one of Imperatorium's; it comes from your settings or a plugin (run <code>/hooks</code> to see which)." : "."}</p>` : "",
     hooks.length ? `<h4>Stop hooks that ran</h4><ul class=hkcmds>${hooks.map(c => `<li><code>${esc(c)}</code></li>`).join("")}</ul>` : "",
     `<h4>What to do</h4><ol class=hksteps>`,
     `<li>Find the hook: in the session's terminal (View &gt; Show Window) run <code>/hooks</code> - it lists each hook and the settings file it comes from.</li>`,
     `<li>See why it fails: run its command yourself in <code>${esc(cwd)}</code>; or start the session with <code>claude --debug</code>, which logs each hook's full output.</li>`,
     `<li>Fix or remove it where it is set: <code>~/.claude/settings.json</code> (every project), <code>.claude/settings.json</code> or <code>.claude/settings.local.json</code> in the project, or the plugin that adds it (<code>/plugin</code>).</li>`,
-    ours ? `<li>One of them is Imperatorium's own hook. Check the dispatcher answers with <code>imperatorium status</code>; <code>imperatorium install</code> puts its hooks back as they should be.</li>` : "",
+    ours ? `<li>${culprits.some(isOurs) && !loose.length ? "It is" : "One of them is"} Imperatorium's own hook. Check the dispatcher answers with <code>imperatorium status</code>; <code>imperatorium install</code> puts its hooks back as they should be.</li>` : "",
     `<li>The chip goes once a later turn's Stop hooks run without an error.</li></ol>`,
     `<h4>Errors (newest last)</h4><ul class=hkerrs>${errors.map(errHtml).join("")}</ul>`,
   ].join("");
@@ -3974,6 +4019,69 @@ async function dismissSession(k){
   drawSessions();
 }
 
+// -- export as Markdown ------------------------------------------------------
+// Pure: a conversation's items as Markdown - each prompt and reply under a
+// heading, tool calls as a list under the reply that made them (a failed
+// one with its error's first line), thinking and successful results left
+// out; Claude Code's own notes in italics. `meta` heads the file.
+function convMarkdown(items, meta){
+  const out = [`# ${meta.name || "Conversation"}`, ""];
+  if (meta.cwd || meta.id) out.push([meta.cwd && "`" + meta.cwd + "`", meta.id && "session `" + meta.id + "`"]
+    .filter(Boolean).join(" · "), "");
+  const failed = new Map();
+  for (const it of items) for (const b of it.blocks || [])
+    if (b.kind === "result" && b.is_error && b.id) failed.set(b.id, String(b.text || "").split("\n")[0].slice(0, 200));
+  // A slash command as Claude Code records it (<command-name>/clear</...>
+  // <command-args>x</...>) reads as `/clear x`; its other tags go.
+  const plain = t => {
+    const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(t);
+    if (name){
+      const args = (/<command-args>([\s\S]*?)<\/command-args>/.exec(t) || [])[1] || "";
+      return "`" + (name[1].trim() + " " + args.trim()).trim() + "`";
+    }
+    return t.replace(/<\/?(command-[a-z]+|local-command-[a-z]+)>/g, "").trim();
+  };
+  let last = "";
+  for (const it of items){
+    const who = it.note ? "note" : it.speaker === "you" ? "You" : SPEAKER[it.speaker] || it.speaker || it.role || "";
+    // In the order they came: a reply's text and its tool calls interleave.
+    const parts = [];
+    for (const b of it.blocks || []){
+      if (b.kind === "text" && plain(String(b.text || ""))) parts.push({text: plain(String(b.text))});
+      else if (b.kind === "tool"){
+        const err = b.id && failed.get(b.id);
+        parts.push({tool: "- `" + (b.name || "tool") + "`" + (b.summary ? " " + String(b.summary).replace(/\s+/g, " ").slice(0, 200) : "") +
+          (err ? " - **failed:** " + err : "")});
+      }
+    }
+    if (!parts.length) continue;
+    if (who === "note"){ out.push("_" + parts.map(p => p.text || "").join(" ").replace(/\s+/g, " ").trim() + "_", ""); continue; }
+    // A heading when the speaker changes: a reply's steps stay under one.
+    if (who !== last){ out.push(`## ${who}`, ""); last = who; }
+    // A run of tool calls is one list; text is its own paragraph.
+    parts.forEach((p, i) => {
+      if (p.text) out.push(p.text, "");
+      else { out.push(p.tool); if (!parts[i + 1] || !parts[i + 1].tool) out.push(""); }
+    });
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+// The file's name: the session's name, made safe for any file system.
+const mdName = s => (nameOf(s).replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "conversation") + ".md";
+async function exportMarkdown(s){
+  let data;
+  try { data = await get("/api/conversation?session=" + encodeURIComponent(key(s))); }
+  catch (e) { say("could not read the conversation", key(s)); return; }
+  if (!data.items || !data.items.length){ say(data.error || "nothing to export", key(s)); return; }
+  const md = convMarkdown(data.items, {name: nameOf(s), cwd: s.cwd, id: key(s)});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([md], {type: "text/markdown;charset=utf-8"}));
+  a.download = mdName(s);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  say("saved " + a.download + " (" + data.items.length + " turns)", key(s));
+}
+
 // -- resume, fork --------------------------------------------------------
 async function act(what){
   const s = current();
@@ -3983,6 +4091,7 @@ async function act(what){
     catch (e) { $("#say").textContent = s.resume_command; }
     return;
   }
+  if (what === "markdown"){ exportMarkdown(s); return; }
   if (what === "show"){
     const r = await post("/api/focus", {session_id: key(s)});
     say(r.ok ? (r.note || "raised its window") : (r.error || "refused"), key(s));
@@ -4007,6 +4116,7 @@ async function act(what){
   const r = await post("/api/resume", {session_id: key(s), where, fork: kind === "fork",
     prompt: $("#prompt").value.trim() || null});
   say(r.ok ? (r.where === "background" ? kind + "ed in the background · " + (r.id || "")
+    : r.terminal === "console" ? "opened a console window (no Windows Terminal found): " + r.command
     : "opened a new tab: " + r.command) : (r.error || "refused"), key(s));
   if (r.ok && where === "background") clearPrompt(key(s));
 }
@@ -4148,6 +4258,9 @@ async function loadInsights(){
 function outcome(r){
   const where = r.host ? " on " + r.host : "";
   const id = r.bg_id ? " · " + r.bg_id : "";
+  if (r.action === "inject" && r.via === "mod")
+    return "handed to " + (r.session_name || "the session") + "'s mod" + where +
+           " - it goes in as your own words once the session is idle";
   if (r.action === "inject")
     return "delivered to the inbox of " + (r.session_name || "the session") +
            where + " - it runs once the session accepts it";

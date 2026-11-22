@@ -5,7 +5,7 @@
 // and a stream that goes quiet past its pings is opened again.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { SHARED, SCRIPT, between, evalJson, evalJsLater, cat, assertIn } from "./load.mjs";
+import { SHARED, SCRIPT, between, evalJson, evalJsLater, cat, assertIn, renderShell } from "./load.mjs";
 
 const TIMED = between(SHARED, "const GET_MS =", "\n\n// Which dispatcher served this page.");
 // A fetch that answers only by being aborted, and a minimal AbortController.
@@ -48,5 +48,63 @@ describe("StreamWatchdog", () => {
     assertIn('es.addEventListener("ping", heard);', SCRIPT);
     assertIn("async function tick(){\n  watchStream();", SCRIPT);
     assertIn("if (e && e.down) noteDown(true);", SCRIPT, "says when the dispatcher is not answering");
+  });
+});
+
+// Export as Markdown (2026-11-21, from the survey): View > Export as Markdown
+// saves the conversation - prompts and replies under headings, tool calls as
+// a list (a failed one with its error), thinking and plain results left out.
+const MD = between(SCRIPT, "function convMarkdown(", "\nasync function exportMarkdown(");
+const mdRun = expr => evalJson(cat(SHARED, "\nconst nameOf = s => s.display_name || s.name || s.id || '(unnamed)';\n",
+  MD, "\nprocess.stdout.write(JSON.stringify(", expr, "));"));
+
+describe("ExportMarkdown", () => {
+  const ITEMS = `[
+    {speaker: 'you', blocks: [{kind: 'text', text: 'fix the parser'}]},
+    {speaker: 'claude', blocks: [{kind: 'thinking', text: 'hmm'}, {kind: 'text', text: 'Looking.'},
+      {kind: 'tool', id: 't1', name: 'Bash', summary: 'pytest  -q'}]},
+    {speaker: 'tool', blocks: [{kind: 'result', id: 't1', text: 'boom\\nmore', is_error: true}]},
+    {speaker: 'claude', blocks: [{kind: 'tool', id: 't2', name: 'Edit', summary: 'parser.py'}]},
+    {speaker: 'tool', blocks: [{kind: 'result', id: 't2', text: 'ok', is_error: false}]},
+    {speaker: 'claude', blocks: [{kind: 'text', text: 'Fixed.'}]},
+    {speaker: 'system', note: true, blocks: [{kind: 'text', text: 'Compacted'}]}]`;
+
+  it("reads as the conversation did", () => {
+    const md = mdRun(`convMarkdown(${ITEMS}, {name: 'die-reader-0d', cwd: 'C:/src/die', id: 'abc'})`);
+    assert.equal(md, [
+      "# die-reader-0d", "", "`C:/src/die` · session `abc`", "",
+      "## You", "", "fix the parser", "",
+      "## Claude", "", "Looking.", "",
+      "- `Bash` pytest -q - **failed:** boom", "",
+      "- `Edit` parser.py", "",
+      "Fixed.", "",
+      "_Compacted_", ""].join("\n"));
+  });
+
+  it("is offered in the View menu and saved under a safe name", () => {
+    assertIn('data-act=markdown', renderShell());
+    const names = mdRun("[mdName({name: 'a/b: c'}), mdName({name: '***'})]");
+    assert.deepEqual(names, ["a-b-c.md", "conversation.md"]);
+  });
+
+  it("keeps a reply's order and reads a slash command as one", () => {
+    const md = mdRun(`convMarkdown([
+      {speaker: 'you', blocks: [{kind: 'text', text: '<command-name>/clear</command-name>\\n <command-message>clear</command-message>\\n <command-args></command-args>'}]},
+      {speaker: 'you', blocks: [{kind: 'text', text: 'run it'}]},
+      {speaker: 'claude', blocks: [{kind: 'tool', name: 'Bash', summary: 'git log'}, {kind: 'tool', name: 'Read', summary: 'a.txt'},
+        {kind: 'text', text: 'It printed one line.'}]}], {name: 'x'})`);
+    assert.equal(md, ["# x", "", "## You", "", "`/clear`", "", "run it", "",
+      "## Claude", "", "- `Bash` git log", "- `Read` a.txt", "", "It printed one line.", ""].join("\n"));
+  });
+});
+// A prompt the session's mod takes is not said to be in its inbox.
+describe("SentVia", () => {
+  it("says the mod took it, else the inbox", () => {
+    const fn = between(SCRIPT, "function outcome(r){", "\n}\n") + "\n}\n";
+    const got = evalJson(cat(fn, "process.stdout.write(JSON.stringify([",
+      "outcome({action: 'inject', via: 'mod', session_name: 'die-reader-0d'}),",
+      "outcome({action: 'inject', via: 'inbox', session_name: 'die-reader-0d'})]));"));
+    assert.equal(got[0], "handed to die-reader-0d's mod - it goes in as your own words once the session is idle");
+    assert.equal(got[1], "delivered to the inbox of die-reader-0d - it runs once the session accepts it");
   });
 });

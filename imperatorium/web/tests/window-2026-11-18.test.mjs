@@ -53,6 +53,30 @@ describe("HookErrorsPopup", () => {
     assertNotIn('class="old"', html);
   });
 
+  // 2026-11-21 (reports: "python3 command was not found"): a plugin's hook
+  // that runs python3 on a machine without it was read as Imperatorium's.
+  it("names the hook a missing program came from, and says it is not ours", () => {
+    const got = run(cat(
+      "process.stdout.write(JSON.stringify([",
+      " missingProgram('/usr/bin/bash: line 1: python3: command not found'),",
+      " missingProgram('/bin/sh: 1: python3: not found'),",
+      " missingProgram(\"'python3' is not recognized as an internal or external command\"),",
+      " missingProgram(\"The term 'C:\\\\x\\\\node.exe' is not recognized\"),",
+      " missingProgram('Python was not found; run without arguments to install from the Microsoft Store'),",
+      " missingProgram('Failed with exit code 1'),",
+      " failingHook('python3: command not found', ['\"C:/p/imperatorium.exe\" hook', 'python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.py\"']),",
+      " failingHook('Python was not found', ['python \"x.py\"']),",
+      " failingHook('boom', ['python3 x.py']),",
+      " hookHelpHtml({kind: 'hooks', errors: [{at: 5, event: 'Stop', error: 'line 1: python3: command not found',",
+      "   hooks: ['\"C:/p/imperatorium.exe\" hook', 'python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.py\"']}]}, {})]));"));
+    assert.deepEqual(got.slice(0, 6), ["python3", "python3", "python3", "node.exe", "python", null]);
+    assert.equal(got[6], 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/stop.py"');
+    assert.equal(got[7], 'python "x.py"');
+    assert.equal(got[8], null);
+    assertIn("not one of Imperatorium's", got[9]);
+    assertIn("(not an Imperatorium hook)", got[9]);
+    assertNotIn("Imperatorium's own hook", got[9]);
+  });
   it("errors from before a clean run are shown as earlier ones; none at all says so", () => {
     const got = run(cat(
       "process.stdout.write(JSON.stringify([",

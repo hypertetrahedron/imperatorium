@@ -370,6 +370,12 @@ impl Shared {
         out
     }
 
+    /// Whether `deliver` hands this row's prompts to its mod (else its inbox).
+    fn via_mod(&self, row: &Row) -> bool {
+        let sid = row.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        !truthy(row.get("remote")) && self.modlink.as_ref().is_some_and(|l| l.live(sid, Self::now()))
+    }
+
     /// Control._deliver: put the prompt in the session's inbox. None, or the
     /// error. (The mod's path, for sessions whose mod is live, comes with the
     /// mod link; remote hosts with phase 4.)
@@ -472,10 +478,13 @@ impl Shared {
                     return json!({"ok": false, "error":
                         "that session is not reachable (no credential yet - it registers on its next hook event)"});
                 }
+                // Which way it went, so the window says it rightly (it said
+                // "inbox" for a prompt its mod took as the person's words).
+                let via = if self.via_mod(&row) { "mod" } else { "inbox" };
                 if let Some(e) = self.deliver(store, &row, pr, as_user) {
                     return json!({"ok": false, "error": e});
                 }
-                return json!({"ok": true, "action": "inject", "session": sid,
+                return json!({"ok": true, "action": "inject", "session": sid, "via": via,
                               "session_name": row.get("name").cloned().unwrap_or(Value::Null),
                               "host": row.get("host").cloned().unwrap_or(Value::Null)});
             }
