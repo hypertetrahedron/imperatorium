@@ -106,6 +106,25 @@ fn permission_prompt_raises_attention() {
 }
 
 #[test]
+fn a_permission_prompt_during_a_question_says_input_needed() {
+    // Claude Code sends the generic permission notification a few seconds
+    // into an AskUserQuestion dialog; the tile must not turn into
+    // "needs permission".
+    let rig = Rig::start();
+    rig.live(SID, "idle", json!({}));
+    rig.hook(
+        "PreToolUse",
+        SID,
+        json!({"tool_name": "AskUserQuestion", "tool_use_id": "q1", "tool_input": {"questions": []}}),
+    );
+    assert_eq!(notify(&rig, "permission_prompt")["attention_reason"], json!("input needed"));
+    // Once the question is answered, a later prompt is a permission again.
+    rig.hook("PostToolUse", SID, json!({"tool_name": "AskUserQuestion", "tool_use_id": "q1"}));
+    rig.hook("PreToolUse", SID, json!({"tool_name": "Bash", "tool_use_id": "b1", "tool_input": {"command": "ls"}}));
+    assert_eq!(notify(&rig, "permission_prompt")["attention_reason"], json!("needs permission"));
+}
+
+#[test]
 fn stop_clears_attention() {
     let rig = Rig::start();
     rig.live(SID, "idle", json!({}));

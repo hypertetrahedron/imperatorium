@@ -387,6 +387,13 @@ fn last_field(text: &str, key: &str) -> Option<String> {
     last
 }
 
+/// A prompt that reached the session from another one (a peer message, as
+/// Imperatorium delivers): `origin.kind` or `turnOrigin` is "peer".
+fn is_peer(entry: &Map<String, Value>) -> bool {
+    entry.get("turnOrigin").and_then(Value::as_str) == Some("peer")
+        || entry.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer")
+}
+
 fn non_empty(v: Option<String>) -> Option<String> {
     v.filter(|s| !s.is_empty())
 }
@@ -410,9 +417,12 @@ fn first_prompt_from_head(head: &str) -> String {
         if !line.contains("\"type\":\"user\"") && !line.contains("\"type\": \"user\"") {
             continue;
         }
+        // A prompt another session (or Imperatorium) delivered is written
+        // as meta, but it is the session's prompt all the same (2026-11-21):
+        // a session driven only from the window had `/clear` for a title.
+        let peer_hint = line.contains("\"peer\"");
         if line.contains("\"tool_result\"")
-            || line.contains("\"isMeta\":true")
-            || line.contains("\"isMeta\": true")
+            || (!peer_hint && (line.contains("\"isMeta\":true") || line.contains("\"isMeta\": true")))
             || line.contains("\"isCompactSummary\":true")
             || line.contains("\"isCompactSummary\": true")
         {
@@ -424,9 +434,14 @@ fn first_prompt_from_head(head: &str) -> String {
         if entry.get("type").and_then(Value::as_str) != Some("user") {
             continue;
         }
+        let peer = is_peer(&entry);
+        if !peer && truthy(entry.get("isMeta")) {
+            continue;
+        }
         let Some(Value::Object(message)) = entry.get("message") else {
             continue;
         };
+        let unwrapped;
         let mut texts: Vec<&str> = Vec::new();
         match message.get("content") {
             Some(Value::String(s)) => texts.push(s),
@@ -440,6 +455,13 @@ fn first_prompt_from_head(head: &str) -> String {
                 }
             }
             _ => {}
+        }
+        if peer {
+            unwrapped = crate::conversation::unwrap_peer(Some(&Value::String(texts.join("\n"))));
+            if unwrapped.trim_start().starts_with("<teammate-message") {
+                continue;
+            }
+            texts = vec![unwrapped.as_str()];
         }
         for raw in texts {
             let replaced = raw.replace('\n', " ");
@@ -651,12 +673,21 @@ pub fn titles_json(ids: &[String]) -> Value {
 
 /// conversation.title() of a session's info: custom title, else summary.
 fn title_of(info: &Value) -> String {
-    info.get("custom_title")
-        .and_then(Value::as_str)
-        .filter(|t| !t.is_empty())
-        .or_else(|| info.get("summary").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string()
+    if let Some(t) = info.get("custom_title").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+        return t.to_string();
+    }
+    // A bare slash command (`/clear`, `/compact`) says nothing about the
+    // session: no title then, and the tile shows what it is doing instead.
+    let summary = info.get("summary").and_then(Value::as_str).unwrap_or("");
+    if bare_command(summary) {
+        return String::new();
+    }
+    summary.to_string()
+}
+
+fn bare_command(t: &str) -> bool {
+    let t = t.trim();
+    t.starts_with('/') && t.len() > 1 && !t.contains(char::is_whitespace)
 }
 
 /// `list_sessions()`: every project, newest first, one row per session id.
@@ -708,6 +739,26 @@ mod tests {
 
     fn e(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    /// A session driven from the window (2026-11-21): `/clear`, then only
+    /// prompts delivered by Imperatorium, which Claude Code writes as meta.
+    #[test]
+    fn a_delivered_prompt_is_the_first_prompt_and_a_bare_command_no_title() {
+        let clear = json!({"type": "user", "message": {"role": "user", "content":
+            "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}});
+        let caveat = json!({"type": "user", "isMeta": true, "message": {"role": "user", "content": "<local-command-caveat>x</local-command-caveat>"}});
+        let delivered = json!({"type": "user", "isMeta": true, "turnOrigin": "peer", "origin": {"kind": "peer"},
+            "message": {"role": "user", "content": format!(
+                "Another Claude session sent a message:\n{}\n\nlook into super agents\n\nThis came from another Claude session \u{2014} not typed by your user.",
+                crate::conversation::ORIGIN_NOTE)}});
+        let other_meta = json!({"type": "user", "isMeta": true, "message": {"role": "user", "content": "a skill's text"}});
+        let head = |v: &[&Value]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("\n");
+        assert_eq!(first_prompt_from_head(&head(&[&clear, &caveat, &other_meta, &delivered])), "look into super agents");
+        assert_eq!(first_prompt_from_head(&head(&[&clear, &other_meta])), "/clear", "the command stays the fallback");
+        assert_eq!(title_of(&json!({"summary": "/clear"})), "", "but is no title");
+        assert_eq!(title_of(&json!({"summary": "/clear", "custom_title": "renamed"})), "renamed");
+        assert_eq!(title_of(&json!({"summary": "fix the /clear handling"})), "fix the /clear handling");
     }
 
     #[test]

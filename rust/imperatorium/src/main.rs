@@ -33,6 +33,7 @@ mod closing;
 mod conversation;
 mod costs;
 mod deeplink;
+mod fleet;
 mod history;
 mod hotkey;
 mod hooks;
@@ -43,6 +44,7 @@ mod launch;
 mod live;
 mod locks;
 mod matrix;
+mod mcp;
 mod modlink;
 mod models;
 mod notify;
@@ -265,6 +267,8 @@ fn main() {
         }
         Some(name) if cli::handles(name) => cli::main(name, &args[1..], home.as_deref()),
         Some("hook") => hooks::hook_main(),
+        // The fleet as MCP tools for an agent (stdio).
+        Some("mcp") => mcp::main(),
         Some("statusline") => hooks::statusline_main(),
         Some("permission") => hooks::permission_main(home.as_deref(), args.iter().any(|a| a == "--park-only")),
         Some("policy-decide") => policy_decide(),

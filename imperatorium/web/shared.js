@@ -11,10 +11,24 @@ try {
 } catch (e) {}
 const $ = s => document.querySelector(s);
 
+// Every request gives up in the end (2026-11-21). With none, one request
+// that never answered - across a dispatcher restart - held the refresh loop,
+// Send and the new-dispatcher check for good, and a few of them filled the
+// browser's six connections to this host, so even F5 queued behind them.
+// A request that times out or cannot connect throws an error marked `down`.
+const GET_MS = 15000, POST_MS = 60000;
+async function timed(url, opts, ms){
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const t = ctl ? setTimeout(() => ctl.abort(), ms) : null;
+  try { return await fetch(url, ctl ? Object.assign({signal: ctl.signal}, opts) : opts); }
+  catch (e) { throw Object.assign(new Error("the dispatcher did not answer"), {down: true}); }
+  finally { if (t) clearTimeout(t); }
+}
+
 // GET a JSON endpoint; anything but a 2xx throws, so a caller's catch is the
 // "dispatcher not answering" path.
-async function get(url){
-  const r = await fetch(url, {cache: "no-store"});
+async function get(url, ms){
+  const r = await timed(url, {cache: "no-store"}, ms || GET_MS);
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
@@ -24,10 +38,10 @@ async function get(url){
 const windowToken = () => (document.querySelector("meta[name=imp-window]") || {}).content || "";
 // POST `body` as JSON and return the JSON answer whatever its status (a
 // refusal carries its reason there). `headers` adds to the usual ones.
-async function post(url, body, headers){
-  const r = await fetch(url, {method: "POST", cache: "no-store",
+async function post(url, body, headers, ms){
+  const r = await timed(url, {method: "POST", cache: "no-store",
     headers: Object.assign({"Content-Type": "application/json", "X-Imperatorium-Window": windowToken()}, headers),
-    body: JSON.stringify(body)});
+    body: JSON.stringify(body)}, ms || POST_MS);
   return r.json();
 }
 

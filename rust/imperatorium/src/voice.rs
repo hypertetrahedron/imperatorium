@@ -295,16 +295,27 @@ impl Worker {
     }
 }
 
-/// window.open_window: the page in a chromeless browser window (Edge's or
-/// Chrome's --app), else the default browser. The browser used, or None.
+/// window.open_window: the page in a chromeless browser window (`--app`),
+/// in the person's default browser when it can make one (2026-11-21: it
+/// used to be Edge whenever Edge was installed, whatever the default). A
+/// default that cannot (Firefox) opens the page in an ordinary window of
+/// it; with no default to be read, Edge's or Chrome's `--app`, as before.
+/// The browser used, or None when the system opener was.
 pub fn open_window(url: &str, size: &str) -> Result<Option<String>, String> {
-    let candidates = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    ];
-    let found = candidates.iter().map(PathBuf::from).find(|p| cfg!(windows) && p.is_file());
+    let default = default_browser();
+    let found = match &default {
+        Some(b) if is_chromium(b) => Some(b.clone()),
+        Some(_) => None,
+        None => [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| cfg!(windows) && p.is_file()),
+    };
     if let Some(browser) = found {
         let mut cmd = Command::new(&browser);
         cmd.arg(format!("--app={url}")).arg(format!("--window-size={size}"));
@@ -324,11 +335,83 @@ pub fn open_window(url: &str, size: &str) -> Result<Option<String>, String> {
         &["xdg-open"]
     };
     Command::new(opener[0]).args(&opener[1..]).arg(url).spawn().map_err(|e| format!("OSError: {e}"))?;
-    Ok(None)
+    Ok(default.map(|b| b.to_string_lossy().into_owned()))
+}
+
+/// The default browser's program, from the https (else http) association's
+/// ProgId and that ProgId's open command. None off Windows, or when either
+/// cannot be read or the program is not there.
+fn default_browser() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let reg = |key: &str, value: Option<&str>| -> Option<String> {
+        let mut cmd = Command::new("reg");
+        cmd.args(["query", key]);
+        match value {
+            Some(v) => cmd.args(["/v", v]),
+            None => cmd.arg("/ve"),
+        };
+        crate::proc::no_window(&mut cmd);
+        let out = cmd.stderr(Stdio::null()).output().ok().filter(|o| o.status.success())?;
+        reg_value(&String::from_utf8_lossy(&out.stdout))
+    };
+    let assoc = r"HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations";
+    let prog = ["https", "http"]
+        .iter()
+        .find_map(|s| reg(&format!(r"{assoc}\{s}\UserChoice"), Some("ProgId")))?;
+    let command = reg(&format!(r"HKCR\{prog}\shell\open\command"), None)?;
+    exe_of_command(&command).map(PathBuf::from).filter(|p| p.is_file())
+}
+
+/// The data of the one value `reg query` printed: the text after its
+/// `REG_SZ` / `REG_EXPAND_SZ` type.
+fn reg_value(out: &str) -> Option<String> {
+    out.lines().find_map(|l| {
+        let i = l.find("REG_SZ").map(|i| i + 6).or_else(|| l.find("REG_EXPAND_SZ").map(|i| i + 13))?;
+        Some(l[i..].trim().to_string()).filter(|v| !v.is_empty())
+    })
+}
+
+/// The program of an open command: `"C:\...\chrome.exe" --single-argument %1`
+/// or an unquoted `C:\...\x.exe %1`.
+fn exe_of_command(command: &str) -> Option<String> {
+    let c = command.trim();
+    let exe = if let Some(rest) = c.strip_prefix('"') {
+        rest.split('"').next()?
+    } else {
+        let lower = c.to_lowercase();
+        &c[..lower.find(".exe").map(|i| i + 4).unwrap_or(c.len())]
+    };
+    Some(exe.trim().to_string()).filter(|e| !e.is_empty())
+}
+
+/// A Chromium browser, which takes `--app=` for a window without tabs.
+/// The name is the text after the last `\` or `/`: a Windows path read off
+/// the registry, whatever platform the test runs on (`Path` off Windows
+/// splits on `/` only).
+fn is_chromium(exe: &Path) -> bool {
+    let full = exe.to_string_lossy().to_lowercase();
+    let name = full.rsplit(['\\', '/']).next().unwrap_or("");
+    ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "chromium.exe"].contains(&name)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_window_follows_the_default_browser() {
+        let out = "\r\nHKEY_CURRENT_USER\\Software\\UserChoice\r\n    ProgId    REG_SZ    ChromeHTML\r\n\r\n";
+        assert_eq!(reg_value(out).as_deref(), Some("ChromeHTML"));
+        let cmd = r#"    (Default)    REG_SZ    "C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument %1"#;
+        let exe = exe_of_command(&reg_value(cmd).unwrap()).unwrap();
+        assert_eq!(exe, r"C:\Program Files\Google\Chrome\Application\chrome.exe");
+        assert!(is_chromium(Path::new(&exe)));
+        assert_eq!(exe_of_command(r"C:\Apps\Brave.exe -- %1").as_deref(), Some(r"C:\Apps\Brave.exe"));
+        assert!(is_chromium(Path::new(r"C:\Apps\Brave.exe")));
+        assert!(!is_chromium(Path::new(r"C:\Program Files\Mozilla Firefox\firefox.exe")));
+        assert_eq!(reg_value("nothing here"), None);
+    }
+
     use super::*;
 
     #[test]

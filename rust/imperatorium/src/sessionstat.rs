@@ -146,9 +146,13 @@ pub struct Fold {
     idle: HashMap<String, Option<f64>>,
     mcp: Vec<String>,
     hook_errors: Vec<Value>,
+    /// when the Stop hooks last ran without an error
+    hooks_ok_at: Option<f64>,
     seen_msgs: HashSet<String>,
     tokens: [Num; 4], // input, output, cache_read, cache_write
     prompts: HashSet<String>,
+    /// when the newest prompt (a promptId not seen before) arrived
+    last_prompt_at: Option<f64>,
     last: Option<(Option<f64>, Map<String, Value>, Value)>,
     ttl: f64,
     out: Map<String, Value>,
@@ -195,6 +199,23 @@ impl Fold {
         if kind == Some("permission-mode") && truthy(entry.get("permissionMode")) {
             self.out
                 .insert("permission_mode".into(), entry["permissionMode"].clone());
+        } else if kind == Some("derived-from") {
+            // `claude --resume X --fork-session` writes
+            // {"type":"derived-from","sessions":[{"id":X,"via":"fork"}, ...]}
+            // ("compact" ones name the session itself): the newest fork is
+            // the session this one branched off.
+            let own = entry.get("sessionId").and_then(Value::as_str);
+            let parent = entry
+                .get("sessions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|s| s.get("via").and_then(Value::as_str) == Some("fork"))
+                .filter_map(|s| s.get("id").and_then(Value::as_str))
+                .rfind(|id| !id.is_empty() && Some(*id) != own);
+            if let Some(p) = parent {
+                self.out.insert("forked_from".into(), json!(p));
+            }
         } else if kind == Some("system") {
             match entry.get("subtype").and_then(Value::as_str) {
                 Some("compact_boundary") => self.bump("compactions"),
@@ -208,13 +229,31 @@ impl Fold {
                     }
                 }
                 Some("stop_hook_summary") => {
-                    for err in entry.get("hookErrors").and_then(Value::as_array).into_iter().flatten() {
+                    // The Stop hooks that ran, so the window can say which
+                    // to look at.
+                    let hooks: Vec<Value> = entry
+                        .get("hookInfos")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|h| h.get("command").and_then(Value::as_str))
+                        .map(|c| json!(take(c, 200)))
+                        .collect();
+                    let errs = entry.get("hookErrors").and_then(Value::as_array);
+                    if errs.is_none_or(|e| e.is_empty()) {
+                        self.hooks_ok_at = at.or(self.hooks_ok_at);
+                    }
+                    for err in errs.into_iter().flatten() {
                         let text = match err {
                             Value::String(s) => s.clone(),
                             other => crate::pyish::json_dumps_sorted(other),
                         };
                         let text: String = split_ws(&text).join(" ").chars().take(300).collect();
-                        self.hook_errors.push(json!({"at": at, "event": "Stop", "error": text}));
+                        let mut rec = json!({"at": at, "event": "Stop", "error": text});
+                        if !hooks.is_empty() {
+                            rec["hooks"] = json!(hooks);
+                        }
+                        self.hook_errors.push(rec);
                     }
                     if self.hook_errors.len() > HOOK_ERRORS_KEEP {
                         let cut = self.hook_errors.len() - HOOK_ERRORS_KEEP;
@@ -255,7 +294,13 @@ impl Fold {
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
-            if !usage.is_empty() && !self.seen_msgs.contains(&mid) {
+            // A failed turn is written as a `<synthetic>` reply with no
+            // usage ("Please run /login", API errors): nothing was sent or
+            // cached, so it is not the last reply (2026-11-18: a fresh
+            // session's first prompt failing showed a cache countdown).
+            let synthetic = truthy(entry.get("isApiErrorMessage"))
+                || msg.get("model").and_then(Value::as_str) == Some("<synthetic>");
+            if !usage.is_empty() && !synthetic && !self.seen_msgs.contains(&mid) {
                 self.seen_msgs.insert(mid);
                 for (i, k) in [
                     "input_tokens",
@@ -302,8 +347,12 @@ impl Fold {
                 }
             }
         } else if matches!(kind, Some("user") | Some("attachment")) {
-            if kind == Some("user") && !side && truthy(entry.get("promptId")) {
-                self.prompts.insert(key_of(entry.get("promptId")));
+            if kind == Some("user")
+                && !side
+                && truthy(entry.get("promptId"))
+                && self.prompts.insert(key_of(entry.get("promptId")))
+            {
+                self.last_prompt_at = at.or(self.last_prompt_at);
             }
             if let Some(Value::Array(blocks)) = content {
                 for b in blocks {
@@ -655,12 +704,18 @@ impl Fold {
         out.insert("finished".into(), Value::Array(self.finished(now)));
         out.insert("mcp_servers".into(), json!(self.mcp));
         out.insert("hook_errors".into(), Value::Array(self.hook_errors.clone()));
+        if let (Some(ok), false) = (self.hooks_ok_at, self.hook_errors.is_empty()) {
+            out.insert("hooks_ok_at".into(), json!(ok));
+        }
         out.insert(
             "tokens".into(),
             json!({"input": self.tokens[0].json(), "output": self.tokens[1].json(),
                    "cache_read": self.tokens[2].json(), "cache_write": self.tokens[3].json()}),
         );
         out.insert("prompts".into(), json!(self.prompts.len()));
+        if let Some(a) = self.last_prompt_at {
+            out.insert("last_prompt_at".into(), json!(a));
+        }
         if let Some((at, usage, model)) = &self.last {
             let read = num(usage.get("cache_read_input_tokens"));
             let context = num(usage.get("input_tokens"))
@@ -1194,6 +1249,82 @@ mod py_ported {
         assert_eq!((&got["permission_mode"], &got["version"], &got["branch"], &got["model_id"]),
                    (&json!("auto"), &json!("2.1.296"), &json!("main"), &json!("claude-opus-5-5")));
         assert_eq!(f(&got["started"]), AT0);
+        assert_eq!(f(&got["last_prompt_at"]), AT0);
+    }
+
+    /// 2026-11-21, the shape Claude Code 2.1.330 writes: a fork of a
+    /// compacted session names the parent twice - via "compact" (carried
+    /// over) and via "fork"; a session's own compaction names itself.
+    #[test]
+    fn a_fork_names_the_session_it_branched_off() {
+        let fork = m(json!({"type": "derived-from", "v": 1, "sessionId": "child",
+            "sessions": [{"type": "claude_code_session", "id": "parent", "via": "compact"},
+                         {"type": "claude_code_session", "id": "parent", "via": "fork"}]}));
+        assert_eq!(run(&[fork], AT0)["forked_from"], "parent");
+        let own = m(json!({"type": "derived-from", "v": 1, "sessionId": "solo",
+            "sessions": [{"type": "claude_code_session", "id": "solo", "via": "compact"}]}));
+        assert!(run(&[own], AT0).get("forked_from").is_none());
+        let twice = m(json!({"type": "derived-from", "v": 1, "sessionId": "c2",
+            "sessions": [{"id": "grand", "via": "fork"}, {"id": "parent", "via": "fork"}]}));
+        assert_eq!(run(&[twice], AT0)["forked_from"], "parent");
+    }
+
+    /// 2026-11-18, from a real transcript: a /clear, then a first prompt that
+    /// failed with "Please run /login". The failed turn is written as a
+    /// `<synthetic>` reply with zero usage - no reply, so no cache clock.
+    #[test]
+    fn a_synthetic_error_reply_is_not_a_reply() {
+        let synthetic = m(json!({"type": "assistant", "timestamp": ts(5), "isApiErrorMessage": true,
+            "error": "authentication_failed",
+            "message": {"id": "e1", "model": "<synthetic>", "role": "assistant",
+                "usage": {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0,
+                          "cache_read_input_tokens": 0,
+                          "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0}},
+                "content": [{"type": "text", "text": "Login reached its time limit · Please run /login"}]}}));
+        let prompt = m(json!({"type": "user", "timestamp": ts(0), "promptId": "p1",
+                              "message": {"role": "user", "content": "hi"}}));
+        let got = run(&[prompt.clone(), synthetic.clone()], AT0 + 10.0);
+        assert!(got.get("cache").is_none(), "{got}");
+        assert!(got.get("last_reply_at").is_none(), "{got}");
+        assert!(got.get("model_id").is_none(), "{got}");
+        // After a real reply, a later failure leaves that reply's clock alone.
+        let mut entries = token_entries();
+        let mut late = synthetic.clone();
+        late.insert("timestamp".into(), json!(ts(500)));
+        entries.push(late);
+        let got = run(&entries, AT0 + 600.0);
+        assert_eq!(f(&got["last_reply_at"]), AT0 + 60.0);
+        assert_eq!(got["model_id"], "claude-opus-5-5");
+    }
+
+    #[test]
+    fn a_hook_error_names_the_stop_hooks_that_ran() {
+        let summary = |infos: Value| m(json!({"type": "system", "subtype": "stop_hook_summary",
+            "timestamp": ts(3), "hookInfos": infos, "hookErrors": ["exit code 1: boom"]}));
+        let got = run(&[summary(json!([{"command": "imperatorium"}, {"command": "npx lint"}]))], AT0);
+        assert_eq!(got["hook_errors"][0]["hooks"], json!(["imperatorium", "npx lint"]));
+        assert_eq!(got["hook_errors"][0]["error"], "exit code 1: boom");
+        let got = run(&[summary(json!(null))], AT0);
+        assert!(got["hook_errors"][0].get("hooks").is_none());
+        assert!(got.get("hooks_ok_at").is_none());
+        // A later Stop whose hooks ran cleanly: the errors are earlier ones.
+        let clean = m(json!({"type": "system", "subtype": "stop_hook_summary", "timestamp": ts(9),
+                             "hookInfos": [{"command": "imperatorium"}], "hookErrors": []}));
+        let got = run(&[summary(json!(null)), clean.clone()], AT0);
+        assert_eq!(f(&got["hooks_ok_at"]), AT0 + 9.0);
+        // nothing ever failed: nothing to say
+        assert!(run(&[clean], AT0).get("hooks_ok_at").is_none());
+    }
+
+    #[test]
+    fn the_newest_prompt_is_when_its_id_first_appears() {
+        let user = |sec: u32, pid: &str| m(json!({"type": "user", "timestamp": ts(sec), "promptId": pid,
+                                                   "message": {"role": "user", "content": "x"}}));
+        let mut side = user(40, "p3");
+        side.insert("isSidechain".into(), json!(true));
+        // p1's tool results carry p1 again: not a new prompt.
+        let got = run(&[user(0, "p1"), user(10, "p2"), user(20, "p1"), user(30, "p2"), side], AT0);
+        assert_eq!(f(&got["last_prompt_at"]), AT0 + 10.0);
     }
 
     // class Folding

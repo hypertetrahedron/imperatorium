@@ -13,6 +13,7 @@ use std::time::Duration;
 const CLOCKS: &[&str] = &[
     "seen_at",
     "last_event_at",
+    "last_stop_at",
     "attention_since",
     "at",
     "start",
@@ -129,6 +130,14 @@ fn twin_answers_as_python_did() {
                     if let Some(m) = state.get_mut("dismissed").and_then(|x| x.as_object_mut()) {
                         for v in m.values_mut() {
                             *v = json!("<clock>");
+                        }
+                    }
+                    // Recorded since the Python reference froze: when a
+                    // StopFailure happened (2026-11-18), what a later prompt
+                    // or reply is measured against to clear it.
+                    if let Some(m) = state.get_mut("sessions").and_then(|x| x.as_object_mut()) {
+                        for rec in m.values_mut().filter_map(|r| r.as_object_mut()) {
+                            rec.shift_remove("last_failure_at");
                         }
                     }
                     diff = first_difference(&s["want"], &masked(&state), "state", true);

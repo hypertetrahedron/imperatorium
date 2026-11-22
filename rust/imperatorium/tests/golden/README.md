@@ -33,6 +33,9 @@ scripts, to match `assets/settings_fields.json`. Also there: the new
 The `highlight.prompts` and `highlight.colors.prompt` fields (2026-11-17)
 likewise, after `highlight.shape` and `highlight.colors.guide`, and
 `prompts` in `/api/health`'s `look.hl`.
+`inbox_twin/steps.jsonl` (2026-11-21): a session's record gains
+`last_stop_at` (when its last Stop hook came, for a "finishes" watch)
+after `last_event_at`; masked as a clock in both twins.
 `hooks_blackbox/cases.jsonl` (2026-11-15, user decision): a policy whose
 `park` sets no `wait_seconds` now holds the request until it is answered,
 so the `background_wait_seconds`-only case parks with `wait` 604800 (and

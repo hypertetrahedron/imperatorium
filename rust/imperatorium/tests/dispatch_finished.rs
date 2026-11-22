@@ -171,7 +171,7 @@ fn a_tile_with_no_process_can_be_taken_off_the_list() {
     let (code, js) = rig.get("/ui/app.js");
     assert_eq!(code, 200);
     let js = js.as_str().expect("the script is text").to_string();
-    let a = js.find("function tile(s, short)").expect("the tile function");
+    let a = js.find("function tile(s, short").expect("the tile function");
     let body = &js[a..a + js[a..].find("const spend").unwrap()];
     // Dismiss no longer depends on the tile being archived.
     assert!(!body.contains("archived ? `<span data-arch=\"${esc(pkey(s))}\" title=\"unarchive\">↩</span>${"));

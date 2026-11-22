@@ -149,6 +149,9 @@ impl Shared {
             "/api/remote/refresh",
             "/api/open_path",
             "/api/stop",
+            "/api/fleet/watch",
+            "/api/fleet/action",
+            "/api/ask",
         ];
         if API.contains(&path) && object.is_none() {
             return (400, Body::Json(json!({"error": "expected an object"})));
@@ -268,6 +271,24 @@ impl Shared {
                     return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
                 };
                 (200, Body::Json(self.stop_turn(store, p.get("session_id"))))
+            }
+            "/api/fleet/watch" => (200, Body::Json(self.post_watch(p, from_window))),
+            "/api/fleet/action" => {
+                let Some(store) = &self.store else {
+                    return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
+                };
+                (200, Body::Json(self.post_action(store, p, from_window)))
+            }
+            "/api/ask" => {
+                // Ask spends the person's usage, and what it proposes lands
+                // in the book: only the window asks.
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window asks"})));
+                }
+                if self.store.is_none() {
+                    return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
+                }
+                (200, Body::Json(self.ask(p)))
             }
             "/api/open_path" => {
                 // A path the chat names: opened with its program, or shown in
@@ -547,6 +568,8 @@ impl Shared {
                 (200, Body::Json(json!({"pending": self.pending.waiting()})))
             }
             ("GET", "/api/matrix") => (200, Body::Json(self.api_matrix())),
+            ("GET", "/api/fleet") => (200, Body::Json(self.api_fleet())),
+            ("GET", "/api/fleet/book") => (200, Body::Json(self.api_book())),
             ("GET", "/api/decisions") => (
                 200,
                 Body::Json(json!({"decisions": decisions(&self.state_dir(), 60)})),

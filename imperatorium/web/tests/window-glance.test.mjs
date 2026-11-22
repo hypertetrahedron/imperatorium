@@ -103,6 +103,18 @@ describe("HeavyWarnings", () => {
     assert.deepEqual(got, [["context"], ["cold 230k"], 0, 0, ["cold 20k"], 1, 0, 0]);
   });
 
+  it("a cold cache is not said while the turn is working", () => {
+    const work = "work: {context_tokens: 230000, cache_expires_at: 50}";
+    const got = glanceJs(cat(
+      `[heavyWarnings({status: 'busy', ${work}}, 100).length,`,
+      ` heavyWarnings({status: 'shell', ${work}}, 100).length,`,
+      ` heavyWarnings({state: 'working', ${work}}, 100).length,`,
+      ` heavyWarnings({status: 'busy', usage: {context_pct: 91}, ${work}}, 100).map(h => h.kind),`,
+      ` heavyWarnings({status: 'idle', ${work}}, 100).map(h => h.kind),`,
+      ` coldHtml({pid: 7, status: 'busy', ${work}}, 100)]`));
+    assert.deepEqual(got, [0, 0, 0, ["context"], ["cold"], ""]);
+  });
+
   it("cold cache is a button in the chat", () => {
     const got = glanceJs(cat(
       "[coldHtml({pid: 7, work: {context_tokens: 230000, cache_expires_at: 50, resume_cost_usd: 1.15}}, 100),",

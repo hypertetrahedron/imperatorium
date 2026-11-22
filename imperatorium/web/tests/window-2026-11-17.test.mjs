@@ -135,21 +135,46 @@ describe("SentPromptShown", () => {
     assert.deepEqual(got, [2, 2, ["two"], 0]);
   });
 
-  it("one not sent says why and stays until dismissed, and no longer counts", () => {
+  it("one not sent says why, no longer counts, and stays until dismissed", () => {
     const got = run(cat(
       "const p = addPending('s1', 'one'); const q = addPending('s1', 'two');",
       "settleSend('s1', p, {ok: false, error: 'no such session'}, 'sent');",
       "settleSend('s1', q, {ok: true}, 'sent');",
-      "const you = {speaker: 'you', blocks: [text('x')]};",
-      "const left = settlePending(pendingSent.s1, logItems.concat([you]));",
+      "const left = settlePending(pendingSent.s1, logItems);",
       "const h = pendingHtml(p);",
       "dropPending(p.id);",
       "process.stdout.write(JSON.stringify([q.base, left.map(x => x.text), h, pendingSent.s1.length]));"));
     assert.equal(got[0], 1);
-    assert.deepEqual(got[1], ["one"]);
+    // "two" was sent before "one" was refused: it is not going on after it.
+    assert.deepEqual(got[1], ["one", "two"]);
     assertIn('pend failed', got[2]);
     assertIn("not sent - no such session", got[2]);
     assert.equal(got[3], 1);
+  });
+
+  it("one not sent goes once you go on: a prompt sent after it, or one more turn of yours", () => {
+    // 2026-11-18: a bare /model's refusal stayed up through the prompts after it.
+    const got = run(cat(
+      "const p = addPending('s1', '/model');",
+      "settleSend('s1', p, {ok: false, error: '/model opens a menu in the terminal'}, 'sent');",
+      "const you = {speaker: 'you', blocks: [text('x')]};",
+      "const alone = settlePending(pendingSent.s1, logItems).map(x => x.text);",
+      "const typed = settlePending(pendingSent.s1, logItems.concat([you])).map(x => x.text);",
+      "const q = addPending('s1', 'go on');",
+      "const sending = settlePending(pendingSent.s1, logItems).map(x => x.text);",
+      "settleSend('s1', q, {ok: false, error: 'busy'}, 'sent');",
+      "const bothFailed = settlePending(pendingSent.s1, logItems).map(x => x.text);",
+      "const r = addPending('other', 'elsewhere');",
+      "settleSend('other', r, {ok: false, error: 'no'}, 'sent');",
+      "const unseen = settlePending(pendingSent.other, logItems.concat([you, you])).length;",
+      "process.stdout.write(JSON.stringify([alone, typed, sending, bothFailed, unseen]));"));
+    assert.deepEqual(got[0], ["/model"]);
+    assert.deepEqual(got[1], []);
+    assert.deepEqual(got[2], ["go on"]);
+    // a prompt refused after it is not going on either: both stay
+    assert.deepEqual(got[3], ["/model", "go on"]);
+    // turns are only counted for the session it was sent to while selected
+    assert.equal(got[4], 1);
   });
 
   it("prompts that come back joined in one turn each count, so the last one's note goes too", () => {

@@ -922,6 +922,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("Monitoring", "hosts", "", "Remote hosts and their state"),
     ("Monitoring", "notify", "[CHANNEL on|off]", "Show notification channels, or turn one on/off"),
     ("Monitoring", "health", "", "Is the dispatcher up (and its pid)"),
+    ("Monitoring", "mcp", "", "The fleet as MCP tools for an agent, over stdio: register with `claude mcp add --scope user imperatorium -- imperatorium mcp`"),
     ("Run by the binary itself, and for conformance", "remote-channel", "", "On a host, over SSH: the dispatcher's read/stats channel (JSON lines)"),
     ("Run by the binary itself, and for conformance", "inbox-send", "SOCKET < frames", "On a host, over SSH: write frames into a session's inbox socket"),
     ("Run by the binary itself, and for conformance", "hook-relay", "...", "On a host: relay a hook's event through the tunnel to the dispatcher"),

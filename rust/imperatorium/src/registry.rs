@@ -107,6 +107,8 @@ fn s<'a>(r: &'a Row, k: &str) -> Option<&'a str> {
 /// registry.TASK_KINDS: what an idle session can still be waiting on.
 pub const TASK_KINDS: [&str; 4] = ["shells", "monitors", "agents", "wakeups"];
 pub const COMPLETE: &str = "complete";
+/// Work only the Stop hook reports: MCP tasks, workflows and kinds to come.
+pub const OTHER_TASKS: &str = "other";
 
 /// registry.pending_tasks: {kind: count} of what an idle session has going.
 pub fn pending_tasks(row: &Row) -> Map<String, Value> {
@@ -116,9 +118,30 @@ pub fn pending_tasks(row: &Row) -> Map<String, Value> {
         None => 0,
     };
     let work = row.get("work").and_then(Value::as_object);
+    // What the last Stop hook listed, by kind: Claude Code's own account,
+    // which also sees what the transcript and process list cannot (MCP
+    // tasks, workflows). Neither source alone is the whole of it.
+    let mut listed: Map<String, Value> = Map::new();
+    let mut add = |k: &str| {
+        let n = listed.get(k).and_then(Value::as_u64).unwrap_or(0);
+        listed.insert(k.into(), json!(n + 1));
+    };
+    if let Some(tasks) = row.get("stop_background_tasks").and_then(Value::as_array) {
+        for t in tasks {
+            add(match t.get("type").and_then(Value::as_str) {
+                Some("shell") => "shells",
+                Some("monitor") => "monitors",
+                Some("subagent") => "agents",
+                _ => OTHER_TASKS,
+            });
+        }
+    }
+    for _ in row.get("stop_crons").and_then(Value::as_array).into_iter().flatten() {
+        add("wakeups");
+    }
     let mut out = Map::new();
-    for k in TASK_KINDS {
-        let mut v = count(work.and_then(|w| w.get(k)));
+    for k in TASK_KINDS.iter().copied().chain([OTHER_TASKS]) {
+        let mut v = count(work.and_then(|w| w.get(k))).max(count(listed.get(k)));
         if k == "shells" {
             v = v.max(count(row.get("background_tasks")));
         }
@@ -233,6 +256,24 @@ mod reviewed_tests {
         let mut r = row(json!({"status": "idle", "last_event": "SessionStart", "work": {}}));
         classify(&mut r);
         assert!(!r.contains_key("attention"));
+    }
+
+    #[test]
+    fn what_the_stop_hook_listed_counts_as_tasks() {
+        let row = |v: Value| v.as_object().unwrap().clone();
+        let mut r = row(json!({"status": "idle", "last_event": "Stop", "work": {"shells": 1},
+            "stop_background_tasks": [{"type": "shell"}, {"type": "shell"}, {"type": "monitor"},
+                                      {"type": "subagent"}, {"type": "MCP task"}, {"type": "workflow"}],
+            "stop_crons": [{"id": "c1"}]}));
+        classify(&mut r);
+        // The larger of the two accounts per kind, not their sum.
+        assert_eq!(r["tasks"], json!({"shells": 2, "monitors": 1, "agents": 1, "wakeups": 1, "other": 2}));
+        assert_eq!(r["waiting_tasks"], json!(7));
+        assert!(!r.contains_key("attention"));
+        let mut r = row(json!({"status": "idle", "last_event": "Stop", "work": {},
+                               "stop_background_tasks": [], "stop_crons": []}));
+        classify(&mut r);
+        assert_eq!(r["attention_kind"], json!("complete"));
     }
 
     #[test]
