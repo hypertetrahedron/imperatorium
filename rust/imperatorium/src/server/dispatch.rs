@@ -99,7 +99,7 @@ impl Shared {
     }
 
     /// Whether window sessions start in a herdr-core terminal (terminal.host).
-    fn hc_hosting(&self) -> bool {
+    pub(super) fn hc_hosting(&self) -> bool {
         settings::value(&self.config(), "terminal.host").as_str() == Some("hc")
     }
 
@@ -1350,7 +1350,7 @@ impl Shared {
 const NOT_RUNNING: &str = "that session is not running here, so there is nothing to close";
 
 /// str(uuid.uuid4()).
-fn uuid4() -> String {
+pub(super) fn uuid4() -> String {
     let mut b = [0u8; 16];
     getrandom::getrandom(&mut b).expect("random bytes");
     b[6] = (b[6] & 0x0f) | 0x40;

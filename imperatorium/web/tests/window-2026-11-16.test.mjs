@@ -117,7 +117,8 @@ describe("SidebarMenu", () => {
     assertIn("<div id=newbox hidden>", page);
     for (const m of ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"])
       assertIn(`<option value=${m}>`, page);
-    assertIn('post("/api/new", {cwd: p.path, permission_mode: mode, model, effort})', SCRIPT);
+    assertIn('spawnFrom("new", bg ? "background" : "window", {session_id: null, cwd: p.path,', SCRIPT);
+    assertIn('prompt: bg ? text || "Ready when you are." : "", permission_mode: mode, model, effort});', SCRIPT);
   });
 
   it("projects are found by name or folder", () => {

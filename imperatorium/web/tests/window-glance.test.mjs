@@ -124,9 +124,9 @@ describe("HeavyWarnings", () => {
     assertIn("230k tokens", got[0]);
     assertIn("$1.15", got[0]);
     assertIn('data-coldact="new"', got[0]);
-    assertIn('data-coldact="new-close"', got[0]);
+    // Close this & start new went with New+close (2026-11-22): /new does it.
+    assertNotIn("new-close", got[0]);
     assertIn("a prompt entered as usual continues this session", got[0]);
-    assertNotIn("new-close", got[1]);   // no process to close
     assertIn("cache-write price", got[1]);
     assert.deepEqual(got.slice(2), ["", ""]);
   });

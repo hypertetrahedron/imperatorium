@@ -72,6 +72,7 @@ mod signing;
 mod statever;
 mod settings;
 mod slash;
+mod spawn;
 mod store;
 #[cfg(feature = "streamdeck")]
 mod streamdeck;

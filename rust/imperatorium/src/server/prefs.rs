@@ -62,6 +62,7 @@ impl Shared {
             "quick.phrases",
             "budget.thresholds",
             "list.hide_finished_hours",
+            "worktrees.confirm",
         ];
         let mut cfg = self.config_live.wr();
         let mut copy = |key: &str| {

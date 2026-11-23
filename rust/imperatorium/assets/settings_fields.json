@@ -129,7 +129,7 @@
    ],
    "default": "",
    "applies": "live",
-   "help": "For sessions started with `claude --bg` (New in bg, Fork in bg, dispatch). Blank uses your own Claude Code settings. Bypass modes can only be set in config.json."
+   "help": "For sessions started with `claude --bg` (the Send button's background options, Resume in bg, dispatch) and for the first turn of a session with context started while its parent is mid-turn. Blank uses your own Claude Code settings. Bypass modes can only be set in config.json."
   },
   {
    "key": "background.model",
@@ -148,6 +148,15 @@
    "default": "",
    "applies": "live",
    "help": "A subagent to run the session as. Blank for none."
+  },
+  {
+   "key": "worktrees.confirm",
+   "section": "worktrees",
+   "label": "Ask before making a worktree",
+   "type": "bool",
+   "default": true,
+   "applies": "live",
+   "help": "When a new session would get a git worktree of its own (another session is already running in that folder), say so first and offer to share the folder instead. Off: the worktree is made without asking. A warning about uncommitted files is still shown."
   },
   {
    "key": "list.hide_finished_hours",
@@ -732,6 +741,10 @@
   [
    "background",
    "Background sessions"
+  ],
+  [
+   "worktrees",
+   "Worktrees"
   ],
   [
    "notify",

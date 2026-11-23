@@ -120,7 +120,10 @@ instead of guessing from a status dot on another screen. What Claude writes
 is rendered as Markdown - bold and italic, inline code, links, headings,
 lists, quotes, code blocks and tables - by a small renderer in the window's own script, not
 a library, so the page still loads with no network. Enter sends to that
-session; ctrl+Enter hands the work to a fresh background session. The prompt
+session. The Send button's menu starts another session instead: Send to New
+Session, Send to New Session with Context (a fork of this conversation), and
+the same two in the background (ctrl+Enter and ctrl+shift+Enter). See
+[New sessions and worktrees](#new-sessions-and-worktrees). The prompt
 box keeps an unsent draft per session (in this browser), so switching away
 mid-sentence and back loses nothing.
 
@@ -218,8 +221,11 @@ Code does not document, so a Claude Code release can move them; the goldens
 
 Tabs above the conversation show the session's **Changes** (git status and
 diff), its **Activity** (every tool call, what failed and why) and the
-project's **Worktrees** (the branches background sessions leave, each with
-the branch it was made from, and merge into that branch, PR and discard). The header offers Fork, and Resume for a session that has
+project's **Worktrees** (the branches new sessions are given, each with
+the branch it was made from, the sessions working in it, and merge into that
+branch, PR and discard). A session in a worktree can also merge it back from
+the View menu, which opens any session's folder in VS Code too; History names a
+worktree's sessions under their project. The header offers Fork, and Resume for a session that has
 finished. **Queue** (alt+Enter) holds a prompt until the session's current
 turn ends. The sidebar groups by state or folder, pins, archives and
 filters; each tile says what the session is doing now, its context use and
@@ -500,6 +506,7 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | GET | `/api/worktrees` | `?project=` - linked worktrees, ahead/behind/dirty |
 | GET | `/api/worktree_diff` | `?project=&path=` - what a worktree's branch would bring |
 | POST | `/api/worktree` | `{project, path, action: merge\|pr\|discard, force}` |
+| POST | `/api/spawn` | `{kind: new\|fork\|resume, where: window\|background, session_id, cwd, prompt, plan, worktree, copy}` - only from the window: start another session where the worktree rules put it; with `plan`, only say where |
 | GET | `/api/history` | `?q=` - search past sessions |
 | POST | `/api/resume` | `{session_id, where: window\|background, fork, prompt}` |
 | POST | `/api/new` | `{session_id, cwd, close}` - a fresh session in that project, in a new tab; answers its `session_id`. With `close`, the old session is then ended (typed `/exit`, killed if it stays) |
@@ -538,6 +545,40 @@ Code, the worktree would come from the remote's default branch. A folder
 that is not a git repository runs the session in place. It still reports
 through the same hooks, so it shows on the board and turns its key orange if
 it gets blocked. Options for it live under `background` in `config.json`.
+
+### New sessions and worktrees
+
+The window starts other sessions from the Send button's menu, the New
+session dialog (which can start one in the background), and Resume. All of
+them go through `/api/spawn`, which decides where the session runs so that
+two running sessions never share a checkout by accident:
+
+| Case | Where it runs |
+|---|---|
+| New session, nobody running in the project's main checkout | The main checkout |
+| New session, a session is running there | A new worktree from what the main checkout has checked out |
+| With context (a fork) of a running session | A new worktree from the parent's branch |
+| With context, the parent has ended and its folder is free | The parent's own folder |
+| Resume, its folder is free | Its own folder |
+| Resume, its folder is taken | A new worktree; edits it left uncommitted stay where they were |
+| Not a git repository | The same folder, with a warning |
+
+Before a worktree is made the window says so and offers to share the folder
+instead (Settings > Worktrees turns that question off). A fork of a folder with
+uncommitted files is always warned about: a worktree starts from the last
+commit, so the fork would remember changes its folder does not have. Copy and
+continue copies them in (they then exist in both places, and merging back may
+conflict), or it can start without context. The new session's first message
+starts with a short `[Imperatorium]` note saying where it is and what else is
+running.
+
+A fork of a session that is mid-turn starts from the end of its last finished
+turn, so it never sees the turn still running. Only print mode can cut a
+conversation there (`--resume-session-at`), so that fork's first message runs
+as `claude -p` in the background-session permission mode, with its approvals
+in the window like any background session's; a tab then opens on it, or a
+background fork is left to continue with Resume in bg. See
+`docs/print-mode-spike.md`.
 
 Bound to `127.0.0.1`. POSTs must be JSON and must carry no `Origin` header: a
 cross-origin `fetch` with a plain-text body is a CORS "simple request", so a

@@ -37,6 +37,7 @@ mod hook;
 mod prefs;
 mod route;
 mod snapshot;
+mod spawn;
 mod spend;
 mod views;
 

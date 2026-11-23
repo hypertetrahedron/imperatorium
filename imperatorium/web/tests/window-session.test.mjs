@@ -662,14 +662,13 @@ describe("Controls", () => {
     // jump's, to keep the two pairs apart.
     const html = renderShell();
     const head = html.slice(html.indexOf("id=headrow"), html.indexOf("id=sessionpane"));
-    const order = ["id=headtext", "id=tabpick", "id=launch", "id=viewmenu", "id=findbar", "id=acts", "id=jump"]
+    const order = ["id=headtext", "id=tabpick", "id=viewmenu", "id=findbar", "id=acts", "id=jump"]
       .map((n) => head.indexOf(n));
     assert.ok(order.every((i) => i >= 0), String(order));
     assert.deepEqual(order, [...order].sort((a, b) => a - b));
-    const launch = head.slice(head.indexOf("id=launch"), head.indexOf("id=viewmenu"));
-    for (const act of ["data-act=new ", "data-act=new-close", "data-act=fork-window", "data-act=fork-background"]) {
-      assertIn(act, launch);
-    }
+    // The New / Fork menu gave way to the Send button's menu (2026-11-22).
+    assertNotIn("id=launch", html);
+    for (const act of ["data-act=new-close", "data-act=fork-window", "data-act=fork-background"]) assertNotIn(act, html);
     const view = head.slice(head.indexOf("id=viewmenu"), head.indexOf("id=findbar"));
     for (const needle of ["data-act=show", "data-act=copy", "id=curbtn", "id=shape"]) assertIn(needle, view);
     assertNotIn("id=strip", html);
@@ -712,7 +711,9 @@ describe("FollowNewSession", () => {
     for (const needle of ["follow(r.session_id)", "catchFollowed();"]) assertIn(needle, SCRIPT);
     // Show Window is in the View menu since 2026-11-17.
     assertIn(">Show Window</button>", renderShell());
-    // New+close lives in the header's New / Fork menu, in the shell.
-    for (const needle of ["data-act=new-close", ">New+close<"]) assertIn(needle, renderShell());
+    // New+close is gone since 2026-11-22 (/new does it); new sessions start
+    // from the Send button's menu.
+    for (const needle of ["data-act=new-close", ">New+close<"]) assertNotIn(needle, renderShell());
+    assertIn('data-spawn="new window"', renderShell());
   });
 });

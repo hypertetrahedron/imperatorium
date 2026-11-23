@@ -33,6 +33,17 @@ function toggleIn(list, k){
 }
 
 const folder = cwd => String(cwd || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "(no folder)";
+// Pure: a worktree under a checkout's .claude/worktrees (where new sessions
+// and Claude Code put theirs): {main, name}, else null.
+const managedWorktree = cwd => {
+  const m = String(cwd || "").replace(/\\/g, "/").replace(/\/+$/, "").match(/^(.+)\/\.claude\/worktrees\/([^/]+)$/);
+  return m ? {main: m[1], name: m[2]} : null;
+};
+// Pure: a folder as History shows it - a worktree under its project's name.
+const placeName = cwd => { const w = managedWorktree(cwd); return w ? folder(w.main) + " · worktree " + w.name : folder(cwd); };
+// Pure: the same folder, whatever the slashes and case (normDir is with
+// Project Changes, below).
+const sameDir = (a, b) => !!a && !!b && normDir(a) === normDir(b);
 
 // What a tile calls a session. The server turns a worktree session's
 // made-up "<worktree>-<id>" into "<project>-<worktree>"; a chosen name stays.
@@ -477,14 +488,15 @@ function drawHead(){
   }
   const html = acts.join("");
   if ($("#acts").dataset.sig !== html){ $("#acts").innerHTML = html; $("#acts").dataset.sig = html; }
-  // New, New+close, Fork and Fork in bg live in the New / Fork menu, and
-  // Show Window and Copy resume cmd in the View menu; none applies to a
-  // remote session, and Show Window needs a running one.
+  // New sessions start from the Send button's menu (2026-11-22, in place
+  // of the New / Fork menu); Show Window and Copy resume cmd live in the
+  // View menu. None applies to a remote session, and Show Window needs a
+  // running one.
   const local = !!(s && !s.remote);
   $("#showbtn").hidden = !(local && s.pid);
-  $("#launch").hidden = !local;
-  if (!local) $("#launch").open = false;
-  $('#launch [data-act="new-close"]').hidden = !(local && s.pid);
+  document.querySelectorAll("#sendmore [data-spawn]").forEach(b => b.hidden = !local);
+  $("#editbtn").hidden = !(local && s.cwd);
+  $("#mergebtn").hidden = !(local && managedWorktree(s.cwd));
   $("#copybtn").hidden = !local;
   $("#copybtn").title = local ? s.resume_command || "" : "";
   document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => { closeMenus(); act(b.dataset.act); });
@@ -3158,10 +3170,9 @@ function coldHtml(s, now, gone){
     `<div class="ct"><b>Prompt cache expired.</b> ` +
     `Continuing this session re-sends ${esc(kfmt(w.context_tokens))} tokens of context` +
     (cost != null ? ` - about ${esc(usd(cost))} at the cache-write price` : " at the full cache-write price") +
-    `. Click to start a new session, or to close this one and start a new session.` +
+    `. Click to start a new session instead (/new does the same in this one).` +
     `<div class="cn">Or just carry on: a prompt entered as usual continues this session.</div></div><div class="segs">` +
     `<button data-coldact="new" title="a fresh session in this project, selected here; this one stays open">New session</button>` +
-    (s.pid ? `<button data-coldact="new-close" title="a fresh session in this project, selected here; this one is then closed (its conversation stays resumable)">Close this &amp; start new</button>` : "") +
     `</div></div>`;
 }
 function drawCold(s){
@@ -3803,7 +3814,7 @@ async function loadWorktrees(){
   const cards = d.worktrees.map(w => `<div class="card">
       <h3>${esc(w.branch || "(detached)")}</h3>
       <small>${esc(w.path)}</small>
-      <div class="kv" style="margin:4px 0 0">${w.agent ? "background session" : "made by hand - not managed here"} · ${
+      <div class="kv" style="margin:4px 0 0">${worktreeWho(w)} · ${
         w.ahead || 0} ahead of ${esc(w.base || d.base)}${w.base_recorded ? " (made from it)" : ""}${w.behind ? " · " + w.behind + " behind" : ""}${w.dirty ? " · <b>uncommitted changes</b>" : ""}${
         w.subject ? " · last: " + esc(w.subject) : ""}</div>
       <div class="btns"><button class="sm ghost" data-wd="${esc(w.path)}">Diff</button>${w.agent ? `
@@ -3815,7 +3826,8 @@ async function loadWorktrees(){
   if ($("#worktrees").dataset.sig === sig) return;
   $("#worktrees").dataset.sig = sig;
   $("#worktrees").innerHTML = `<div class="kv">worktrees of ${esc(d.main)} (base ${esc(d.base)})</div>${
-    cards || `<div class="note">no linked worktrees - background sessions leave theirs under .claude/worktrees</div>`}`;
+    cards || `<div class="note">no linked worktrees - a new session gets one under .claude/worktrees when another is already running in the folder</div>`}`;
+  document.querySelectorAll("[data-wpick]").forEach(b => b.onclick = () => pick(b.dataset.wpick));
   document.querySelectorAll("[data-wd]").forEach(b => b.onclick = async () => {
     const r = await get("/api/worktree_diff?project=" + encodeURIComponent(s.cwd) + "&path=" + encodeURIComponent(b.dataset.wd));
     const box = [...document.querySelectorAll(".wdiff")].find(x => x.dataset.for === b.dataset.wd);
@@ -3823,6 +3835,16 @@ async function loadWorktrees(){
       : `<div class="note">${esc(r.error)}</div>`;
   });
   document.querySelectorAll("[data-wa]").forEach(b => b.onclick = () => finishWorktree(s, b.dataset.wa, b.dataset.wp));
+}
+
+// Who a worktree card says works in it: the live sessions there (a click
+// selects one), or that none does.
+function worktreeWho(w){
+  if (!w.agent) return "made by hand - not managed here";
+  const here = sessions.filter(x => !x.remote && !x.resumable && sameDir(x.cwd, w.path));
+  return here.length ? "worked in by " + here.map(x =>
+    `<button class="sm ghost" data-wpick="${esc(key(x))}" title="select it">${esc(nameOf(x))}</button>`).join(" ")
+    : "no session running in it";
 }
 
 async function finishWorktree(s, action, path, force){
@@ -4094,33 +4116,154 @@ async function act(what){
     return;
   }
   if (what === "markdown"){ exportMarkdown(s); return; }
+  if (what === "editor"){
+    const r = await post("/api/open_path", {path: s.cwd, session_id: key(s), editor: true});
+    say(r.ok ? (r.how === "edit" ? "opened in the editor: " : "opened: ") + (r.path || s.cwd) : (r.error || "could not open it"), key(s));
+    return;
+  }
+  if (what === "mergeback") return finishWorktree(s, "merge", s.cwd);
   if (what === "show"){
     const r = await post("/api/focus", {session_id: key(s)});
     say(r.ok ? (r.note || "raised its window") : (r.error || "refused"), key(s));
     return;
   }
-  if (what === "new" || what === "new-close"){
-    const close = what === "new-close";
-    if (close && !confirm("Open a new session in " + (s.cwd || "this project") + " and close " + nameOf(s) + "?" +
-        (s.status === "busy" ? "\n\nIt is working right now - its turn will be interrupted." : ""))) return;
-    say(close ? "opening a new session and closing this one…" : "opening a new session…", key(s));
-    const r = await post("/api/new", {session_id: key(s), cwd: s.cwd || null, close});
-    if (!r.ok){ say(r.error || "refused", key(s)); return; }
-    follow(r.session_id);
-    const c = r.closed;
-    say("opened a new session in " + (s.cwd || "its project") + " - selecting it once it starts" +
-      (!c ? "" : !c.ok ? "; could not close the old one: " + (c.error || "refused")
-        : c.how === "killed" ? "; the old one had to be ended forcibly, so its tab is still open"
-        : c.tab_closed === false && c.how !== "gone" ? "; the old one has exited, its tab is still open" : "; the old one is closed"), key(s));
-    return;
-  }
+  if (what === "new") return spawnFrom("new", "window", {prompt: ""});
   const [kind, where] = what.split("-");
-  const r = await post("/api/resume", {session_id: key(s), where, fork: kind === "fork",
-    prompt: $("#prompt").value.trim() || null});
-  say(r.ok ? (r.where === "background" ? kind + "ed in the background · " + (r.id || "")
-    : r.terminal === "console" ? "opened a console window (no Windows Terminal found): " + r.command
-    : "opened a new tab: " + r.command) : (r.error || "refused"), key(s));
-  if (r.ok && where === "background") clearPrompt(key(s));
+  if (kind === "resume" || kind === "fork") return spawnFrom(kind, where);
+}
+
+// -- new sessions -------------------------------------------------------------
+// Every way the window starts another session (2026-11-22): the Send menu's
+// four options, the New session dialog, Resume and Fork. The dispatcher
+// decides where it runs (POST /api/spawn with plan: the main folder, or a
+// worktree when another session is already working there - crate::spawn),
+// this asks first when a worktree is to be made (unless Settings >
+// Worktrees says not to) or when there is something to warn about, then
+// starts it.
+
+const SPAWN_TITLE = {
+  "new window": "New session", "fork window": "New session with context",
+  "new background": "New background session", "fork background": "New background session with context",
+  "resume window": "Resume", "resume background": "Resume in the background",
+};
+
+// Pure: what the dialog says and offers for plan `p` (from /api/spawn with
+// plan), or null when there is nothing to ask. `confirm` is the
+// worktrees.confirm setting.
+function spawnAsk(p, confirm){
+  const tree = p.placement === "worktree", warn = p.warning || "";
+  if (!(tree && confirm) && !warn) return null;
+  const n = p.dirty_count || 0, files = (p.dirty || []).map(f => `<code>${esc(f)}</code>`).join(", ") +
+    (n > (p.dirty || []).length ? ` and ${n - p.dirty.length} more` : "");
+  const lines = [], buttons = [];
+  const where = `<code>${esc(p.folder)}</code>`;
+  if (tree){
+    lines.push(`<p>${p.kind === "new" ? "Another session is running in" : p.parent_live && !p.occupied
+      ? "The session it comes from is still running in" : "Another session is running in"} ${where}, so this one gets a ` +
+      `<b>git worktree</b> of its own: a new folder under <code>.claude/worktrees</code> on a new branch, made from what ` +
+      `that folder has checked out. Its edits stay apart from the other session's until you merge the branch back ` +
+      `(the Worktrees tab).</p>`);
+    if (p.kind === "new" && n) lines.push(`<p class="sbmute">${n} uncommitted file(s) in that folder will not be in the ` +
+      `worktree - it starts from the last commit.</p>`);
+  }
+  if (p.mid_turn) lines.push(`<p>It is mid-turn, so the new session starts from the end of its <b>last finished turn</b>` +
+    (p.where === "window" ? " - its first message runs here first, and the tab opens when that turn ends." : ".") + `</p>`);
+  if (warn === "dirty"){
+    lines.push(`<p class="sbwarn"><b>${n} uncommitted file(s)</b> in ${where}: ${files}.</p>` +
+      `<p>A worktree starts from the last commit, so the new session would remember changes its folder does not have. ` +
+      `<b>Copy and continue</b> puts them in the worktree too: the changes then exist in both places, and merging the ` +
+      `branch back later may conflict - you resolve that yourself.</p>`);
+    buttons.push(["copy", "Copy changes and continue", ""], ["nocontext", "Start without context", "ghost"]);
+  } else if (warn === "behind"){
+    lines.push(`<p class="sbwarn"><b>${n} uncommitted file(s)</b> it left in ${where} stay there: ${files}. ` +
+      `Its worktree starts from the last commit.</p>`);
+    buttons.push(["tree", "Resume in a worktree", ""]);
+  } else if (warn === "shared"){
+    lines.push(`<p class="sbwarn">${where} is not a git repository, so it cannot have a worktree: both sessions will ` +
+      `work in the same folder and may change the same files.</p>`);
+    buttons.push(["here", "Start anyway", ""]);
+  } else if (tree){
+    buttons.push(["tree", "Create worktree", ""]);
+  }
+  if (tree) buttons.push(["here", "Use the same folder", "ghost"]);
+  buttons.push(["cancel", "Cancel", "ghost"]);
+  return {body: lines.join(""), buttons, foot: tree && confirm
+    ? "Turn this question off in Settings > Worktrees. Warnings about uncommitted files still show." : ""};
+}
+
+// The dialog: resolves with the button's name, or "cancel".
+function spawnDialog(title, ask){
+  return new Promise(done => {
+    const box = $("#spawnbox");
+    $("#sbtitle").textContent = title;
+    $("#sbbody").innerHTML = ask.body;
+    $("#sbfoot").textContent = ask.foot; $("#sbfoot").hidden = !ask.foot;
+    $("#sbbar").innerHTML = ask.buttons.map(([k, label, cls]) =>
+      `<button data-sb="${k}"${cls ? ` class="${cls}"` : ""}>${esc(label)}</button>`).join("");
+    const finish = k => { box.hidden = true; box.onclick = null; box.onkeydown = null; done(k); };
+    box.onclick = e => {
+      const b = e.target.closest("[data-sb]");
+      if (b) finish(b.dataset.sb);
+      else if (e.target === box || e.target.closest("[data-sbclose]")) finish("cancel");
+    };
+    box.onkeydown = e => { if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); finish("cancel"); } };
+    box.hidden = false;
+    const first = $("#sbbar button");
+    if (first) first.focus();
+  });
+}
+
+async function worktreeConfirm(){
+  try {
+    const s = await get("/api/settings");
+    const f = (s.fields || []).find(x => x.key === "worktrees.confirm");
+    return !f || f.value !== false;
+  } catch (e) { return true; }
+}
+
+// Pure: the status line once it started.
+function spawnOutcome(r){
+  const at = r.placement === "worktree" ? " in a new worktree (" + (r.branch || "") + ")" : "";
+  if (r.first_turn === "headless") return (r.where === "window"
+    ? "its first message is running" + at + "; the tab opens when that turn ends"
+    : "started in the background" + at + " from the end of the last finished turn");
+  if (r.where === "background") return "started in the background" + at + (r.bg_id ? " · " + r.bg_id : "");
+  return (r.kind === "resume" ? "resumed" : "opened a new session") + at +
+    (r.terminal === "console" ? " in a console window (no Windows Terminal found)" : "") + " - selecting it once it starts";
+}
+
+// kind: new | fork | resume; where: window | background. `o`: session_id
+// (default: the selected session), cwd, prompt (default: the prompt box),
+// and the New session dialog's permission_mode, model, effort.
+async function spawnFrom(kind, where, o = {}){
+  const s = current();
+  const sid = o.session_id !== undefined ? o.session_id : (s ? key(s) : null);
+  const k = s ? key(s) : undefined;
+  const fromBox = o.prompt === undefined;
+  const text = fromBox ? $("#prompt").value.trim() : o.prompt;
+  if (where === "background" && kind !== "resume" && !text)
+    return say("type what the background session should do first, then send it there", k);
+  const body = {kind, where, session_id: sid, cwd: o.cwd || null, prompt: text,
+    permission_mode: o.permission_mode, model: o.model, effort: o.effort};
+  const title = SPAWN_TITLE[kind + " " + where] || "New session";
+  say("checking where it would run…", k);
+  const plan = await post("/api/spawn", {...body, plan: true});
+  if (!plan.ok){ say(plan.error || "refused", k); return plan; }
+  const ask = spawnAsk(plan, plan.placement === "worktree" ? await worktreeConfirm() : false);
+  let choice = "tree";
+  if (ask){
+    choice = await spawnDialog(title, ask);
+    if (choice === "cancel"){ say("not started", k); return {ok: false}; }
+    if (choice === "nocontext") return spawnFrom("new", where, o);
+  }
+  say("starting…", k);
+  const r = await post("/api/spawn", {...body, worktree: choice !== "here", copy: choice === "copy"});
+  if (!r.ok){ say(r.error || "refused", k); return r; }
+  if (fromBox && text) clearPrompt(k);
+  if (r.session_id && (r.where === "window" || kind === "resume")) follow(r.session_id);
+  say(spawnOutcome(r), k);
+  lastSig = ""; loadLog(true);
+  return r;
 }
 
 // A session launched from here is selected once it shows up on the board -
@@ -4214,7 +4357,7 @@ async function search(){
   if (!d.ok){ $("#hits").innerHTML = `<div class="note">${esc(d.error)}</div>`; return; }
   $("#hits").innerHTML = (d.results.map(r => `<div class="hit">
       <div class="tt">${esc(r.title || r.first_prompt || r.session_id)}</div>
-      <div class="sn">${esc(folder(r.cwd))} · ${esc(new Date(r.modified*1000).toLocaleString())}${
+      <div class="sn">${esc(placeName(r.cwd))} · ${esc(new Date(r.modified*1000).toLocaleString())}${
         r.branch ? " · " + esc(r.branch) : ""}${r.live ? " · <b>live</b>" : ""}${r.where ? " · matched in " + esc(r.where) : ""}</div>
       ${r.snippet ? `<div class="sn">${esc(r.snippet)}</div>` : ""}
       <div class="btns">${r.live ? `<button class="sm" data-open="${esc(r.session_id)}">Open</button>` :
@@ -4227,8 +4370,9 @@ async function search(){
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
     openPopup("history", false); pick(b.dataset.open); });
   document.querySelectorAll("[data-rs]").forEach(b => b.onclick = async () => {
-    const r = await post("/api/resume", {session_id: b.dataset.rs, where: b.dataset.w, fork: !!b.dataset.fork});
-    b.parentNode.insertAdjacentHTML("beforeend", `<small>${esc(r.ok ? (r.id ? "started " + r.id : "opened") : r.error)}</small>`);
+    const r = await spawnFrom(b.dataset.fork ? "fork" : "resume", b.dataset.w, {session_id: b.dataset.rs, prompt: ""});
+    if (r && (r.ok || r.error)) b.parentNode.insertAdjacentHTML("beforeend",
+      `<small>${esc(r.ok ? spawnOutcome(r) : r.error)}</small>`);
   });
   document.querySelectorAll("[data-cp]").forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.cp); b.textContent = "copied"; } catch (e) { b.textContent = b.dataset.cp; } });
@@ -4420,7 +4564,7 @@ async function slashHere(s, how, what, name){
   if (how === "window"){
     if (what === "history") return openPopup("history", true);
     if (what === "export") return exportMarkdown(s);
-    if (what === "fork") return act("fork-window");
+    if (what === "fork") return spawnFrom("fork", "window", {prompt: ""});
     if (what === "copy") return copyLastReply(s);
     if (what === "add-dir"){
       $("#prompt").value = "/add-dir "; $("#prompt").focus();
@@ -4856,7 +5000,7 @@ async function dictate(){
 // a remote host has no terminal here, so it starts as a background session
 // there (/api/dispatch), in the mode Settings gives background sessions.
 let projects = [], psel = 0;
-const MODE_KEY = "imperatorium.newMode", MODEL_KEY = "imperatorium.newModel";
+const MODE_KEY = "imperatorium.newMode", MODEL_KEY = "imperatorium.newModel", BG_KEY = "imperatorium.newBackground";
 
 // The New Session dialog's model and effort, from Claude Code's own list;
 // "" is Claude Code's default. The effort levels follow the model chosen.
@@ -4903,7 +5047,7 @@ function drawProjects(){
   $("#nbnote").textContent = !p ? "" : p.host
     ? "on " + p.host + ": starts as a background session there, in the mode Settings gives background sessions"
     : "";
-  $("#nmode").disabled = $("#nmodel").disabled = $("#neffort").disabled = !!(p && p.host);
+  $("#nmode").disabled = $("#nmodel").disabled = $("#neffort").disabled = $("#nbg").disabled = !!(p && p.host);
   return hit;
 }
 async function startProject(p){
@@ -4920,14 +5064,15 @@ async function startProject(p){
     if (r.ok){ if (text) clearPrompt(); openNew(false); }
     return;
   }
-  $("#say").textContent = "starting " + p.name + (mode !== "default" ? " in " + mode + " mode" : "") + "…";
   const model = $("#nmodel").value, effort = $("#neffort").value;
   try { localStorage.setItem(MODEL_KEY, JSON.stringify([model, effort])); } catch (e) {}
-  const r = await post("/api/new", {cwd: p.path, permission_mode: mode, model, effort});
-  if (!r.ok){ $("#say").textContent = r.error || "refused"; return; }
-  follow(r.session_id);
+  // In the background it needs a task: the prompt box, else a greeting.
+  const bg = $("#nbg").checked, text = $("#prompt").value.trim();
+  try { localStorage.setItem(BG_KEY, bg ? "1" : ""); } catch (e) {}
   openNew(false);
-  $("#say").textContent = "opened a new session in " + p.name + " - selecting it once it starts";
+  const r = await spawnFrom("new", bg ? "background" : "window", {session_id: null, cwd: p.path,
+    prompt: bg ? text || "Ready when you are." : "", permission_mode: mode, model, effort});
+  if (r && r.ok && bg && text) clearPrompt();
 }
 async function openNew(show){
   const open = show === undefined ? $("#newbox").hidden : show;
@@ -4936,6 +5081,7 @@ async function openNew(show){
   closeMenus();
   try { $("#nmode").value = localStorage.getItem(MODE_KEY) || "default"; } catch (e) {}
   if (!$("#nmode").value) $("#nmode").value = "default";
+  try { $("#nbg").checked = localStorage.getItem(BG_KEY) === "1"; } catch (e) {}
   $("#find").value = ""; psel = 0; drawProjects(); $("#find").focus();
   fillModelPicks();
   try { projects = (await get("/api/projects")).projects || []; } catch (e) {}
@@ -5302,7 +5448,12 @@ loadDictMode();
 
 $("#send").onclick = () => send("auto");
 $("#sendtyped").onclick = sendTyped;
-$("#bg").onclick = () => send("background");
+document.querySelectorAll("#sendmore [data-spawn]").forEach(b => b.onclick = () => {
+  closeMenus();
+  const [kind, where] = b.dataset.spawn.split(" ");
+  if (view === "fleet") return;
+  spawnFrom(kind, where);
+});
 $("#queue").onclick = queue;
 $("#prompt").addEventListener("keydown", e => {
   const sk = e.ctrlKey || e.altKey || e.shiftKey ? false :
@@ -5316,7 +5467,12 @@ $("#prompt").addEventListener("keydown", e => {
   if (sk === true){ e.preventDefault(); completeSlash(slashSel); return; }
   if (quick.key && comboOf(e) === quick.key){ e.preventDefault(); openQuick(true); return; }
   if (e.key === "Enter" && e.altKey){ e.preventDefault(); queue(); return; }
-  if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(e.ctrlKey ? "background" : "auto"); }
+  // ctrl+Enter: a new background session; ctrl+shift+Enter: one with this
+  // session's context.
+  if (e.key === "Enter" && e.ctrlKey && view !== "fleet"){
+    e.preventDefault(); spawnFrom(e.shiftKey ? "fork" : "new", "background"); return;
+  }
+  if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send("auto"); }
 });
 $("#filter").addEventListener("input", drawSessions);
 ["#sessions", "#status", "#log"].forEach(holdPresses);
@@ -5620,7 +5776,7 @@ document.addEventListener("keydown", e => {
   const k = (e.key || "").toLowerCase(), ctl = (e.ctrlKey || e.metaKey) && !e.altKey;
   if (ctl && k === "k"){ e.preventDefault(); openJump($("#jumpbox").hidden); return; }
   if (ctl && k === "f" && view === "session" && tab === "log"){ e.preventDefault(); openFind(true); return; }
-  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden || !$("#projbox").hidden || !$("#hookbox").hidden || !$("#slashbox").hidden) return;
+  if (!$("#jumpbox").hidden || !$("#newbox").hidden || !$("#spawnbox").hidden || !$("#histbox").hidden || !$("#insightbox").hidden || !$("#projbox").hidden || !$("#hookbox").hidden || !$("#slashbox").hidden) return;
   if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)){ e.preventDefault(); pick(visibleKeys()[+e.key - 1]); return; }
   if (e.altKey && !e.ctrlKey && k === "n"){ e.preventDefault(); goWaiting(); return; }
   // Esc in the prompt box stops a working session's turn, as at its

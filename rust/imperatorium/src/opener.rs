@@ -123,6 +123,22 @@ pub fn open(path: &Path, reveal: bool) -> Result<&'static str, String> {
             }
         }
     };
+    open_as(path, what)
+}
+
+/// A folder (a session's checkout or worktree) or a file in the editor: VS
+/// Code when `code` is on PATH; else a folder opens as Open would and a
+/// file goes to Notepad. What was done.
+pub fn open_in_editor(path: &Path) -> Result<&'static str, String> {
+    let meta = std::fs::metadata(path).map_err(|_| format!("not found: {}", path.display()))?;
+    let testing = crate::paths::env_nonempty(TEST_LOG_ENV).is_some();
+    if meta.is_dir() && !testing && crate::launch::which("code").is_none() {
+        return open(path, false);
+    }
+    open_as(path, "edit")
+}
+
+fn open_as(path: &Path, what: &'static str) -> Result<&'static str, String> {
     if let Some(log) = crate::paths::env_nonempty(TEST_LOG_ENV) {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()

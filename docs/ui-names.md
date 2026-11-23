@@ -88,9 +88,10 @@ the Chat Matrix; everything else is filled in by the script).
     tile shows)
   - **Header Controls** `#headctl`, left to right:
     - Tab Picker `#tabpick`: Conversation, Changes, Activity, Worktrees
-    - **New / Fork Menu** `#launch`: New, New+close, Fork, Fork in bg
     - **View Menu** `#viewmenu`: Show Window (`#showbtn`, for a running
-      session on this machine), Copy Resume Button (`#copybtn`), Current
+      session on this machine), Copy Resume Button (`#copybtn`), Open Folder
+      in Editor (`#editbtn`), Merge Worktree Back (`#mergebtn`, for a
+      session in a worktree under `.claude/worktrees`), Current
       Prompt Button (`#curbtn`), Display Shapes (`#shape`) with Group Tool
       Calls (`[data-group]`, off by default) under the Tool results row,
       and under them Display Times (`[data-times]`, off by default: each
@@ -172,10 +173,12 @@ the Chat Matrix; everything else is filled in by the script).
   - **Prompt Box** `#prompt`
   - **Send Bar** `#bar`
     - **Send Split** `.split`: Send `#send` and the Send Menu `#sendmore`
-      (its ▾), which holds Send As Typed `#sendtyped`
+      (its ▾), which holds the New Session Options (`[data-spawn]`: Send to
+      New Session, ... with Context, Send to New Background Session, ...
+      with Context) and Send As Typed `#sendtyped`
     - Stop `#stop` (only while the session works; Esc in the Prompt Box
       does the same)
-    - Queue `#queue`, Background `#bg`, Dictate `#mic`
+    - Queue `#queue`, Dictate `#mic`
     - Say Line `#say`
   - **Heavy Warning** `#heavy`
   - **Status Panel** `#status`
@@ -198,11 +201,18 @@ opens from the Prompt Box
 **5. New Session Dialog** `#newbox`: from the Sidebar Menu
 - Project Search `#find`
 - Project List `#projects`, made of Project Rows (`.p`)
-- Permission Mode `#nmode`
+- Permission Mode `#nmode`, Model `#nmodel`, Effort `#neffort`
+- Background Option `#nbg`: start it in the background, the Prompt Box as its task
 - Remote Note `#nbnote`, Start `#nstart`, Cancel `#ncancel`, Key Hints `.keys`
 
 **6. Path Menu** `#pathmenu`: a click on a Path in the chat - the path
 (`.cap`), then Open, Open folder, Copy path (`[data-pact]`)
+
+**7. New Session Check** `#spawnbox`: before another session is started in a
+worktree, or when there is something to warn about - Check Text `#sbbody`
+(with a Warning `.sbwarn`), Check Buttons `#sbbar` (`[data-sb]`: Create
+worktree, Use the same folder, Copy changes and continue, Start without
+context, Cancel), Check Footer `#sbfoot`
 
 ## Chat Matrix window
 
