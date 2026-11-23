@@ -394,7 +394,10 @@ mod tests {
         sh(&m, &["add", "."]);
         sh(&m, &["commit", "-q", "-m", "init"]);
         assert!(dirty(&m).is_empty());
-        assert_eq!(main_checkout(&m).map(|p| p.to_lowercase()), Some(m.to_lowercase()));
+        // Canonical on both sides: a short TEMP (`C:\Users\RUNNER~1`) names
+        // the folder git reports by its long name.
+        let found = main_checkout(&m).expect("a main checkout");
+        assert_eq!(std::fs::canonicalize(&found).unwrap(), std::fs::canonicalize(&main).unwrap());
 
         std::fs::write(main.join("f.txt"), "one\ntwo\n").unwrap();
         std::fs::remove_file(main.join("gone.txt")).unwrap();
