@@ -227,8 +227,12 @@ impl Shared {
             if extra.is_empty() {
                 continue;
             }
-            // Only a failure needs the transcript: did it get past it?
-            let past = if extra.get("attention_kind").and_then(Value::as_str) == Some("failure") {
+            // Only a failure, or a "waiting for you" the session seems to
+            // have left, needs the transcript: did it get past it?
+            let failure = extra.get("attention_kind").and_then(Value::as_str) == Some("failure");
+            let left = waiting_for_you(extra)
+                && registry::moved_on(row, extra.get("attention_since").and_then(Value::as_f64));
+            let past = if failure || left {
                 self.stats.read(&sid, Self::now()).as_ref().and_then(moved_past)
             } else {
                 None
@@ -767,6 +771,13 @@ fn moved_past(stat: &Value) -> Option<f64> {
         .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))
 }
 
+/// The recorded attention is the turn-is-over kind ("waiting for you", the
+/// row's "complete"), not a permission, a question or a failure.
+fn waiting_for_you(extra: &Map<String, Value>) -> bool {
+    extra.get("attention_kind").and_then(Value::as_str) != Some("failure")
+        && extra.get("last_notification").and_then(Value::as_str) == Some("idle_prompt")
+}
+
 /// Control._overlay: fold what hooks recorded into a row. Read-only here:
 /// where Python would also clear stale attention in the store, this only
 /// leaves it off the row (Python's next snapshot does the same).
@@ -817,6 +828,15 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>, past: Option<f64>) -> bool
             .iter()
             .find_map(|k| extra.get(*k).and_then(Value::as_f64).filter(|v| *v > 0.0));
         matches!((failed_at, past), (Some(f), Some(p)) if p > f)
+    } else if waiting_for_you(extra) {
+        // Busy again is not enough: Claude Code's idle compaction makes the
+        // session busy with no prompt, no reply and no Stop, and clearing
+        // here left a finished session "ready" for good (2026-11-23). It
+        // takes a prompt or reply after the wait began; until then
+        // still_running hides it, and a real turn's Stop clears it anyway.
+        let since = since.and_then(Value::as_f64);
+        registry::moved_on(row, since)
+            && matches!((since, past), (Some(s), Some(p)) if p > s)
     } else {
         registry::moved_on(row, since.and_then(Value::as_f64))
     };
@@ -894,6 +914,51 @@ mod overlay_tests {
         let mut row = obj(json!({"status": "idle"}));
         assert!(!overlay(&mut row, &both, Some(800.0)));
         assert_eq!(row["attention"], true);
+    }
+
+    /// The store's record after the turn ended and Claude Code said
+    /// idle_prompt at 1000.
+    fn waiting() -> Row {
+        obj(json!({"attention_since": 1000.0, "attention_kind": "notification",
+                   "attention_reason": "waiting for you", "last_notification": "idle_prompt",
+                   "last_event": "Notification"}))
+    }
+
+    #[test]
+    fn idle_compaction_does_not_settle_waiting_for_you() {
+        // 2026-11-23, imperatorium-0a: compacted while idle - busy with no
+        // prompt and no reply after the wait began. Hidden while it runs...
+        let mut row = obj(json!({"status": "busy", "status_at_change": "busy",
+                                 "status_changed_at": 1500.0}));
+        assert!(!overlay(&mut row, &waiting(), Some(990.0)));
+        assert!(!row.contains_key("attention"));
+        assert!(!overlay(&mut row, &waiting(), None));
+        // ...and back when it is idle again, still "waiting for you".
+        let mut row = obj(json!({"status": "idle", "status_at_change": "idle",
+                                 "status_changed_at": 1600.0}));
+        assert!(!overlay(&mut row, &waiting(), Some(990.0)));
+        assert_eq!(row["attention"], true);
+        assert_eq!(row["attention_since"], 1000.0);
+    }
+
+    #[test]
+    fn a_new_prompt_settles_waiting_for_you() {
+        let mut row = obj(json!({"status": "busy", "status_at_change": "busy",
+                                 "status_changed_at": 1500.0}));
+        assert!(overlay(&mut row, &waiting(), Some(1490.0)));
+        assert!(!row.contains_key("attention"));
+    }
+
+    #[test]
+    fn a_permission_wait_is_still_settled_by_working_again() {
+        // Answered in the terminal: no prompt follows, only the work.
+        let mut rec = waiting();
+        rec.insert("last_notification".into(), json!("permission_prompt"));
+        rec.insert("attention_reason".into(), json!("needs permission"));
+        let mut row = obj(json!({"status": "busy", "status_at_change": "busy",
+                                 "status_changed_at": 1500.0}));
+        assert!(overlay(&mut row, &rec, None));
+        assert!(!row.contains_key("attention"));
     }
 
     #[test]

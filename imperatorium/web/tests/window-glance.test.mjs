@@ -31,6 +31,20 @@ describe("Unread", () => {
     assert.deepEqual(got, [[false, false], [false, true], false, false]);
   });
 
+  it("a status change with no new turn is not new (idle compaction, 2026-11-23)", () => {
+    // Read after its Stop at 100; at 300 Claude Code compacted it while idle:
+    // busy and back, the status time moved, no Stop.
+    const got = glanceJs(cat(
+      "(() => { const a = {id: 'a', status: 'idle', status_changed_at: 101, last_stop_at: 100};",
+      " seenAt = updateSeen({}, [a], 'a', 200); selected = null;",
+      " a.status_changed_at = 300; const compacted = isUnread(a);",
+      " a.last_stop_at = 400; a.status_changed_at = 401; const turned = isUnread(a);",
+      " const b = {id: 'b', status: 'idle', status_changed_at: 500}; seenAt.b = 200;",
+      " return [compacted, turned, isUnread(b)]; })()"));
+    // A real turn is new; with no Stop heard the status time still counts.
+    assert.deepEqual(got, [false, true, true]);
+  });
+
   it("gone sessions drop out but an empty list changes nothing", () => {
     const got = glanceJs(cat(
       "[updateSeen({a: 5, b: 6}, [{id: 'a', status: 'busy'}], null, 9),",

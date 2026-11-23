@@ -99,6 +99,15 @@ The first release of the native build: 0.4.0.
   a download that is cut short runs nothing.
 - `install.sh` says that macOS builds are experimental.
 
+### Fixed
+
+- A finished session that Claude Code compacted while idle no longer turns
+  from "complete" to "ready" with a "new" badge. The compaction makes the
+  session busy for a moment with no prompt and no turn. That used to clear its
+  "waiting for you" for good, and the window took the moment for a finished
+  turn. Now a wait is cleared only by a new prompt or reply, and "new" goes by
+  when the last turn ended.
+
 ### Breaking
 
 - The Python implementation is gone from this line (the last version with it is

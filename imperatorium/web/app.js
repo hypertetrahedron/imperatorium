@@ -2895,10 +2895,13 @@ function clearPrompt(k){
 
 // -- what changed since you last looked --------------------------------------
 // A session that finished a turn while you were looking elsewhere is marked
-// "new" until you select it. When it went idle is its status change time.
+// "new" until you select it. When it finished is its last Stop; without one
+// (no hooks heard), its status change time. Not the status change when there
+// is a Stop: Claude Code's idle compaction goes busy and back with no turn,
+// and that marked a session you had read "new" (2026-11-23).
 let seenAt = {};
 try { seenAt = JSON.parse(localStorage.getItem("imperatorium.seen") || "{}") || {}; } catch (e) { seenAt = {}; }
-const doneAt = s => s.status === "idle" && s.status_changed_at ? s.status_changed_at : 0;
+const doneAt = s => s.status !== "idle" ? 0 : s.last_stop_at || s.status_changed_at || 0;
 function isUnread(s){ return key(s) !== selected && doneAt(s) > (seenAt[key(s)] || 0) + 1; }
 
 // Pure: the seen map after a new session list. The session being looked at
