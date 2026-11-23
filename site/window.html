@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The window · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html" aria-current="page">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>The window</h1>
+<p class="lede">Every session in one list, grouped by what it needs from you. Select one
+and see what it actually said and did, without going to its terminal.</p>
+
+<pre><code>imperatorium open          # a chromeless window (Edge --app where there is one)
+http://127.0.0.1:8792/     # or open it in any browser</code></pre>
+
+<h2>Sessions, grouped by what they need</h2>
+<p>The sidebar lists every live Claude Code session, local and remote. Each tile says what
+the session is doing right now, its context use, its pull request, and at a glance how
+much else it has going: <code>-58</code> is the minutes until its prompt cache expires,
+<code>0/2/1/0</code> counts subagents, background shells, Monitors and shell processes.</p>
+<p>Every state has a colour <em>and</em> a shape, so it reads without colour too:</p>
+<table>
+  <thead><tr><th>Mark</th><th>State</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><span class="dot blue"></span> blue dot</td><td>working</td><td>in a turn</td></tr>
+    <tr><td><span class="dot green"></span> green ring</td><td>waiting on tasks</td><td>idle, but a shell, Monitor, subagent or wakeup it started is still pending</td></tr>
+    <tr><td><span class="dot violet"></span> violet check</td><td>complete</td><td>its turn ended and nothing is pending: your turn</td></tr>
+    <tr><td><span class="dot amber"></span> amber diamond</td><td>needs you</td><td>blocked on a permission prompt or a question</td></tr>
+    <tr><td><span class="dot red"></span> red cross</td><td>failed</td><td>the turn failed, and the tile says why</td></tr>
+  </tbody>
+</table>
+<p>Sessions of the same project gather under one node with a dot per session. Pin,
+archive, filter, or group by folder instead of by state. <kbd>n</kbd> (or alt+N from
+anywhere) jumps to the next session waiting for you; ctrl+K jumps to any session by name.
+Reading a waiting session's chat to the end marks it <em>reviewed</em>, which quiets its
+alerts until it next needs you.</p>
+
+<h2>The whole conversation</h2>
+<p>The chat is read straight from the session's transcript: text, tool calls and their
+results, thinking, subagent reports and Claude Code's own messages, back through every
+compaction. Each kind of text can be shown in full, as one line, or hidden. Markdown is
+rendered by the window itself, so the page loads with no network.</p>
+<ul>
+  <li><strong>Find</strong> (ctrl+F) searches all text, tool calls only, or failed results only.</li>
+  <li><strong>Click a file path</strong> to open it or its folder.</li>
+  <li><strong>Show Current Prompt</strong> pins what the session is working on above the chat.</li>
+  <li>Drafts are kept per session, so switching away mid-sentence loses nothing.</li>
+</ul>
+
+<h2>What is running underneath</h2>
+<p>While a session works, a drawer under the chat follows each running shell, Monitor and
+subagent live. The tile's <strong>Tasks</strong> line lists everything the session has
+going: the tool call in flight, background shells, subagents with the call each is in,
+scheduled wakeups, the processes its shells started, its MCP servers and any hook
+failures. Click one to see its output, read a subagent as a chat of its own (with its
+model, tokens and cost), or end a stray process.</p>
+
+<h2>Changes, Activity, Worktrees</h2>
+<p>Tabs above the conversation show the session's <strong>Changes</strong> (git status and
+the diff, where clicking a line leaves a review comment that goes to the session), its
+<strong>Activity</strong> (every tool call, what failed and why) and the project's
+<strong>Worktrees</strong>. See <a href="parallel.html">Parallel sessions</a>.</p>
+<figure>
+  <img src="images/changes.png" alt="The Changes tab: branch, changed files and the diff against HEAD">
+  <figcaption>The Changes tab. (Demo data.)</figcaption>
+</figure>
+
+<h2>The Chat Matrix</h2>
+<p>A second window with a tile for every running session, sized to fill the screen. Each
+tile holds only Claude's replies and the one step in flight, outlined in its state's
+colour. Put it on a spare monitor and watch twenty sessions at once; double-click a tile
+to open that session in the main window. Spare cells become a status tile with the usage
+meters, model mix and what the open sessions have cost.</p>
+
+<h2>Settings, History, Insights</h2>
+<p>Settings is a window of its own with a search box, for everything you would otherwise
+edit in <code>config.json</code>. A save checks every value first and keeps the previous
+file. <strong>History</strong> searches every past session to resume or fork it;
+<strong>Insights</strong> tallies tool failures across projects and what the last 7, 30
+or 90 days would cost at API list prices.</p>
+<figure>
+  <img src="images/shortcuts.png" alt="The Settings window's keyboard shortcut list">
+  <figcaption>Every keyboard shortcut, listed at the bottom of Settings. (Demo data.)</figcaption>
+</figure>
+<nav class="pager"><a href="index.html">← Overview</a><a href="sending.html">Sending work →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

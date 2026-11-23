@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Other machines · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html" aria-current="page">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Other machines and containers</h1>
+<p class="lede">Sessions on the machines you reach over SSH, and in containers, show and
+take work just like local ones. The host needs no agent, no daemon and no open port: just
+a key you already use.</p>
+
+<h2>Adding a host</h2>
+<pre><code>imperatorium remote add HOST              # user@host or an ~/.ssh/config alias
+imperatorium remote add HOST --label pi
+imperatorium remote check                 # what each host has and lacks
+imperatorium remote remove HOST [--purge]</code></pre>
+<p><code>remote add</code> walks through everything a host needs, and every step is safe to
+repeat: an SSH key login (it offers to make and copy one), Claude Code there (it offers
+Anthropic's installer), the binary (copied and checked by SHA-256), the reporting hooks,
+and the host entry in your config.</p>
+
+<h2>As controllable as a local session</h2>
+<ul>
+  <li><strong>Seen</strong>: each host is polled over SSH on a thread of its own, so a slow or sleeping host only delays its own sessions.</li>
+  <li><strong>Attention</strong>: a reverse SSH tunnel carries the host's hook events back, so its permission prompts and failed turns arrive at once. The tunnel lands on a listener that takes hook events and nothing else, and a host can only describe its own sessions.</li>
+  <li><strong>Prompts</strong>: piped over SSH to the session's own inbox on the host. The token travels on stdin, never on a command line.</li>
+  <li><strong>Conversations, cache and cost</strong>: read on the host by the same code that reads local ones, over one kept SSH channel, so a read takes milliseconds.</li>
+  <li><strong>Approvals</strong>: the host's requests show in your window's banner, led by its name. Nothing is auto-approved on a remote host.</li>
+</ul>
+<p>Remote projects are named with their host, <code>devbox/laser-ledger</code>, because
+firing a prompt at the wrong machine is the same mistake as firing it at the wrong
+repository.</p>
+
+<h2>Containers</h2>
+<p>A host entry with <code>"container": NAME</code> is reached with <code>docker exec</code>,
+on this machine or on an SSH host.</p>
+<nav class="pager"><a href="usage.html">← Usage</a><a href="hands-free.html">Voice and keys →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

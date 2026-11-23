@@ -94,6 +94,10 @@ http://127.0.0.1:8792/                       # or any browser
 On Windows, `ctrl+alt+backquote` raises it from anywhere (the first free key
 from `palette.hotkey` in `config.json`).
 
+The [introduction site](https://hypertetrahedron.github.io/imperatorium/)
+shows what the window can do, area by area: sending work, starting parallel
+sessions in their own worktrees, approvals, Fleet, usage and the rest.
+
 ### Is it working?
 
 ```

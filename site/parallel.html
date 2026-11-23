@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallel sessions and worktrees · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html" aria-current="page">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Parallel sessions and worktrees</h1>
+<p class="lede">Start as many sessions on one project as you like. Imperatorium makes sure
+two running sessions never edit the same checkout by accident, and shows you every branch
+they leave behind.</p>
+
+<h2>Four ways to start another session</h2>
+<p>The Send button's menu sends the prompt in the box to a <em>new</em> session instead of
+the selected one:</p>
+<ul>
+  <li><strong>Send to New Session</strong>: a fresh session in the same project.</li>
+  <li><strong>Send to New Session with Context</strong>: a fork of this conversation.</li>
+  <li><strong>Send to New Background Session</strong> (ctrl+Enter) and <strong>... with Context</strong> (ctrl+shift+Enter): the same, without opening a terminal tab. It reports to the window like any other session.</li>
+</ul>
+<p>The New session dialog (from the sidebar menu) picks a project, permission mode, model
+and effort, and can start the session in the background. History resumes or forks any past
+session.</p>
+
+<h2>Where the new session runs</h2>
+<p>Every one of those goes through the same rules:</p>
+<table>
+  <thead><tr><th>Case</th><th>Where it runs</th></tr></thead>
+  <tbody>
+    <tr><td>New session, nobody running in the main checkout</td><td>The main checkout</td></tr>
+    <tr><td>New session, a session is running there</td><td>A new worktree from what the main checkout has checked out</td></tr>
+    <tr><td>A fork of a running session</td><td>A new worktree from the parent's branch</td></tr>
+    <tr><td>A fork of a session that has ended, its folder free</td><td>The parent's own folder</td></tr>
+    <tr><td>Resume, its folder free</td><td>Its own folder</td></tr>
+    <tr><td>Resume, its folder taken</td><td>A new worktree</td></tr>
+    <tr><td>Not a git repository</td><td>The same folder, with a warning</td></tr>
+  </tbody>
+</table>
+<p>Before a worktree is made the window says so and offers to share the folder instead
+(Settings &gt; Worktrees turns the question off). A fork of a folder with uncommitted files
+is always warned about, because a worktree starts from the last commit: it can copy those
+files in, or start without context. A fork of a session that is mid-turn starts from the
+end of its last finished turn, so it never sees half a turn.</p>
+<p>The new session's first message opens with a short note saying where it is and what
+else is running, so Claude knows it is not alone.</p>
+
+<h2>Seeing the branches</h2>
+<ul>
+  <li>The <strong>Worktrees</strong> tab lists each worktree of the project with the branch it was made from, how far ahead and behind it is, whether it has uncommitted files, and the live sessions in it. Merge it into its base, open a PR, or discard it.</li>
+  <li><strong>Project changes</strong> (sidebar menu or View) shows every worktree and branch of a project at once, and first the files more than one of them changes, so a coming merge conflict shows before the merge.</li>
+  <li>From a session in a worktree, <strong>View &gt; Merge Worktree Back</strong>; <strong>Open Folder in Editor</strong> opens any session's folder in VS Code.</li>
+  <li>Sessions in a worktree group under their project in the sidebar and in History, with a branch icon.</li>
+</ul>
+<nav class="pager"><a href="sending.html">← Sending work</a><a href="attention.html">Attention →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

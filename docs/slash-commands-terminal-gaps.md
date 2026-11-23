@@ -219,7 +219,8 @@ it as a settings sheet for the session. That replaces bare `/config`
 - `/resume` → History.
 - `/export` → Export as Markdown.
 - `/exit` → Close.
-- `/branch` and `/fork` → New / Fork.
+- `/branch` and `/fork` → Fork (now Send to New Session with Context, in the
+  Send button's menu).
 - `/add-dir` → the path menu.
 - `/copy` → copy the reply.
 - `/rewind` stays in the terminal. It has no text form and no mod call.
