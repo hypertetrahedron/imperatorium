@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sending work · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html" aria-current="page">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Sending work</h1>
+<p class="lede">Send a prompt to any session without visiting it: from the window, the
+palette, the command line, a script, your voice, or another Claude session.</p>
+
+<h2>From the window</h2>
+<p>Select a session and type. <strong>Enter</strong> sends to it, even mid-turn.
+<strong>Queue</strong> (alt+Enter) holds a prompt until the current turn ends.
+<strong>Stop</strong> (or Esc in the prompt box) ends a working turn, as Esc does at its
+terminal. The Send button's menu starts another session instead; see
+<a href="parallel.html">Parallel sessions</a>.</p>
+<p>Quick phrases (ctrl+Space) put your stock lines, like "implement as recommended", into
+the box at the cursor.</p>
+<figure>
+  <img src="images/quick-phrases.png" alt="The quick phrase list open over the prompt box">
+  <figcaption>Quick phrases over the prompt box. (Demo data.)</figcaption>
+</figure>
+
+<h2>By project name, from anywhere</h2>
+<p>"project: laser ledger, implement the new feature as recommended" is matched to a
+project and delivered to that project's running session. With none running, it opens one
+with the prompt filled in.</p>
+<pre><code>imperatorium send -p "gem trip" "fix the failing test"
+imperatorium send -p "gem trip" --dry-run "fix it"    # which session would it reach?</code></pre>
+<p>A wrong match does not garble text, it fires a prompt at the wrong repository. So
+matching reports a confidence, and only a <em>certain</em> match is acted on without
+asking.</p>
+
+<h2>As you, or as a peer</h2>
+<p>With the Imperatorium mod in a session (Claude Code 2.1.287+), a prompt you send from
+the window is submitted as your own words. Anything that did not come from a person in the
+window (a script, the command line, another session) arrives framed as another session's
+message, which Claude Code treats as a request rather than your consent: it cannot answer a
+permission prompt or change settings. Dispatch sends work; approving what that work then
+asks for stays a human job.</p>
+
+<h2>Slash commands, from the window</h2>
+<p>A message starting with <code>/</code> runs as a command in the session, not as text.
+Typing <code>/</code> lists the session's commands (built-in, plugin, skill and MCP), and
+Tab completes one. The commands that draw something in the terminal are done by the window
+itself:</p>
+<ul>
+  <li><strong>Pickers</strong> for <code>/model</code>, <code>/effort</code>, <code>/fast</code> and <code>/output-style</code>, filled from Claude Code's own lists.</li>
+  <li><strong>Views</strong> for <code>/context</code>, <code>/usage</code>, <code>/status</code>, <code>/help</code>, <code>/skills</code>, <code>/hooks</code> and <code>/permissions</code>, and <code>/config</code> as a form.</li>
+  <li><strong>Window features</strong>: <code>/resume</code> opens History, <code>/export</code> saves Markdown, <code>/branch</code> forks, <code>/copy</code> copies the last reply.</li>
+  <li>The few that only a terminal can do are refused with a <strong>Show Window</strong> button and the reason.</li>
+</ul>
+
+<h2>From scripts and other agents</h2>
+<p>The same things the window does are an HTTP API on 127.0.0.1, so a script, a Stream
+Deck or another tool can drive it. POSTs must be JSON and carry no <code>Origin</code>
+header, so a web page you happen to have open cannot. The command line covers the common
+cases:</p>
+<pre><code>imperatorium sessions                    # live sessions (* = wants attention)
+imperatorium send -s NAME "prompt"       # or -p PROJECT
+imperatorium queue add SESSION "prompt"  # held until that session's turn ends
+imperatorium resume | fork | new ID      # sessions by id, id prefix or name
+imperatorium history worktree            # search past sessions</code></pre>
+<nav class="pager"><a href="window.html">← The window</a><a href="parallel.html">Parallel sessions →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

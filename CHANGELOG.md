@@ -78,6 +78,8 @@ The first release of the native build: 0.4.0.
   without context.
 - A session with context started while its parent is mid-turn begins at the
   end of the last finished turn.
+- An introduction site, https://hypertetrahedron.github.io/imperatorium/, that
+  walks new users through Imperatorium by function area.
 
 ### Changed
 

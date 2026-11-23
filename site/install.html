@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install and updates · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html" aria-current="page">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Install and updates</h1>
+<p class="lede">One binary, one command. You need
+<a href="https://claude.com/claude-code">Claude Code</a> 2.1.234 or later (2.1.224 on
+macOS and Linux) and git. Claude Code 2.1.287 or later adds the Imperatorium mod.</p>
+
+<h2>Install</h2>
+<p>The script downloads the binary for your machine from the latest release, checks its
+SHA-256 against the release's signed manifest, and runs <code>imperatorium install</code>.</p>
+<pre><code># Windows (PowerShell)
+irm https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.ps1 | iex
+
+# Windows, when PowerShell's policy blocks that (cmd.exe)
+curl -fsSLo install.cmd https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.cmd && install.cmd
+
+# Linux / macOS
+curl -fsSL https://github.com/hypertetrahedron/imperatorium/releases/latest/download/install.sh | sh</code></pre>
+<p>Prefer to read it first? Each script is short. Download it, read it, then run it with
+<code>--dry-run</code> to see what would change without changing anything. Set
+<code>IMPERATORIUM_CHANNEL=preview</code> for the preview channel.</p>
+<p><code>imperatorium install</code> asks where your projects live and which extras you want
+(dictation, Stream Deck, auto-approval, the mod, phone push, the hotkey, start at logon).
+It writes your config, adds its hooks to <code>~/.claude/settings.json</code> (backing it up
+first), and registers a service that keeps the dispatcher running: scheduled tasks on
+Windows, a systemd user unit on Linux, a launchd agent on macOS. Every step can be run
+again safely. Restart running Claude Code sessions afterwards so they pick up the hooks,
+then open the window:</p>
+<pre><code>imperatorium open</code></pre>
+<p>The Windows and Linux builds are supported; macOS builds are built by CI but not yet
+tested on a Mac. The
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/ONBOARDING.md">onboarding guide</a>
+walks through the whole thing step by step, including other machines.</p>
+
+<h2>Day to day</h2>
+<pre><code>imperatorium check                  # what is present and missing; changes nothing
+imperatorium status                 # is everything running
+imperatorium restart                # all, or one of dispatcher | streamdeck | hotkey
+imperatorium update                 # the latest release on your channel
+imperatorium update --rollback      # back to the binary before the last update
+imperatorium uninstall              # hooks, mod and service; config and state stay
+imperatorium uninstall --purge      # ...and the config and state too</code></pre>
+
+<h2>Releases you can trust</h2>
+<ul>
+  <li>Every published build is made by CI from a tag; nothing built on a developer's machine is distributed.</li>
+  <li>Each release's manifest carries an Ed25519 signature that the binary checks before it updates, and the binary's SHA-256 is checked against it.</li>
+  <li>Windows binaries carry an Authenticode signature, and release files carry build provenance attestations.</li>
+  <li>Two channels: stable by default, preview by choice. Any version can be installed exactly, and the last update can always be rolled back.</li>
+</ul>
+<p>More in <a href="https://github.com/hypertetrahedron/imperatorium/blob/main/docs/releasing.md">docs/releasing.md</a>
+and the <a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">changelog</a>.</p>
+
+<h2>Security at a glance</h2>
+<ul>
+  <li>The dispatcher listens on 127.0.0.1 only. POSTs must be JSON with no <code>Origin</code> header, so a web page cannot drive it.</li>
+  <li>Only the window's own page can send as you, confirm a Fleet proposal, or change a session's settings.</li>
+  <li>A prompt from anywhere else arrives as another session's message, which cannot answer a permission prompt.</li>
+  <li>Remote hosts' tunnels reach a listener that takes hook events and nothing else.</li>
+</ul>
+<nav class="pager"><a href="hands-free.html">← Voice and keys</a><span></span></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

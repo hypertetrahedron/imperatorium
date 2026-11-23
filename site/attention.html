@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention and approvals · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html" aria-current="page">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Attention and approvals</h1>
+<p class="lede">At twenty sessions the bottleneck is not how fast agents work, it is how
+often they stop to ask. Imperatorium brings every ask to one place, the moment it happens,
+and can answer the cheap ones for you.</p>
+
+<h2>Told the moment a session wants you</h2>
+<p>Claude Code's hooks push permission prompts and questions to the dispatcher as they
+happen, and it decides a turn is complete the instant it ends. The window's title counts
+the sessions waiting for you, "(2) Imperatorium", and its tab icon takes the most urgent
+state's colour and shape. Beyond the window, each of these can be switched on in Settings
+&gt; Notifications:</p>
+<ul>
+  <li>desktop notifications;</li>
+  <li>spoken alerts;</li>
+  <li>phone pushes through <a href="https://ntfy.sh">ntfy</a>, which only fire if a session is still waiting a minute later;</li>
+  <li>a Stream Deck key per session that turns amber when blocked and counts how long (see <a href="hands-free.html">Voice and keys</a>).</li>
+</ul>
+
+<h2>Answer from the window</h2>
+<p>A permission request waits in the window's banner with Allow and Deny until you answer
+it or hand it back to the terminal. A question (<code>AskUserQuestion</code>) shows as a
+card with its options, multi-select and free text, one question at a time with a review
+page before Submit. Requests from <a href="machines.html">remote hosts</a> show in the same
+banner, led by the host's name. <code>imperatorium pending</code> and <code>imperatorium
+allow ID</code> do the same from a terminal.</p>
+
+<h2>Auto-approval: remove prompts, never answers</h2>
+<p><code>imperatorium permission</code> is a Claude Code permission hook that answers the
+cheap asks (reading a file inside the project, <code>git status</code>, a test run) and
+forwards everything else to you unchanged.</p>
+<div class="callout">
+  <p><strong>Anything not provably cheap becomes "ask"</strong>, which is exactly the prompt
+  you would have had, so you keep the power to approve it. Refusing <code>git push</code>
+  or <code>rm -rf</code> outright would take away your ability to say yes.</p>
+</div>
+<ul>
+  <li><strong>Deny</strong> is kept for one thing: an agent changing the machinery that decides what it may do (<code>settings.json</code>, <code>policy.json</code>, the hooks, <code>--dangerously-skip-permissions</code>).</li>
+  <li><strong>Secrets</strong> (<code>.env</code>, keys, <code>.aws/</code>) are never auto-approved, but they are asked about rather than refused.</li>
+  <li><strong>Per project</strong>: auto-edit, reads outside the project, extra safe commands, and paths never to auto-approve, in <code>policy.json</code>. The most specific project path wins.</li>
+  <li><strong>Never a black box</strong>: every verdict is logged to <code>decisions.jsonl</code> and shown on the board.</li>
+  <li><strong>Fails safe</strong>: the hook does no network I/O, and every failure path means "ask".</li>
+</ul>
+<p>Auto-approval is off until you turn it on in <code>policy.json</code>, so switching it on
+is always a choice.</p>
+
+<h2>Stop a turn</h2>
+<p><strong>Stop</strong> in the window (or Esc in the prompt box) ends a working
+session's turn, as Esc at its terminal would.</p>
+<nav class="pager"><a href="parallel.html">← Parallel sessions</a><a href="fleet.html">Fleet →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

@@ -14,6 +14,10 @@ being necessary.
 
 *Sessions down the left, grouped by what they need from you; the selected session's conversation, prompt box and status panel on the right. (Demo data.)*
 
+New here? The [introduction site](https://hypertetrahedron.github.io/imperatorium/)
+walks through what Imperatorium does, area by area. This README is the full
+reference.
+
 ## Install
 
 You need [Claude Code](https://claude.com/claude-code) 2.1.234+ (2.1.224 on
@@ -225,8 +229,8 @@ project's **Worktrees** (the branches new sessions are given, each with
 the branch it was made from, the sessions working in it, and merge into that
 branch, PR and discard). A session in a worktree can also merge it back from
 the View menu, which opens any session's folder in VS Code too; History names a
-worktree's sessions under their project. The header offers Fork, and Resume for a session that has
-finished. **Queue** (alt+Enter) holds a prompt until the session's current
+worktree's sessions under their project. The header offers Resume (in a new tab or in the
+background) for a session that has finished; forks are in the Send button's menu. **Queue** (alt+Enter) holds a prompt until the session's current
 turn ends. The sidebar groups by state or folder, pins, archives and
 filters; each tile says what the session is doing now, its context use and
 its PR. A session between turns that still has a background command running

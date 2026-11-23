@@ -1,0 +1,60 @@
+# The introduction site (site/), published to GitHub Pages.
+#
+# site/ holds the pages and their stylesheet; the screenshots (docs/images)
+# and the window's fonts (imperatorium/fonts) are copied in here rather than
+# kept twice in the repository.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/images/**"
+      - "imperatorium/fonts/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Assemble the site
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site/images _site/fonts
+          cp site/*.html site/style.css _site/
+          cp docs/images/*.png _site/images/
+          cp imperatorium/fonts/*.woff2 imperatorium/fonts/OFL-*.txt _site/fonts/
+          # Every page and image a page names must be there.
+          for f in _site/*.html; do
+            grep -oE '(href|src)="[^":#]+"' "$f" | sed -E 's/^(href|src)="//; s/"$//' | while read -r ref; do
+              [ -e "_site/$ref" ] || { echo "::error file=$f::missing $ref"; exit 1; }
+            done
+          done
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

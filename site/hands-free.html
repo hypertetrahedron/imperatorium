@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice, keys and Stream Deck · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html" aria-current="page">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Voice, keys and Stream Deck</h1>
+<p class="lede">Get to the right session, and tell it what to do, with as little hunting
+as possible.</p>
+
+<h2>Dictation, on your machine</h2>
+<p>Hold <strong>F9</strong> and speak; let go, and the text lands in the prompt box. Speech
+is about 150 words a minute against 50 typed. The browser records, and a worker beside the
+dispatcher transcribes with whisper.cpp on your GPU (or a smaller model on the CPU), so
+nothing leaves the machine. Near-silence returns nothing, so a fumbled key never invents
+words.</p>
+<p>Voice fills the <em>prompt</em>, never the project. Project names are close to a worst
+case for speech recognition, and a misheard one would send work to the wrong repository.
+Picking the session costs one keystroke and removes that failure entirely.</p>
+<pre><code>imperatorium voice fetch     # the worker and the models
+imperatorium voice status</code></pre>
+
+<h2>Hotkey and palette</h2>
+<p><code>imperatorium hotkey</code> (Windows) raises the window from anywhere, opening one if
+none is running. You can give it a list of key choices; the first one Windows grants wins.
+In the window, ctrl+K jumps to any session by name, <kbd>j</kbd>/<kbd>k</kbd> move through
+the list, alt+1-9 picks a tile, and <kbd>n</kbd> goes to the next session that wants you.</p>
+
+<h2>Quick phrases</h2>
+<p>ctrl+Space in the prompt box lists your stock phrases ("implement as recommended",
+"continue as recommended", whatever you add). Type to filter, Enter to insert; nothing is
+sent until you send it.</p>
+<figure>
+  <img src="images/settings.png" alt="The Quick phrases section of the Settings window">
+  <figcaption>Quick phrases and their shortcut, in Settings. (Demo data.)</figcaption>
+</figure>
+
+<h2>Stream Deck</h2>
+<p><code>imperatorium streamdeck</code> puts one session on each key, coloured by what it is
+doing: orange blocked, blue working, green idle, grey no session. A blocked key counts how
+long it has waited, and a key that changes state flashes for five seconds. Pressing a key
+raises that exact session, or opens one. Pin your main projects to fixed keys; the other
+sessions fill the rest, blocked ones first.</p>
+<nav class="pager"><a href="machines.html">← Other machines</a><a href="install.html">Install →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

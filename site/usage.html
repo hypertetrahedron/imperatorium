@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usage and cost · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html" aria-current="page">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Usage and cost</h1>
+<p class="lede">How much of your plan is left, what each session is costing, and which
+contexts are about to get expensive, on every tile.</p>
+
+<h2>Plan meters</h2>
+<p>On a Pro or Max plan the sidebar shows the 5-hour and 7-day windows, each with a tick for
+how far through the window the clock is. Click the meter for both spend lines and a
+<strong>model mix</strong>: how output tokens split between Haiku, Sonnet, Opus and Fable,
+per window and for the open sessions. A usage-based Team or Enterprise login shows its
+monthly budget instead, as "$558 of $1000 left". A session on AWS Bedrock, Google Vertex
+AI, Microsoft Foundry or an API key has no windows, and the meter names the provider
+instead.</p>
+<p>Usage alerts warn at the thresholds you choose (80% and 95% by default) on the
+notification channels you have on.</p>
+
+<h2>The prompt cache, on every tile</h2>
+<p>A tile's <code>-58</code> is the minutes until that session's prompt cache expires. Once
+it has, the tile warns <code>cold 178k</code>, and the chat says what the next prompt will
+cost to re-read that context. You can see at a glance which session to come back to first,
+and which one has gone cold.</p>
+
+<h2>Cost per session, project and model</h2>
+<p>Cost and tokens are read from the transcripts, subagents included, and estimated at API
+list prices, so a restart loses nothing. The status panel under each chat shows the
+session's cost, context, tokens, model, permission mode, compactions and branch. A
+subagent opened from the Tasks list shows its own model, tokens and cost.</p>
+<p><strong>Insights</strong> estimates the last 7, 30 or 90 days by day, project and model,
+and tallies tool failures across projects. The Chat Matrix's status tile shows what the open
+sessions have cost and each one's share. A Fleet watch can alert you when a session costs
+more than a set amount.</p>
+<nav class="pager"><a href="fleet.html">← Fleet</a><a href="machines.html">Other machines →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

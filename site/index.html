@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html" aria-current="page">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="">
+<section class="hero">
+  <h1>Run twenty Claude Code sessions without hunting for a single window.</h1>
+  <p class="lede">Imperatorium is one place to see every Claude Code session on your
+  machine and on the machines you reach over SSH, and one way to send work to any of
+  them. It is a single native binary that runs beside the real Claude Code, not a
+  replacement for it.</p>
+  <div class="cta">
+    <a class="btn" href="install.html">Install</a>
+    <a class="btn ghost" href="https://github.com/hypertetrahedron/imperatorium">Source on GitHub</a>
+    <a class="btn ghost" href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a>
+  </div>
+</section>
+
+<figure>
+  <img src="images/window.png" alt="The Imperatorium window: sessions grouped by what they need on the left, the selected session's conversation in the middle, its status panel underneath">
+  <figcaption>Sessions down the left, grouped by what they need from you; the selected session's conversation, prompt box and status panel on the right. (Demo data.)</figcaption>
+</figure>
+
+<h2>The idea</h2>
+<p>Most ways of working with Claude are built around <em>one</em> conversation: a chat
+panel in an editor, a desktop app, a terminal tab. That is fine for one session. With
+ten or twenty running across separate repositories and several virtual desktops, the
+work stops being "talk to Claude" and becomes "find the window that needs me".</p>
+<p>Imperatorium treats finding the window as the symptom, not the problem. If you can
+send work without visiting a session, and are told the moment one actually wants you,
+most of the hunting stops being necessary.</p>
+
+<h2>What it does, by area</h2>
+<div class="grid">
+  <a class="card" href="window.html"><h3>The window</h3><p>Every session in one list, grouped by what it needs. Its full conversation, live tasks, cost and cache, without switching to its terminal.</p></a>
+  <a class="card" href="sending.html"><h3>Sending work</h3><p>Dispatch a prompt to any session by name, queue it for the end of a turn, or run slash commands from the window, including the ones that draw pickers.</p></a>
+  <a class="card" href="parallel.html"><h3>Parallel sessions and worktrees</h3><p>New sessions get their own git worktree when another is already working in the folder. See every branch, merge back, open a PR.</p></a>
+  <a class="card" href="attention.html"><h3>Attention and approvals</h3><p>Permission prompts and questions arrive in the window the moment they happen. Cheap, provably safe asks can be answered for you.</p></a>
+  <a class="card" href="fleet.html"><h3>Fleet</h3><p>Ask "who needs me?" across every session, set watches that alert you, and give any Claude Code session read access to the whole fleet.</p></a>
+  <a class="card" href="usage.html"><h3>Usage and cost</h3><p>5-hour and weekly meters, prompt-cache countdowns, list-price cost per session and per model, and budget alerts.</p></a>
+  <a class="card" href="machines.html"><h3>Other machines</h3><p>Sessions on SSH hosts and containers show and take work like local ones, with no daemon and no open port on the host.</p></a>
+  <a class="card" href="hands-free.html"><h3>Voice, keys and Stream Deck</h3><p>Local dictation, a global hotkey, a palette, quick phrases, and one Stream Deck key per session.</p></a>
+  <a class="card" href="install.html"><h3>Install and updates</h3><p>One command on Windows, Linux or macOS. Signed releases, a preview channel, and one-command rollback.</p></a>
+</div>
+
+<h2>How it compares</h2>
+<p>Imperatorium is not an editor, and does not try to be one. It sits beside whatever you
+already use and works with the sessions Claude Code itself runs. Here is what it adds on
+top of working with Claude one session at a time:</p>
+<table>
+  <thead><tr><th></th><th>One session at a time (editor panel, desktop app, terminal tab)</th><th>Imperatorium</th></tr></thead>
+  <tbody>
+    <tr><td>Scale</td><td>One conversation per window; you track the rest yourself.</td><td>Every session on this machine and your SSH hosts, in one list, sorted by who needs you.</td></tr>
+    <tr><td>Knowing when you are needed</td><td>Go and look, or watch for a terminal bell.</td><td>Permission prompts, questions, finished and failed turns push to the window, the desktop, your phone or a Stream Deck key the moment they happen.</td></tr>
+    <tr><td>Sending work</td><td>Switch to the session, then type.</td><td>Type or say "project: laser ledger, run the tests" from anywhere; it reaches that project's session, or opens one.</td></tr>
+    <tr><td>Approvals</td><td>Every ask stops the session until you get to it.</td><td>Answer from the window, the deck or the command line. Optionally, a policy answers the provably cheap ones and leaves the rest to you.</td></tr>
+    <tr><td>Parallel work</td><td>Two sessions in one folder edit the same checkout.</td><td>A new session gets a worktree when the folder is taken, and the window shows every branch, its sessions and what would conflict.</td></tr>
+    <tr><td>Cost</td><td>A number per session, if you ask.</td><td>Spend per session, per project and per model, the cache expiry on every tile, and alerts before a limit.</td></tr>
+    <tr><td>Remote machines</td><td>A separate terminal per host.</td><td>Hosts over SSH show beside local sessions; prompts, approvals and conversations work the same.</td></tr>
+    <tr><td>Footprint</td><td>Varies.</td><td>One binary, bound to 127.0.0.1, no cloud service of its own. Dictation runs on your machine.</td></tr>
+  </tbody>
+</table>
+
+<h2>Principles</h2>
+<ul>
+  <li><strong>Real Claude Code, untouched.</strong> Sessions are ordinary Claude Code sessions in your terminal. Imperatorium reads their transcripts, talks to them through Claude Code's own hooks, inbox and mod interfaces, and <code>imperatorium uninstall</code> takes its hooks, mod and service back out.</li>
+  <li><strong>Remove prompts, never answers.</strong> Auto-approval only answers what is provably cheap. Anything else is exactly the prompt you would have had.</li>
+  <li><strong>A wrong target is worse than a typo.</strong> A misheard project name would fire a prompt at the wrong repository, so matching only acts silently when it is certain, and voice fills the prompt, never the project.</li>
+  <li><strong>Nothing on the network by default.</strong> The dispatcher listens on 127.0.0.1 only, the window works offline, and phone pushes are off until you turn them on.</li>
+</ul>
+<nav class="pager"><span></span><a href="window.html">The window →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>

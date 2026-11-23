@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet · Imperatorium</title>
+<meta name="description" content="Imperatorium: one place to see and steer every Claude Code session on your machines.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site"><div class="inner">
+<a class="brand" href="index.html">Imperatorium</a>
+<nav>
+<a href="index.html">Overview</a>
+<a href="window.html">The window</a>
+<a href="sending.html">Sending work</a>
+<a href="parallel.html">Parallel sessions</a>
+<a href="attention.html">Attention</a>
+<a href="fleet.html" aria-current="page">Fleet</a>
+<a href="usage.html">Usage</a>
+<a href="machines.html">Other machines</a>
+<a href="hands-free.html">Voice and keys</a>
+<a href="install.html">Install</a>
+</nav>
+</div></header>
+<main class="prose">
+<h1>Fleet</h1>
+<p class="lede">One place to ask about every session at once, and to be told when something
+happens, without an agent that acts on its own.</p>
+
+<p><strong>Fleet</strong> is the first row of the session list. Picked, it takes the chat's
+place: your watches, what waits for you to confirm, what happened recently, and the answers
+to what you asked.</p>
+
+<h2>Ask</h2>
+<p>"Who needs me?" "What finished while I was away?" "Which session is spending the most?"
+Ask answers from a snapshot of the fleet: each session's state, how long it has waited, its
+current step and cost, the permission requests waiting, and the recent events. Sessions in
+the answer are links that open them.</p>
+<p>The answer comes from a <code>claude -p</code> with no tools, no hooks and no MCP
+servers: it can read the snapshot and nothing else. It uses your plan, so it runs only when
+you ask, and only from the window.</p>
+
+<h2>Watches</h2>
+<p>Checked by the dispatcher itself every few seconds, with no model in the loop:</p>
+<ul>
+  <li>a session, a project's sessions or any session <strong>finishes its work</strong>;</li>
+  <li>one <strong>waits for you more than N minutes</strong>;</li>
+  <li>one <strong>costs more than $N</strong>.</li>
+</ul>
+<p>When a watch comes true it is said in the window and pushed on whichever notification
+channels you have on.</p>
+
+<h2>Proposals, confirmed by you</h2>
+<p>Ask, or an agent, may <em>propose</em> a watch or an action from a short fixed menu:
+queue a prompt, stop a turn, compact, open the terminal. Nothing happens until you confirm
+it in Fleet, and only the window can confirm. A confirmed prompt arrives as another
+session's message, never as you, so it cannot approve anything. Nothing in Fleet answers a
+permission request or a question.</p>
+
+<h2>Any Claude Code session as the "super agent"</h2>
+<p><code>imperatorium mcp</code> is a stdio MCP server over the same data. Register it once
+and every Claude Code session can see the fleet: status, a session's detail and recent
+conversation, events, spend and project changes. It can propose watches and actions, and
+only propose. Text taken from a session's transcript is handed back marked as data, not
+instructions.</p>
+<pre><code>claude mcp add --scope user imperatorium -- "%LOCALAPPDATA%\Programs\imperatorium\imperatorium.exe" mcp</code></pre>
+<nav class="pager"><a href="attention.html">← Attention</a><a href="usage.html">Usage →</a></nav>
+</main>
+<footer class="site"><div class="inner">
+Imperatorium is MIT licensed. <a href="https://github.com/hypertetrahedron/imperatorium">Source</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/releases">Releases</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">Changelog</a> ·
+<a href="https://github.com/hypertetrahedron/imperatorium/blob/main/README.md">Full reference (README)</a>.
+Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.
+</div></footer>
+</body>
+</html>
