@@ -91,3 +91,13 @@ fn a_missing_file_is_said() {
     assert!(out["error"].as_str().unwrap().starts_with("not found"), "{out}");
     assert!(o.opened().is_empty());
 }
+
+#[test]
+fn view_open_folder_in_editor_opens_the_sessions_folder() {
+    let o = rig();
+    let token = o.rig.window_token();
+    let (_, out) = o.rig.post_window("/api/open_path",
+        &json!({"session_id": SID, "path": o.rig.cwd, "editor": true}), &token);
+    assert_eq!((out["ok"].clone(), out["how"].clone()), (json!(true), json!("edit")), "{out}");
+    assert_eq!(o.opened(), [format!("edit {}", std::path::Path::new(&o.rig.cwd).display())]);
+}

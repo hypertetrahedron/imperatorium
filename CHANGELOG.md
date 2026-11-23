@@ -66,8 +66,24 @@ The first release of the native build: 0.4.0.
   start a model turn. Commands only the terminal can do are refused with Show
   Window and the reason. New session lets you choose the model and effort.
 
+- Send to a new session: the Send button's menu has Send to New Session, Send
+  to New Session with Context, Send to New Background Session and Send to New
+  Background Session with Context (ctrl+Enter and ctrl+shift+Enter). The New
+  session dialog can start a session in the background.
+- New sessions get a git worktree of their own when another session is
+  already running in that folder, so two sessions don't edit the same
+  checkout. The window says so first and offers to share the folder instead
+  (Settings > Worktrees turns the question off). A fork of a folder with
+  uncommitted files warns, and can copy them into the worktree or start
+  without context.
+- A session with context started while its parent is mid-turn begins at the
+  end of the last finished turn.
+
 ### Changed
 
+- The Background button and the session header's New / Fork menu are gone:
+  their actions are in the Send button's menu. New+close and "Close this &
+  start new" are gone too (`/new` does the same).
 - Find in the chat is one Find button on the session header. It opens a
   small window with the find box, what to search, the match count and the
   earlier/later arrows, which leaves room on the header row. ctrl+F opens it

@@ -33,6 +33,9 @@ scripts, to match `assets/settings_fields.json`. Also there: the new
 The `highlight.prompts` and `highlight.colors.prompt` fields (2026-11-17)
 likewise, after `highlight.shape` and `highlight.colors.guide`, and
 `prompts` in `/api/health`'s `look.hl`.
+The `worktrees.confirm` field and its `worktrees` section (2026-11-22),
+after `background.agent` and the `background` section, and
+`background.permission_mode`'s help naming the Send button's options.
 `inbox_twin/steps.jsonl` (2026-11-21): a session's record gains
 `last_stop_at` (when its last Stop hook came, for a "finishes" watch)
 after `last_event_at`; masked as a clock in both twins.

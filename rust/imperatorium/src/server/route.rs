@@ -139,6 +139,7 @@ impl Shared {
             "/api/unqueue",
             "/api/worktree",
             "/api/resume",
+            "/api/spawn",
             "/api/new",
             "/api/close",
             "/api/dismiss",
@@ -307,8 +308,12 @@ impl Shared {
                 let cwd = row.as_ref().and_then(|r| r.get("cwd").and_then(Value::as_str)).map(std::path::PathBuf::from);
                 let home = crate::paths::user_home();
                 let reveal = truthy(p.get("reveal"));
-                (200, Body::Json(match crate::opener::resolve(raw, cwd.as_deref(), Some(&home))
-                    .and_then(|path| crate::opener::open(&path, reveal).map(|how| (path, how))) {
+                // `editor`: a folder in VS Code (View > Open Folder in Editor).
+                let editor = truthy(p.get("editor"));
+                (200, Body::Json(match crate::opener::resolve(raw, cwd.as_deref(), Some(&home)).and_then(|path| {
+                    let how = if editor { crate::opener::open_in_editor(&path) } else { crate::opener::open(&path, reveal) };
+                    how.map(|how| (path, how))
+                }) {
                     Ok((path, how)) => json!({"ok": true, "how": how, "path": path.to_string_lossy()}),
                     Err(e) => json!({"ok": false, "error": e}),
                 }))
@@ -373,6 +378,16 @@ impl Shared {
                     200,
                     Body::Json(self.send_typed(store, p.get("session_id"), p.get("prompt"))),
                 )
+            }
+            "/api/spawn" => {
+                // Starts processes and makes worktrees: only the window.
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window starts sessions this way"})));
+                }
+                let Some(store) = &self.store else {
+                    return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
+                };
+                (200, Body::Json(self.spawn(store, p)))
             }
             "/api/resume" | "/api/new" | "/api/close" => {
                 let Some(store) = &self.store else {
