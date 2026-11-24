@@ -175,7 +175,7 @@ describe("HistoryInsightsPopups", () => {
 
   /** openPopup against stub boxes: which are shown after `calls`. */
   const shown = (calls) => evalJson(cat(
-    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hookbox': {hidden: true}, '#slashbox': {hidden: true}, '#hq': {focus() {}}, '#hfolder': {value: ''}, '#histbias': {hidden: true}};\n",
+    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hookbox': {hidden: true}, '#slashbox': {hidden: true}, '#hq': {focus() {}}, '#cdays': {focus() {}}, '#hfolder': {value: ''}, '#histbias': {hidden: true}};\n",
     "let projFor = null, histBiased = false; const openFleetView = () => {}, leaveFleet = () => {};\n",
     "const $ = s => els[s]; const document = {querySelectorAll: () => []};\n",
     "let searched = 0, loaded = 0; const search = () => searched++, loadInsights = () => loaded++, closeMenus = () => {};\n",

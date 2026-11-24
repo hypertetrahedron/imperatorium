@@ -56,8 +56,10 @@ const nameOf = s => s.display_name || s.name || s.id || "(unnamed)";
 // made from, not the worktree's folder.
 const projectOf = s => (s.project || folder(s.cwd)) + (s.host ? " @ " + s.host : "");
 
+const HERE_GROUP = "this machine";
 function groupOf(s){
   if (prefs.group === "folder") return projectOf(s);
+  if (prefs.group === "host") return s.host || HERE_GROUP;
   if (prefs.group === "state"){
     if (s.attention) return s.attention_kind === "complete" ? "complete" : "needs you";
     const dot = stateOf(s)[0];
@@ -205,11 +207,14 @@ function tile(s, short, depth){
   const spend = open && statusFor === key(s) && statusData ? statusData.spend : null;
   const details = `<div class="m"><span class="det">${tileDetails(s, now, spend).map(p =>
     `<span class="${p.cls || ""}" title="${esc(p.title)}">${esc(p.text)}</span>`).join(" · ")}${
-    s.host ? " · " + esc(s.host) : ""}${prBadge(s.pr)}</span></div>`;
+    prBadge(s.pr)}</span></div>`;
   return `<div class="s${open ? " on" : ""}${mark}${isUnread(s) ? " unread" : ""}${fd ? " fk" : ""}"${
       fd ? ` style="--fd:${fd}"` : ""} data-k="${esc(key(s))}">
     <div class="t1"><span class="dot ${dot}" title="${esc(label)}"></span><span class="n" title="${esc(nameOf(s))}">${
       forkMark(s, sessions)}${s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""}${s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${
+      // Every remote tile names its machine: the same checkout on five
+      // hosts made five tiles alike (persona runs, 2026-11-24).
+      s.host && prefs.group !== "host" ? `<span class="hb" title="on ${esc(s.host)}">${esc(s.host)}</span>` : ""}${
       pinned ? `<span class="pin">★</span>` : ""}</span>${
       plain ? "" : `<span class="why" title="${esc(label)}">${esc(label)}</span>`}<span class="sig">${
       tileSignals(s, now, open)}</span>${
@@ -370,7 +375,7 @@ function showSaid(){
 function drawSessions(){
   if (held("#sessions", drawSessions)) return;
   // Whatever wants a human first, then this machine, then idle.
-  const want = s => !s.attention ? 3 : s.attention_kind === "complete" ? 2 : s.attention_kind === "failure" ? 1 : 0;
+  const want = wantRank;
   const quiet = s => ["d-idle", "d-ready", "d-rev", "d-revc"].includes(stateOf(s)[0]) ? 1 : 0;
   sessions.sort((a,b) =>
     want(a) - want(b) ||
@@ -408,6 +413,8 @@ function drawSessions(){
     names.sort((a,b) => (a==="pinned"?-1:STATE_ORDER.indexOf(a)) - (b==="pinned"?-1:STATE_ORDER.indexOf(b)));
   else if (prefs.group === "folder")
     names.sort((a,b) => a==="pinned" ? -1 : b==="pinned" ? 1 : a.localeCompare(b));
+  else if (prefs.group === "host")
+    names.sort((a,b) => a==="pinned" ? -1 : b==="pinned" ? 1 : a===HERE_GROUP ? -1 : b===HERE_GROUP ? 1 : a.localeCompare(b));
 
   const byFolder = g => prefs.group === "folder" && g !== "pinned";
   let html = names.map(g => (!byFolder(g) && (g || names.length > 1) ?
@@ -475,6 +482,18 @@ async function stopTurn(){
   return true;
 }
 
+// Pure: whether Send can send to this session, and why not. A host's
+// session takes prompts like any other once it can be reached (Enter
+// always sent them; the button was greyed for every remote row until
+// 2026-11-24, with no reason given).
+function sendState(s){
+  if (!s) return {off: true, why: "select a session"};
+  if (s.provisional) return {off: true, why: "it is still starting"};
+  if (s.remote && !s.dispatchable)
+    return {off: true, why: "not reachable yet on " + (s.host || "its host") + " - it registers on its next hook event"};
+  return {off: false, why: ""};
+}
+
 function drawHead(){
   const s = current();
   if (view !== "session") return;
@@ -482,9 +501,11 @@ function drawHead(){
   const sub = s ? headSub(s, statusFor === key(s) && statusData && statusData.stat ? statusData.stat.branch : "") : "";
   if ($("#sub").dataset.sig !== sub){ $("#sub").innerHTML = sub; $("#sub").dataset.sig = sub; }
   $("#sub").title = $("#sub").textContent;
-  const off = !s || !!s.remote || !!s.provisional;
-  $("#send").disabled = off;
-  $("#sendmore").classList.toggle("off", off);
+  const st = sendState(s);
+  $("#send").disabled = st.off;
+  $("#send").title = st.why || "Enter";
+  // New sessions start on this machine: the Send menu stays off for a host's.
+  $("#sendmore").classList.toggle("off", st.off || !!(s && s.remote));
   $("#queue").disabled = !s || !!s.provisional;
   $("#stop").hidden = !canStop(s);
   const acts = [];
@@ -2901,10 +2922,21 @@ function syncDraft(){
 }
 // After a send: clear the draft it came from, and the box only if it still
 // shows that session - the person may have moved on while it was in flight.
-function clearPrompt(k){
+// `sent`: the text that was sent. Cleared only while the box still holds
+// it: the answer can come after the person has typed or pasted the next one
+// (a persona run lost a queued prompt that way, 2026-11-24).
+function clearPrompt(k, sent){
   k = k === undefined ? draftFor : k;
+  if (sent !== undefined && promptStill(draftFor === k ? $("#prompt").value : drafts[k], sent) === false) return;
   delete drafts[k]; saveDrafts();
   if (draftFor === k) $("#prompt").value = "";
+}
+// Pure: whether a prompt box still holds what was sent from it (false when
+// something else has been typed since; null when there is nothing in it).
+function promptStill(now, sent){
+  const t = String(now || "").trim();
+  if (!t) return null;
+  return t === String(sent || "").trim();
 }
 
 // -- what changed since you last looked --------------------------------------
@@ -3092,10 +3124,15 @@ const typing = e => { const t = e.target;
   return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)); };
 const visibleKeys = () => [...document.querySelectorAll("#sessions .s")].map(el => el.dataset.k);
 
-// Pure: the next session waiting for you after `current`, the longest
-// waiting first, wrapping round.
+// Pure: how urgently a session wants you: 0 blocked (a permission request,
+// a question, input), 1 failed, 2 finished, 3 not at all.
+function wantRank(s){ return !s.attention ? 3 : s.attention_kind === "complete" ? 2 : s.attention_kind === "failure" ? 1 : 0; }
+// Pure: the next session waiting for you after `current`: blocked ones
+// first, then failed, then finished, the longest waiting first in each,
+// wrapping round. (By age alone, 16 sessions took 6-11 presses to reach
+// the one blocked on a permission request: persona runs, 2026-11-24.)
 function nextWaiting(list, current){
-  const w = list.filter(s => s.attention).sort((a, b) =>
+  const w = list.filter(s => s.attention).sort((a, b) => wantRank(a) - wantRank(b) ||
     (a.attention_since || 0) - (b.attention_since || 0) || nameOf(a).localeCompare(nameOf(b)));
   if (!w.length) return null;
   const i = w.findIndex(s => key(s) === current);
@@ -3647,7 +3684,7 @@ function openPopup(which, open){
   else if (which === "project"){ $("#pjrefresh").focus(); loadProject(); }
   else if (which === "hooks") drawHookHelp();
   else if (which === "slash") {}
-  else loadInsights();
+  else { $("#cdays").focus(); loadInsights(); }
 }
 // Kept for its callers: "session" closes the pop-ups and leaves Fleet;
 // "fleet" shows Fleet where the chat goes.
@@ -3693,6 +3730,14 @@ function diffHtml(text){
 async function loadChanges(){
   const s = current();
   if (!s){ $("#changes").innerHTML = `<div class="note">select a session</div>`; return; }
+  // Another session's diff must not stand under this one's title while
+  // this one loads (it did for about a second, and a click on it did
+  // nothing: persona runs, 2026-11-24).
+  if (changesFor !== key(s)){
+    changesFor = key(s); changesView = null; editing = null;
+    $("#changes").innerHTML = `<div class="note">reading ${esc(nameOf(s))}'s changes…</div>`;
+    $("#changes").dataset.sig = "";
+  }
   let d;
   try { d = await get("/api/changes?session=" + encodeURIComponent(key(s))); } catch (e) { return; }
   if (key(s) !== selected || tab !== "changes") return;
@@ -3712,7 +3757,7 @@ async function loadChanges(){
 
 // Line comments on the diff: click a line to comment, then send them all to
 // the session as one prompt. Kept per session in this browser until sent.
-let changesView = null, editing = null;
+let changesView = null, editing = null, changesFor = null;
 let reviews = {};
 try { reviews = JSON.parse(localStorage.getItem("imperatorium.review") || "{}") || {}; } catch (e) { reviews = {}; }
 const saveReviews = () => { try { localStorage.setItem("imperatorium.review", JSON.stringify(reviews)); } catch (e) {} };
@@ -3786,7 +3831,7 @@ async function sendReview(toBox){
   }
   say("sending review…", key(s));
   const r = await post("/api/dispatch", {session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: "auto"});
-  say(r.ok ? outcome(r) : (r.error || "refused"), key(s));
+  say(r.ok ? outcome(r) + (tab === "log" ? "" : " - the answer shows on the Conversation tab") : (r.error || "refused"), key(s));
   if (r.ok) clearReviews(key(s));
 }
 
@@ -4439,7 +4484,7 @@ async function spawnFrom(kind, where, o = {}){
     say(r.error || "refused", k);
     return r;
   }
-  if (fromBox && text) clearPrompt(k);
+  if (fromBox && text) clearPrompt(k, text);
   if (r.session_id && (r.where === "window" || kind === "resume")) follow(r.session_id);
   if (p){
     p.match = {id: r.session_id || null, bg: r.bg_id || null};
@@ -4511,7 +4556,7 @@ async function queue(){
   const text = $("#prompt").value.trim();
   if (!s || !text) return;
   const r = await post("/api/queue", {session_id: key(s), prompt: text});
-  if (r.ok){ clearPrompt(key(s)); say(r.waiting ?
+  if (r.ok){ clearPrompt(key(s), text); say(r.waiting ?
       "queued - delivered when its current turn ends (" + r.waiting + " waiting)" : "delivered now - it was idle", key(s)); }
   else say(r.error || "refused", key(s));
   queuedSig = "";
@@ -4526,10 +4571,27 @@ async function drawQueued(s){
   const sig = JSON.stringify(items);
   if (sig === queuedSig) return;
   queuedSig = sig;
-  $("#queued").innerHTML = items.map(i => `<div class="qi${i.error ? " err" : ""}"><span title="${esc(i.prompt)}">queued: ${
-    esc(i.prompt)}${i.error ? " - last try: " + esc(i.error) : ""}</span><button class="tiny" data-uq="${esc(i.id)}">cancel</button></div>`).join("");
-  document.querySelectorAll("[data-uq]").forEach(b => b.onclick = async () => {
-    await post("/api/unqueue", {session: pkey(s), id: b.dataset.uq}); queuedSig = ""; });
+  $("#queued").innerHTML = queuedHtml(items);
+  // Each change redraws at once: a second click must not land on a row
+  // the first one already removed (it was refused, unseen, 2026-11-24).
+  const act = async (path, body) => {
+    $("#queued").querySelectorAll("button").forEach(b => b.disabled = true);
+    const r = await post(path, Object.assign({session: pkey(s)}, body)).catch(() => ({ok: false, error: "the dispatcher did not answer"}));
+    if (!r.ok) say(r.error || "refused", key(s));
+    queuedSig = "";
+    await drawQueued(current());
+  };
+  document.querySelectorAll("[data-uq]").forEach(b => b.onclick = () => act("/api/unqueue", {id: b.dataset.uq}));
+  document.querySelectorAll("[data-qmv]").forEach(b => b.onclick = () => act("/api/queue/move", {id: b.dataset.qmv, by: +b.dataset.by}));
+}
+// Pure: the Queue List, in the order the prompts will be sent; each can
+// move earlier or later, or be cancelled.
+function queuedHtml(items){
+  return items.map((i, n) => `<div class="qi${i.error ? " err" : ""}"><span title="${esc(i.prompt)}">${n + 1}. ${
+    esc(i.prompt)}${i.error ? " - last try: " + esc(i.error) : ""}</span>${items.length > 1 ?
+    `<button class="tiny ghost" data-qmv="${esc(i.id)}" data-by="-1" title="send it earlier"${n ? "" : " disabled"}>&#9650;</button>` +
+    `<button class="tiny ghost" data-qmv="${esc(i.id)}" data-by="1" title="send it later"${n < items.length - 1 ? "" : " disabled"}>&#9660;</button>` : ""
+    }<button class="tiny" data-uq="${esc(i.id)}">cancel</button></div>`).join("");
 }
 
 // -- history search --------------------------------------------------------
@@ -5079,11 +5141,11 @@ async function send(mode){
   if (p && /^\/[^\s/]/.test(text)){
     // A slash command: its output, or the picker or view the window shows.
     $("#slashlist").hidden = true;
-    if (slashSettled(s, p, r) || r.ok) clearPrompt(key(s));
+    if (slashSettled(s, p, r) || r.ok) clearPrompt(key(s), text);
     return;
   }
   if (p) settleSend(key(s), p, r, r.action === "typed" ? "typed at its prompt" : "sent");
-  if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
+  if (r.ok){ clearPrompt(key(s), text); say(outcome(r), key(s)); }
   else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
 }
@@ -5103,7 +5165,7 @@ async function sendTyped(){
   catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
   busy = false;
   settleSend(key(s), p, r, "typed at its prompt");
-  if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
+  if (r.ok){ clearPrompt(key(s), text); say(outcome(r), key(s)); }
   else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
 }
@@ -5278,31 +5340,43 @@ function drawProjects(){
     ? "on " + p.host + ": starts as a background session there, in the mode Settings gives background sessions"
     : "";
   $("#nmode").disabled = $("#nmodel").disabled = $("#neffort").disabled = $("#nbg").disabled = !!(p && p.host);
+  drawTaskBox(p);
   return hit;
 }
+// The task box shows for a session that starts in the background (ticked,
+// or on a host, where every session does): the dialog used to take the
+// prompt box as the task, so opening it first started the job idle
+// (persona runs, 2026-11-24). It starts with what the prompt box holds.
+function drawTaskBox(p){
+  $("#ntask").hidden = !taskBoxShown($("#nbg").checked, !!(p && p.host));
+}
+// Pure: whether New session asks for a task.
+function taskBoxShown(bg, onHost){ return !!(bg || onHost); }
+// Pure: the task a new background session gets: the task box, else nothing.
+function newTask(box){ return String(box || "").trim(); }
 async function startProject(p){
   if (!p) return;
   const mode = $("#nmode").value;
   try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
   if (p.host){
     // No terminal here for a remote host: a background session over there.
-    const text = $("#prompt").value.trim();
+    const text = newTask($("#ntask").value);
     $("#say").textContent = "starting " + p.name + " on " + p.host + "…";
     const r = await post("/api/dispatch", {project: p.name, path: p.path, host: p.host,
       prompt: text || "Ready when you are.", confirm: true, mode: "background"});
     $("#say").textContent = r.ok ? outcome(r) : (r.error || "refused");
-    if (r.ok){ if (text) clearPrompt(); openNew(false); }
+    if (r.ok){ if (text) clearPrompt(undefined, text); openNew(false); }
     return;
   }
   const model = $("#nmodel").value, effort = $("#neffort").value;
   try { localStorage.setItem(MODEL_KEY, JSON.stringify([model, effort])); } catch (e) {}
   // In the background it needs a task: the prompt box, else a greeting.
-  const bg = $("#nbg").checked, text = $("#prompt").value.trim();
+  const bg = $("#nbg").checked, text = bg ? newTask($("#ntask").value) : "";
   try { localStorage.setItem(BG_KEY, bg ? "1" : ""); } catch (e) {}
   openNew(false);
   const r = await spawnFrom("new", bg ? "background" : "window", {session_id: null, cwd: p.path,
     prompt: bg ? text : "", permission_mode: mode, model, effort});
-  if (r && r.ok && bg && text) clearPrompt();
+  if (r && r.ok && bg && text) clearPrompt(undefined, text);
 }
 async function openNew(show){
   const open = show === undefined ? $("#newbox").hidden : show;
@@ -5312,6 +5386,7 @@ async function openNew(show){
   try { $("#nmode").value = localStorage.getItem(MODE_KEY) || "default"; } catch (e) {}
   if (!$("#nmode").value) $("#nmode").value = "default";
   try { $("#nbg").checked = localStorage.getItem(BG_KEY) === "1"; } catch (e) {}
+  $("#ntask").value = $("#prompt").value.trim();
   $("#find").value = ""; psel = 0; drawProjects(); $("#find").focus();
   fillModelPicks();
   try { projects = (await get("/api/projects")).projects || []; } catch (e) {}
@@ -5632,9 +5707,12 @@ setInterval(showUpdate, 10 * 60 * 1000);
 
 $("#new").onclick = () => openNew(true);
 $("#find").addEventListener("input", () => { psel = 0; drawProjects(); });
+$("#nbg").addEventListener("change", () => { drawProjects(); if ($("#nbg").checked) $("#ntask").focus(); });
 $("#newbox").addEventListener("keydown", e => {
   if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); openNew(false); return; }
   if (e.target.id === "nmode" || e.target.tagName === "BUTTON") return;
+  // The task box is for writing: Enter there starts only with ctrl.
+  if (e.target.id === "ntask" && !(e.key === "Enter" && (e.ctrlKey || e.metaKey))) return;
   const hit = projectHits(projects, $("#find").value);
   if (e.key === "ArrowDown"){ e.preventDefault(); psel = Math.min(psel+1, hit.length-1); drawProjects(); }
   else if (e.key === "ArrowUp"){ e.preventDefault(); psel = Math.max(psel-1, 0); drawProjects(); }
@@ -5881,6 +5959,22 @@ for (const [which, sel] of Object.entries(POPUPS)){
   $(sel).addEventListener("keydown", e => {
     if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); openPopup(which, false); }
   });
+}
+// Esc closes the open pop-up wherever focus is: each pop-up's own handler
+// needs focus inside it, and Insights took none, nor Project changes after
+// a merge (persona runs, 2026-11-24). An editor inside one that uses Esc
+// itself (a comment box, the slash list) stops it first.
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  const which = openPopupName();
+  if (!which) return;
+  // Only the pop-up: not also a turn stopped by Esc in the prompt box.
+  e.preventDefault(); e.stopImmediatePropagation();
+  openPopup(which, false);
+});
+function openPopupName(){
+  const open = Object.entries(POPUPS).find(([, sel]) => !$(sel).hidden);
+  return open ? open[0] : null;
 }
 let hqTimer;
 $("#hq").addEventListener("input", () => { clearTimeout(hqTimer); hqTimer = setTimeout(search, 350); });

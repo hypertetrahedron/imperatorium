@@ -81,6 +81,37 @@ fn dry_run_touches_nothing() {
 }
 
 #[test]
+fn an_unknown_mode_is_refused_not_launched() {
+    // A typo fell through to launch and opened a terminal window
+    // (persona runs, 2026-11-24).
+    let rig = Rig::start();
+    let out = rig.dispatch(json!({"text": TEXT, "mode": "sideways"}));
+    assert_eq!(out["ok"], json!(false), "{out}");
+    let error = out["error"].as_str().unwrap_or("");
+    assert!(error.contains("auto, inject, launch, background, dry-run"), "{error}");
+    assert!(error.contains("sideways"), "{error}");
+    assert!(rig.events().iter().all(|e| !e["kind"].as_str().unwrap_or("").starts_with("dispatch")));
+}
+
+#[test]
+fn a_dry_run_can_name_a_session() {
+    // `imperatorium send -s SESSION --dry-run` always failed: a session
+    // was honoured only in auto and inject modes.
+    let rig = Rig::start();
+    let socket = reachable(&rig, SID, "idle", json!({}));
+    let out = rig.dispatch(json!({"session_id": SID, "prompt": "hi", "mode": "dry-run"}));
+    assert_eq!(out["ok"], json!(true), "{out}");
+    assert_eq!(out["action"], json!("dry-run"));
+    assert_eq!(out["would"], json!("inject"));
+    assert_eq!(out["reachable"], json!(true));
+    let slash = rig.dispatch(json!({"session_id": SID, "prompt": "/compact", "mode": "dry-run"}));
+    assert_eq!(slash["would"], json!("command"), "{slash}");
+    let none = rig.dispatch(json!({"session_id": "no-such", "prompt": "hi", "mode": "dry-run"}));
+    assert_eq!(none["ok"], json!(false), "{none}");
+    nothing_sent(&rig, &[&socket]);
+}
+
+#[test]
 fn a_picked_path_wins_over_a_shared_name() {
     // Two folders called bookoferrantpages: the picker's one opened the
     // other, because only the name was sent and it resolved first.

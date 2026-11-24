@@ -204,7 +204,9 @@ opens from the Prompt Box
 - Project Search `#find`
 - Project List `#projects`, made of Project Rows (`.p`)
 - Permission Mode `#nmode`, Model `#nmodel`, Effort `#neffort`
-- Background Option `#nbg`: start it in the background, the Prompt Box as its task
+- Background Option `#nbg`: start it in the background
+- Task Box `#ntask`: a background session's task (shown when it starts in the
+  background or on a host; filled from the Prompt Box; empty starts it idle)
 - Remote Note `#nbnote`, Start `#nstart`, Cancel `#ncancel`, Key Hints `.keys`
 
 **6. Path Menu** `#pathmenu`: a click on a Path in the chat - the path

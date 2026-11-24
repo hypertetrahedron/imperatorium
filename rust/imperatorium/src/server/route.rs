@@ -50,7 +50,28 @@ impl Shared {
                     .unwrap_or_default();
                 let ok = store.unqueue(&sid, p.get("id").unwrap_or(&Value::Null));
                 self.invalidate();
-                json!({"ok": ok})
+                if ok {
+                    json!({"ok": true})
+                } else {
+                    json!({"ok": false, "error": "that prompt is no longer queued - it was sent or cancelled"})
+                }
+            }
+            "/api/queue/move" => {
+                let sid = p
+                    .get("session")
+                    .map(crate::pyish::py_str)
+                    .unwrap_or_default();
+                let by = p.get("by").and_then(Value::as_i64).unwrap_or(0);
+                if by == 0 {
+                    return json!({"ok": false, "error": "by is -1 (earlier) or 1 (later)"});
+                }
+                let ok = store.move_queued(&sid, p.get("id").unwrap_or(&Value::Null), by);
+                self.invalidate();
+                if ok {
+                    json!({"ok": true, "queue": store.queued(&sid)})
+                } else {
+                    json!({"ok": false, "error": "that prompt is no longer queued - it was sent or cancelled"})
+                }
             }
             "/api/dismiss" => self.dismiss_session(store, p.get("session_id")),
             "/api/reviewed" => {
@@ -136,6 +157,7 @@ impl Shared {
         let object = payload.as_object();
         const API: &[&str] = &[
             "/api/queue",
+            "/api/queue/move",
             "/api/unqueue",
             "/api/worktree",
             "/api/resume",
@@ -511,7 +533,7 @@ impl Shared {
                 }
                 (200, Body::Json(self.save_settings(ch)))
             }
-            "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/reviewed" | "/api/queue" => {
+            "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/queue/move" | "/api/dismiss" | "/api/reviewed" | "/api/queue" => {
                 let Some(store) = &self.store else {
                     return (
                         200,

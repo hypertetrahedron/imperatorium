@@ -180,6 +180,7 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .t1 .dot{margin-right:0}
 .s .n{flex:0 1 auto;min-width:3em;font-weight:600;font-size:13.5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s .n .hb{display:inline-block;margin-left:6px;padding:0 4px;border:1px solid var(--line);border-radius:3px;font-size:12px;font-weight:500;color:var(--muted);vertical-align:1px}
 .s .why{flex:0 100 auto;min-width:0;color:var(--muted);font-size:12px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s.attn .why{color:var(--warn)}
@@ -1003,3 +1004,5 @@ label.sw{display:flex;gap:7px;align-items:center;font-size:13px;margin:4px 0}
 #spawnbox .sbfoot[hidden]{display:none}
 #newbox .nbopts label input{margin:0 4px 0 0;vertical-align:middle}
 #newbox .nbopts small{color:var(--muted);font-size:12px}
+#newbox #ntask{display:block;width:calc(100% - 24px);margin:8px 12px 0;box-sizing:border-box;font-family:inherit;font-size:13px;padding:6px 8px;resize:vertical;min-height:44px}
+#newbox #ntask[hidden]{display:none}

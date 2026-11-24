@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// The modes `/api/dispatch` takes (README); anything else is refused.
+const DISPATCH_MODES: &[&str] = &["auto", "inject", "launch", "background", "dry-run"];
+
 impl Shared {
     /// Control.resume: resume or fork a local session, in a new tab or in
     /// the background.
@@ -485,9 +488,36 @@ impl Shared {
             None => "auto".to_string(),
             Some(v) => crate::pyish::py_str(v),
         };
+        // A mode it does not know is refused: a typo used to fall through to
+        // launch and open a terminal window (persona runs, 2026-11-24).
+        if !DISPATCH_MODES.contains(&mode.as_str()) {
+            return json!({"ok": false, "error": format!(
+                "mode is one of {} (not {})", DISPATCH_MODES.join(", "), crate::pyish::py_repr(&json!(mode)))});
+        }
         let session_id = text("session_id");
         let mut prompt = text("prompt");
         let mut project = text("project");
+        if let (Some(sid), Some(pr), "dry-run") = (&session_id, &prompt, mode.as_str()) {
+            // What a send to this session would do, doing nothing: it used to
+            // fall through to project routing and be refused ("no project named").
+            let Some(row) = self.row(sid) else {
+                return json!({"ok": false, "error": "no such session"});
+            };
+            let name = row.get("name").cloned().unwrap_or(Value::Null);
+            let (would, reachable) = if crate::slash::is_command(pr) {
+                ("command", true)
+            } else if truthy(row.get("dispatchable")) || (!truthy(row.get("remote")) && self.via_mod(&row)) {
+                ("inject", true)
+            } else {
+                ("inject", false)
+            };
+            let mut out = json!({"ok": true, "action": "dry-run", "session": sid, "session_name": name,
+                                 "prompt": pr, "would": would, "reachable": reachable});
+            if !reachable {
+                out["note"] = json!("that session is not reachable yet - it registers on its next hook event");
+            }
+            return out;
+        }
         if let (Some(sid), Some(pr)) = (&session_id, &prompt) {
             if mode == "auto" || mode == "inject" {
                 let Some(row) = self
