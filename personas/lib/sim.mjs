@@ -198,7 +198,11 @@ export class Fleet {
     if (s.stopped.length) body.stopped = s.stopped;
     if (s.results.length) body.results = s.results;
     if (!s.sentCommands) body.commands = [{ name: "clear", description: "Clear conversation history", source: "builtin" },
-      { name: "model", description: "Set the AI model", source: "builtin" }, { name: "compact", description: "Compact", source: "builtin" }];
+      { name: "model", description: "Set the AI model", source: "builtin" }, { name: "compact", description: "Compact", source: "builtin" },
+      { name: "effort", description: "Set reasoning effort", source: "builtin" }, { name: "config", description: "Open config", source: "builtin" },
+      { name: "resume", description: "Resume a conversation", source: "builtin" }, { name: "cost", description: "Show the session's cost", source: "builtin" },
+      { name: "context", description: "Show context usage", source: "builtin" }, { name: "review", description: "Review a pull request", source: "skill" },
+      { name: "changelog-draft", description: "Draft the changelog", source: "skill", argumentHint: "[version]" }];
     body.usage = { rateLimits: [{ kind: "five_hour", percentUsed: 37, resetsAt: Date.now() / 1000 + 7200 },
       { kind: "seven_day", percentUsed: 52, resetsAt: Date.now() / 1000 + 3 * 86400 }],
       context: { percent: 18, window: 200000, tokens: 36000 } };
@@ -236,7 +240,8 @@ export class Fleet {
       if (op.op === "command" && cmd === "clear") {
         await this.clear(s);
         s.results.push({ id: op.id, ok: true, data: { text: "" } });
-      } else s.results.push({ id: op.id, ok: true, data: { text: `(simulated) ${op.op}${cmd ? " /" + cmd : ""} done` } });
+      } else if (op.op === "config") s.results.push({ id: op.id, ok: true, data: { rows: CONFIG_ROWS } });
+      else s.results.push({ id: op.id, ok: true, data: { text: `(simulated) ${op.op}${cmd ? " /" + cmd : ""} done` } });
       this.kick(s);
     }
   }
@@ -364,7 +369,15 @@ export class Fleet {
   async onRemoteInject(host, stdin) {
     const h = this.remote[host]; if (!h) return;
     let text = stdin;
-    try { const j = JSON.parse(stdin.split("\n").find(Boolean)); text = j.content || j.text || j.message?.content || stdin; } catch {}
+    // inbox-send's stdin: an auth line, then the message (its text in message.content or content).
+    for (const line of stdin.split("\n").filter(Boolean)) {
+      try {
+        const j = JSON.parse(line);
+        if (j.type === "auth") continue;
+        const c = j.message?.content ?? j.content ?? j.text;
+        if (c) { text = typeof c === "string" ? c : JSON.stringify(c); break; }
+      } catch {}
+    }
     const s = [...h.sessions.values()][0];
     this.note("delivered", s.sid, { remote: host, text: String(text).slice(0, 60) });
     s.status = "busy"; s.busy = true; this.writeRemote(host);
@@ -396,6 +409,18 @@ export class Fleet {
     await sleep(200);
   }
 }
+
+// What the mod's config op answers: the rows Claude Code's /config menu draws.
+const CONFIG_ROWS = [
+  { key: "autoCompactEnabled", label: "Auto-compact", kind: "boolean", value: true },
+  { key: "verbose", label: "Verbose output", kind: "boolean", value: false },
+  { key: "theme", label: "Theme", kind: "choice", value: "dark", options: ["dark", "light", "dark-daltonized", "light-daltonized"] },
+  { key: "outputStyle", label: "Output style", kind: "choice", value: "default", options: ["default", "Explanatory", "Learning"] },
+  { key: "editorMode", label: "Editor mode", kind: "choice", value: "normal", options: ["normal", "vim"] },
+  { key: "todoFeatureEnabled", label: "Use todo list", kind: "boolean", value: true },
+  { key: "preferredNotifChannel", label: "Notifications", kind: "choice", value: "auto", options: ["auto", "terminal_bell", "notifications_disabled"] },
+  { key: "cleanupPeriodDays", label: "Keep transcripts (days)", kind: "number", value: 30 },
+];
 
 const TOPICS = ["fix the flaky login test", "add retry to the fetch helper", "migrate the settings page", "write the release notes",
   "profile the slow import", "refactor the parser", "bump dependencies", "add dark mode", "investigate the memory leak", "document the API"];

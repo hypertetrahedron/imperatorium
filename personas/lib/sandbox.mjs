@@ -111,6 +111,9 @@ export class Sandbox {
     this.claude = path.join(this.root, "claude");
     this.bin = path.join(this.root, "bin");
     this.projects = path.join(this.root, "projects");
+    this.userHome = path.join(this.root, "user");
+    fs.mkdirSync(this.userHome, { recursive: true });
+    fs.writeFileSync(path.join(this.userHome, ".gitconfig"), "[user]\n\tname = persona\n\temail = persona@example.invalid\n[safe]\n\tdirectory = *\n");
     for (const d of [this.home, path.dirname(this.stateFile), path.join(this.claude, "sessions"),
       path.join(this.claude, "projects"), this.bin, this.projects]) fs.mkdirSync(d, { recursive: true });
     this.config = { roots: [this.projects], ...config };
@@ -144,6 +147,8 @@ export class Sandbox {
     env.PATH = standInPath(this.bin);
     Object.assign(env, {
       LOCALAPPDATA: path.join(this.root, "local"), APPDATA: path.join(this.root, "roaming"),
+      // The user's home too: ~/.ssh (key login) and ~/.claude must be the sandbox's.
+      USERPROFILE: this.userHome, HOME: this.userHome,
       XDG_STATE_HOME: path.join(this.root, "xstate"), XDG_CONFIG_HOME: path.join(this.root, "xconfig"),
       CLAUDE_CONFIG_DIR: this.claude,
       IMPERATORIUM_POLICY: path.join(this.root, "policy.json"),
@@ -156,6 +161,8 @@ export class Sandbox {
       IMPERATORIUM_SSH: path.join(this.bin, "ssh.exe"),
       IMPERATORIUM_REMOTE_BUILDS: path.join(this.root, "builds"),
       HC_SESSION: "imptest",
+      // Ask the (stub) claude for its models and commands, as the live dispatcher does.
+      IMPERATORIUM_CLAUDE_PROBE: "1",
     });
     return env;
   }
@@ -164,11 +171,25 @@ export class Sandbox {
     this.prepareBin();
     fs.writeFileSync(path.join(this.home, "config.json"), JSON.stringify(this.config, null, 1));
     if (this.policy) fs.writeFileSync(path.join(this.root, "policy.json"), JSON.stringify(this.policy));
+    return this.launch(0);
+  }
+
+  /** As a person restarts the dispatcher: the same port, home and state; config.json as saved. */
+  async restart() {
+    if (this.proc && this.proc.exitCode === null) {
+      try { execFileSync("taskkill", ["/T", "/F", "/PID", String(this.proc.pid)], { stdio: "ignore" }); } catch {}
+    }
+    await sleep(500);
+    return this.launch(this.port);
+  }
+
+  async launch(port) {
     const env = this.env();
     assertFakes(this.bin, env.PATH, this.stubBytes);
-    this.logFile = path.join(this.root, "serve.log");
+    this.logFile = path.join(this.root, port ? "serve-restart.log" : "serve.log");
+    this.port = undefined;
     const out = fs.openSync(this.logFile, "w");
-    this.proc = spawn(binary(), ["serve", "--port", "0", "--host", "127.0.0.1", "--home", this.home, "--state", this.stateFile],
+    this.proc = spawn(binary(), ["serve", "--port", String(port), "--host", "127.0.0.1", "--home", this.home, "--state", this.stateFile],
       { cwd: this.root, env, stdio: ["ignore", out, out], windowsHide: true });
     this.startedAt = Date.now();
     const deadline = Date.now() + 60000;

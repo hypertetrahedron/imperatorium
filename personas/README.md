@@ -10,7 +10,7 @@ waits, HTTP requests and errors are recorded. These runs are **not** part of
 cd personas
 npm install                      # playwright; uses the installed Chrome
 cargo build -p imperatorium      # in rust/ - the binary under test (or set IMPERATORIUM_TEST_BIN)
-node run.mjs                     # set 1;  --set 2, or name personas: node run.mjs wren sol
+node run.mjs                     # set 1;  --set 2, --all, or name personas: node run.mjs wren sol
 node report.mjs results/<stamp>  # writes results/<stamp>/report.md
 ```
 
