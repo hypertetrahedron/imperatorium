@@ -384,6 +384,9 @@ function tasksLabel(s){
 // "complete"), or ready (never given work). Needs you is a session blocked
 // on you - a permission prompt, a question.
 function stateOf(s){
+  // Its host stopped answering: the last thing known about it, kept on the
+  // list rather than dropped (2026-11-24).
+  if (s.unreachable) return ["d-done", "not answering"];
   if (s.attention){
     if (s.attention_kind === "failure") return ["d-fail", s.attention_reason || "failed"];
     if (s.attention_kind === "complete") return ["d-comp", "complete"];

@@ -6,8 +6,8 @@
    "label": "Project folders",
    "type": "paths",
    "default": [],
-   "applies": "dispatcher",
-   "help": "Folders whose subfolders are your projects, one per line. Empty: the folder this checkout sits in."
+   "applies": "live",
+   "help": "Folders whose subfolders are your projects, one per line. New session lists them; empty, it lists only the folders sessions have run in."
   },
   {
    "key": "chat.send_as_typed",

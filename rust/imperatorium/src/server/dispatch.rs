@@ -2,6 +2,22 @@
 
 use super::*;
 
+/// Why a session on a host that stopped answering cannot be sent to.
+pub(super) fn unreachable_why(row: &Row) -> String {
+    let host = row.get("host").map(crate::pyish::py_str).unwrap_or_else(|| "its host".into());
+    let error = row.get("unreachable_error").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let next = row.get("next_try").and_then(Value::as_f64).map(|t| (t - Shared::now()).max(0.0).round() as i64);
+    let mut out = format!("{host} is not answering");
+    if !error.is_empty() {
+        out += &format!(" ({error})");
+    }
+    match next {
+        Some(s) if s > 0 => out += &format!(" - next try in {s}s, or Retry now"),
+        _ => out += " - trying again now",
+    }
+    out
+}
+
 /// The modes `/api/dispatch` takes (README); anything else is refused.
 const DISPATCH_MODES: &[&str] = &["auto", "inject", "launch", "background", "dry-run"];
 
@@ -528,6 +544,10 @@ impl Shared {
                 else {
                     return json!({"ok": false, "error": "no such session"});
                 };
+                if truthy(row.get("unreachable")) {
+                    // Its host stopped answering: the prompt would go nowhere.
+                    return json!({"ok": false, "unreachable": true, "error": unreachable_why(&row)});
+                }
                 if crate::slash::is_command(pr) {
                     return self.run_command(store, &row, pr, true);
                 }

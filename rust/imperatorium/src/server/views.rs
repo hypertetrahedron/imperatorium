@@ -23,30 +23,29 @@ impl Shared {
         json!({"hosts": hosts, "status": fleet.status()})
     }
 
-    /// Control.catalogue, local part: the roots from config.json (else the
-    /// folder the checkout sits in) and the folders sessions run in.
-    pub(super) fn catalogue(&self) -> Vec<Value> {
-        let configured: Vec<String> = self
-            .config()
+    /// The project folders from config.json (`roots`), read live: a folder
+    /// saved in Settings counts at once.
+    pub(super) fn roots(&self) -> Vec<String> {
+        self.config()
             .get("roots")
             .and_then(Value::as_array)
             .map(|r| {
                 r.iter()
                     .filter_map(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
                     .map(str::to_string)
                     .collect()
             })
-            .unwrap_or_default();
-        let roots = if configured.is_empty() {
-            // projects.DEFAULT_ROOTS: the folder the checkout sits in.
-            let home = paths::config_home(self.home.as_deref());
-            vec![home
-                .parent()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default()]
-        } else {
-            configured
-        };
+            .unwrap_or_default()
+    }
+
+    /// Control.catalogue, local part: the subfolders of the project folders
+    /// and the folders sessions run in. With no project folders there are
+    /// only the latter: the old fallback, the folder the config sits in,
+    /// listed every folder of %APPDATA% on an installed machine (persona
+    /// runs, 2026-11-24); the window asks for a folder instead.
+    pub(super) fn catalogue(&self) -> Vec<Value> {
+        let roots = self.roots();
         let rows = self.sessions(2.0);
         let local: Vec<String> = rows
             .iter()

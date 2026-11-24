@@ -651,6 +651,12 @@ button:disabled{opacity:.45;cursor:default}
 
 /* -- sidebar tools: filter, grouping, usage meter ---------------------- */
 #tools{display:flex;gap:6px;padding:0 10px 8px;align-items:center}
+#hostline{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;margin:0 10px 8px;padding:6px 8px;border:1px solid var(--fail);border-radius:4px;font-size:12px;color:var(--fail)}
+#hostline[hidden]{display:none}
+#hostline span{flex:1 1 100%}
+#hostline b{font-weight:600}
+.s .w.unr{color:var(--fail);white-space:normal}
+.s .w.unr button{margin-left:6px}
 #filter{flex:1;min-width:0;background:var(--panel);color:var(--ink);
   border:1px solid var(--line);border-radius:5px;padding:4px 7px;font-size:12.5px;font-family:inherit}
 #filter:focus{outline:none;border-color:var(--busy)}

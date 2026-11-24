@@ -191,7 +191,8 @@ function tile(s, short, depth){
   const title = s.window_title ? `<div class="w" title="window title">${esc(s.window_title)}</div>` : "";
   const doing = s.doing ? `<div class="d${title ? " x" : ""}" title="${esc(s.doing)}">${esc(s.doing)}${
       s.doing_since ? " · " + age(s.doing_since) : ""}</div>` : "";
-  const lines = title + doing || `<div class="w" title="${esc(s.cwd || "")}">${esc(s.cwd || "")}</div>`;
+  const lines = s.unreachable ? unreachableHtml(s, now)
+    : title + doing || `<div class="w" title="${esc(s.cwd || "")}">${esc(s.cwd || "")}</div>`;
   // ✕ closes a session with a process; with none (a finished background job,
   // a crashed session's leftover file) it takes the tile off the list. Any
   // tile, not only archived ones: a finished job that is not archived used to
@@ -223,6 +224,15 @@ function tile(s, short, depth){
       open && !s.provisional ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl st-${dot}" title="${esc(label)}">${
       esc(label)}</div>${lines}${details}${open && !s.provisional ? `<div class="mcpl"></div><div class="tk"></div>` : ""}
   </div>`;
+}
+
+// Pure: a session whose host stopped answering: why, when it is tried
+// again, and Retry now (which polls every host at once).
+function unreachableHtml(s, now){
+  const next = s.next_try ? Math.max(0, Math.round(s.next_try - now)) : 0;
+  const why = (s.unreachable_error || "").trim();
+  return `<div class="w unr" title="${esc(why)}">${esc(s.host || "its host")} is not answering${
+    next ? " · next try in " + span(next) : " · trying now"}<button class="tiny" data-retry title="poll every remote machine now">Retry now</button></div>`;
 }
 
 // Tiles for one group, with a project's sessions gathered under a node named
@@ -489,6 +499,7 @@ async function stopTurn(){
 function sendState(s){
   if (!s) return {off: true, why: "select a session"};
   if (s.provisional) return {off: true, why: "it is still starting"};
+  if (s.unreachable) return {off: true, why: (s.host || "its host") + " is not answering - Retry now on its tile"};
   if (s.remote && !s.dispatchable)
     return {off: true, why: "not reachable yet on " + (s.host || "its host") + " - it registers on its next hook event"};
   return {off: false, why: ""};
@@ -5291,7 +5302,7 @@ async function dictate(){
 // a new terminal tab (/api/new) and is selected here once it starts; one on
 // a remote host has no terminal here, so it starts as a background session
 // there (/api/dispatch), in the mode Settings gives background sessions.
-let projects = [], psel = 0;
+let projects = [], projectRoots = null, psel = 0;
 const MODE_KEY = "imperatorium.newMode", MODEL_KEY = "imperatorium.newModel", BG_KEY = "imperatorium.newBackground";
 
 // The New Session dialog's model and effort, from Claude Code's own list;
@@ -5330,8 +5341,7 @@ function drawProjects(){
   $("#projects").innerHTML = hit.map((p,i) =>
     `<div class="p${i===psel?" on":""}" role=option aria-selected="${i===psel}" data-pi="${i}">${esc(p.name)}${
       p.host ? ` <span class="badge">${esc(p.host)}</span>` : ""}
-      <small>${esc(p.path)}</small></div>`).join("") ||
-    `<div class="note">no match</div>`;
+      <small>${esc(p.path)}</small></div>`).join("") || noProjectsHtml($("#find").value, projectRoots);
   const on = $("#projects").querySelector(".p.on");
   if (on) on.scrollIntoView({block: "nearest"});
   const p = hit[psel];
@@ -5354,6 +5364,15 @@ function drawTaskBox(p){
 function taskBoxShown(bg, onHost){ return !!(bg || onHost); }
 // Pure: the task a new background session gets: the task box, else nothing.
 function newTask(box){ return String(box || "").trim(); }
+// Pure: what the project list says when it lists nothing. With no
+// project folders set it says where to add one (Settings > Projects): a
+// first run used to list the folders around the config folder instead.
+function noProjectsHtml(typed, roots){
+  if (String(typed || "").trim() || !roots || roots.length)
+    return `<div class="note">no match</div>`;
+  return `<div class="note">No project folders yet: tell Imperatorium where your code lives, and each folder in it is a project.
+    <button class="sm" data-setroots>Add a project folder in Settings</button></div>`;
+}
 async function startProject(p){
   if (!p) return;
   const mode = $("#nmode").value;
@@ -5389,7 +5408,7 @@ async function openNew(show){
   $("#ntask").value = $("#prompt").value.trim();
   $("#find").value = ""; psel = 0; drawProjects(); $("#find").focus();
   fillModelPicks();
-  try { projects = (await get("/api/projects")).projects || []; } catch (e) {}
+  try { const d = await get("/api/projects"); projects = d.projects || []; projectRoots = d.roots || null; } catch (e) {}
   if (!$("#newbox").hidden) drawProjects();
 }
 
@@ -5681,12 +5700,53 @@ $("#matrixbtn").onclick = toggleMatrix;
 
 // -- settings ----------------------------------------------------------------
 // Its own window, like the Chat Matrix; a second click brings it forward.
-$("#setbtn").onclick = () => {
-  const w = window.open("/settings", "imperatorium-settings", "popup,width=1080,height=820");
+$("#setbtn").onclick = () => openSettingsAt("");
+// The Settings window, at a section's anchor when one is named.
+function openSettingsAt(section){
+  const w = window.open("/settings" + (section ? "#" + section : ""), "imperatorium-settings", "popup,width=1080,height=820");
   if (!w) $("#say").textContent = "the browser blocked the Settings window - allow pop-ups for this page";
   else w.focus();
-};
+}
 whileVisible(1000, showMatrixButton);
+
+// -- remote machines that stop answering (2026-11-24) -------------------------
+// Their sessions stay on the list, marked; the Host Line under the filter
+// names each machine that is not answering, with Retry now - which was only
+// in the Settings window, and a host that came back stayed hidden for a
+// minute or more (persona runs).
+async function retryHosts(){
+  say("asking every remote machine again…");
+  const r = await post("/api/remote/refresh", {}).catch(() => ({ok: false}));
+  if (!r.ok) return say("the dispatcher did not answer");
+  setTimeout(() => { loadHosts(); lastSig = ""; }, 1500);
+}
+// Pure: the Host Line for /api/hosts' answer: the machines that failed
+// their last poll, how long ago they last answered and when they are tried
+// again; "" when every one answers.
+function hostLineHtml(d, now){
+  const st = (d && d.status) || {};
+  const down = Object.entries(st).filter(([, r]) => r && r.fails > 0);
+  if (!down.length) return "";
+  const one = ([name, r]) => {
+    const since = r.polled_at ? " (last answered " + age(r.polled_at) + " ago)" : " (has not answered yet)";
+    const next = r.next_attempt ? Math.max(0, Math.round(r.next_attempt - now)) : 0;
+    return `<span title="${esc(r.error || "")}"><b>${esc(name)}</b> is not answering${esc(since)}${next ? " · next try in " + span(next) : ""}</span>`;
+  };
+  return down.map(one).join("") + `<button class="tiny" data-retry>Retry now</button>`;
+}
+let hostsAt = 0;
+async function loadHosts(){
+  let d;
+  try { d = await get("/api/hosts"); } catch (e) { return; }
+  hostsAt = Date.now();
+  const html = hostLineHtml(d, Date.now() / 1000);
+  const el = $("#hostline");
+  if (el.dataset.sig !== html){ el.innerHTML = html; el.dataset.sig = html; }
+  el.hidden = !html;
+}
+$("#hostline").addEventListener("click", e => { if (e.target.closest("[data-retry]")) retryHosts(); });
+whileVisible(15000, () => { if (sessions.some(s => s.remote) || $("#hostline").innerHTML) loadHosts(); });
+loadHosts();
 // The update badge (gap J3): while the native binary's last check saw a
 // newer release. A click opens Settings at its Updates section, which shows
 // what is new and installs it. The Python dispatcher answers 404: no badge.
@@ -5719,6 +5779,7 @@ $("#newbox").addEventListener("keydown", e => {
   else if (e.key === "Enter"){ e.preventDefault(); startProject(hit[psel]); }
 });
 $("#projects").addEventListener("click", e => {
+  if (e.target.closest("[data-setroots]")){ openSettingsAt("projects"); return; }
   const el = e.target.closest("[data-pi]");
   if (!el) return;
   psel = +el.dataset.pi; drawProjects();
@@ -6081,6 +6142,7 @@ $("#sessions").addEventListener("click", e => {
   if ((el = t.closest("[data-arch]"))) return savePrefs({archived: toggleIn("archived", el.dataset.arch)});
   if ((el = t.closest("[data-close]"))) return closeSession(el.dataset.close);
   if ((el = t.closest("[data-dismiss]"))) return dismissSession(el.dataset.dismiss);
+  if (t.closest("[data-retry]")) return retryHosts();
   if ((el = t.closest(".badge.pr"))){ if (el.dataset.url) window.open(el.dataset.url, "_blank"); return; }
   if (t.closest("#archfold")){ showArchived = !showArchived; drawSessions(); return; }
   if ((el = t.closest("[data-fam]"))) return famClicked(el.dataset.fam);

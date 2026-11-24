@@ -966,15 +966,18 @@ impl Fleet {
         let mut st = self.state.lk();
         let rec = st.get(name).cloned().unwrap_or_default();
         let fails = rec.get("fails").and_then(Value::as_u64).unwrap_or(0) + 1;
-        let delay = (crate::timing::t().remote_backoff_start * 2f64.powi(fails as i32 - 1)).min(crate::timing::t().remote_backoff_max);
+        let delay = backoff(fails);
         let out = json!({"fails": fails, "next_attempt": now() + delay,
                          "error": take(error, 200), "parked_for": delay,
                          "polled_at": rec.get("polled_at").cloned().unwrap_or(Value::Null)});
         st.insert(name.into(), out.as_object().unwrap().clone());
     }
 
-    /// Fleet.poll_host: never fails; a failure parks the host and its
-    /// sessions leave the board until it answers.
+    /// Fleet.poll_host: never fails; a failure parks the host. Its sessions
+    /// stay on the board, marked unreachable with the error and the next
+    /// try, while it answered within KEEP_UNREACHABLE: they used to vanish
+    /// with no word why (persona runs, 2026-11-24). A host silent longer
+    /// than that leaves the board.
     fn poll_host(&self, p: &PerHost) {
         let name = &p.host.name;
         let rows = match agents(&p.host) {
@@ -985,7 +988,9 @@ impl Fleet {
             }
             Err(e) => {
                 self.failed(name, &e);
-                vec![]
+                let rec = self.state.lk().get(name).cloned().unwrap_or_default();
+                let before = self.rows.lk().get(name).cloned().unwrap_or_default();
+                unreachable_rows(before, &rec, now())
             }
         };
         self.rows.lk().insert(name.clone(), rows);
@@ -1093,6 +1098,42 @@ impl Fleet {
         let p = self.per(host).ok_or_else(|| format!("host {host} is not configured"))?;
         p.reader.timeline(session_id, known)
     }
+}
+
+/// How long a host that stopped answering keeps its sessions on the board,
+/// marked unreachable, from its last answer.
+const KEEP_UNREACHABLE: f64 = 30.0 * 60.0;
+/// Failures in a row retried at the normal poll interval before the long
+/// back-off: a blip (a container restarting, Wi-Fi) is over in seconds, and
+/// a 60 s park hid a host that was back (persona runs, 2026-11-24).
+const QUICK_TRIES: u64 = 3;
+
+/// How long a host is parked after its `fails`-th failure in a row.
+fn backoff(fails: u64) -> f64 {
+    let t = crate::timing::t();
+    if fails <= QUICK_TRIES {
+        return t.remote_poll_every.min(t.remote_backoff_start);
+    }
+    (t.remote_backoff_start * 2f64.powi((fails - QUICK_TRIES) as i32 - 1)).min(t.remote_backoff_max)
+}
+
+/// A failed host's last rows, kept and marked while it answered within
+/// KEEP_UNREACHABLE (`rec` is its state after the failure); none after.
+fn unreachable_rows(before: Vec<Row>, rec: &Map<String, Value>, at: f64) -> Vec<Row> {
+    let answered = rec.get("polled_at").and_then(Value::as_f64);
+    if answered.is_none_or(|t| at - t > crate::timing::secs(KEEP_UNREACHABLE)) {
+        return vec![];
+    }
+    before
+        .into_iter()
+        .map(|mut r| {
+            r.insert("unreachable".into(), json!(true));
+            r.insert("unreachable_error".into(), rec.get("error").cloned().unwrap_or(Value::Null));
+            r.insert("next_try".into(), rec.get("next_attempt").cloned().unwrap_or(Value::Null));
+            r.insert("dispatchable".into(), json!(false));
+            r
+        })
+        .collect()
 }
 
 // -- tunnels --------------------------------------------------------------
@@ -1935,15 +1976,20 @@ mod ssh_tests {
     }
 
     #[test]
-    fn the_delay_grows_with_each_failure() {
+    fn the_first_failures_retry_at_the_poll_interval_then_the_delay_grows() {
+        // A blip is retried soon (a 60 s park hid a host that was back);
+        // a host that stays down backs off.
         let _fx = Fx::new();
         let fleet = fleet_of(vec![host("devbox")]);
         let mut delays = vec![];
-        for _ in 0..3 {
+        for _ in 0..6 {
             fleet.failed("devbox", "unreachable");
             delays.push(fleet.status()["devbox"]["parked_for"].as_f64().unwrap());
         }
-        assert!(delays.windows(2).all(|w| w[0] < w[1]), "{delays:?}");
+        let t = crate::timing::t();
+        let quick = t.remote_poll_every.min(t.remote_backoff_start);
+        assert!(delays[..3].iter().all(|d| *d == quick), "{delays:?}");
+        assert!(delays[2..].windows(2).all(|w| w[0] < w[1]), "{delays:?}");
     }
 
     #[test]
@@ -2315,16 +2361,40 @@ mod ssh_tests {
     }
 
     #[test]
-    fn a_host_that_starts_failing_leaves_the_board() {
+    fn a_host_that_starts_failing_keeps_its_sessions_marked_unreachable() {
+        // They used to vanish with no word why (persona runs, 2026-11-24).
         let fx = Fx::new();
         let fleet = fleet_of(vec![host("devbox")]);
         fx.rules(json!([done(SESSIONS)]));
         poll_all(&fleet);
         assert_eq!(fleet.rows().len(), 1);
+        assert!(!truthy(fleet.rows()[0].get("unreachable")));
         fx.rules(json!([{"match": "agents", "code": 255, "stderr": "unreachable\n"}]));
         poll_all(&fleet);
-        assert!(fleet.rows().is_empty());
+        let rows = fleet.rows();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(truthy(rows[0].get("unreachable")));
+        assert!(!truthy(rows[0].get("dispatchable")));
+        assert!(rows[0]["unreachable_error"].as_str().unwrap_or("").contains("unreachable"), "{rows:?}");
+        assert!(rows[0]["next_try"].as_f64().is_some());
         assert!(truthy(fleet.status()["devbox"].get("polled_at")), "when it last answered");
+        // Back: the mark goes.
+        fx.rules(json!([done(SESSIONS)]));
+        fleet.refresh();
+        poll_all(&fleet);
+        assert!(!truthy(fleet.rows()[0].get("unreachable")));
+    }
+
+    #[test]
+    fn a_host_silent_for_long_leaves_the_board() {
+        let rec = json!({"polled_at": 1000.0, "error": "down", "next_attempt": 5000.0});
+        let row: Row = json!({"sessionId": "a"}).as_object().unwrap().clone();
+        let kept = unreachable_rows(vec![row.clone()], rec.as_object().unwrap(), 1000.0 + crate::timing::secs(60.0));
+        assert_eq!(kept.len(), 1);
+        let gone = unreachable_rows(vec![row.clone()], rec.as_object().unwrap(), 1000.0 + crate::timing::secs(KEEP_UNREACHABLE) + 1.0);
+        assert!(gone.is_empty());
+        // Never answered: nothing to keep.
+        assert!(unreachable_rows(vec![row], &Map::new(), 1000.0).is_empty());
     }
 
     #[test]

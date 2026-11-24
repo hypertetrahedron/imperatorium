@@ -494,7 +494,7 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | GET | `/api/stream` | server-sent events: the merged registry whenever it changes |
 | POST | `/api/mod/beat` | the mod's beat: state, usage, prompt acknowledgements; answers the prompts to submit and the status line (mod token) |
 | POST | `/api/mod/check` | the permission policy's verdict on one tool call (mod token) |
-| GET | `/api/projects` | the project catalogue |
+| GET | `/api/projects` | the project catalogue, and `roots` (the project folders set; none: only the folders sessions ran in are listed) |
 | GET | `/api/events` | recent attention events |
 | GET | `/api/decisions` | recent auto-approval verdicts |
 | GET | `/api/hosts` | configured hosts and their reachability |
@@ -526,6 +526,7 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | POST | `/api/dismiss` | `{session_id}` - take a local session with no process off the list until it starts again |
 | POST | `/api/reviewed` | `{session_id}` - you have looked at a session waiting for you: it stops being flagged until it next needs you |
 | GET/POST | `/api/queue`, `/api/unqueue` | prompts held until a session's turn ends |
+| POST | `/api/queue/move` | `{session, id, by: -1\|1}` - send a queued prompt earlier or later |
 | GET | `/matrix` | the Chat Matrix window |
 | GET | `/settings` | the Settings window |
 | GET | `/api/quick` | the quick-phrase shortcut and phrases, for the prompt box |
@@ -544,7 +545,9 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | POST | `/api/ask` | `{question}` - only from the window: a tool-less `claude -p` answers from the fleet snapshot |
 
 `mode` is `auto` (inject if a session is live, else launch), `inject`, `launch`,
-`background`, or `dry-run`.
+`background`, or `dry-run`; any other mode is refused. With `session_id`,
+`dry-run` says what a send to that session would do (`would`, `reachable`).
+A session whose remote machine is not answering is refused with why.
 
 `background` runs `claude --bg` instead of opening a window - work you want
 done rather than a window you want to sit in. It runs in a worktree made

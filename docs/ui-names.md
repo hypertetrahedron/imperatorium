@@ -49,7 +49,10 @@ the Chat Matrix; everything else is filled in by the script).
     in each row's Meter Tip
 - **Sidebar Tools** `#tools`
   - Session Filter `#filter`
-  - Group Selector `#group`
+  - Group Selector `#group` (by state, folder or machine)
+- **Host Line** `#hostline`: each remote machine that is not answering, when
+  it last answered and its next try, with Retry Now (`[data-retry]`); hidden
+  while every machine answers
 - **Session List** `#sessions`
   - Group Header `.g`
   - Archive Fold `#archfold`
@@ -60,7 +63,10 @@ the Chat Matrix; everything else is filled in by the script).
   - **Session Tile** `.s`
     - Tile Actions `.acts`: Pin, Close, Unarchive, Dismiss (archived, nothing running);
       in the open tile's top right corner (end of its Name Line), on no closed tile
-    - Name Line `.n`: App Icon (or VS Code Icon), Worktree Icon, Pin Star, New Badge
+    - Name Line `.n`: App Icon (or VS Code Icon), Worktree Icon, Host Badge
+      (`.hb`, a remote session's machine), Pin Star, New Badge
+    - Unreachable Line `.w.unr`: in place of the Window Title Line while the
+      session's machine is not answering, with Retry Now
     - Window Title Line `.w`
     - Doing Line `.d`
     - Meta Line `.m`: State Dot, State Label, Age, Host, PR Badge,
@@ -187,7 +193,8 @@ the Chat Matrix; everything else is filled in by the script).
     - Status Line `.hd`: the line that stays when the panel is folded
     - Status Grid `.grid` of Status Cells (`.c`)
     - Run List `.run`
-  - **Queue List** `#queued`: Queued Items (`.qi`)
+  - **Queue List** `#queued`: Queued Items (`.qi`), numbered in the order
+    they are sent, each with Earlier / Later (`[data-qmv]`) and Cancel
 
 **3. Jump Box** `#jumpbox`: the ctrl+K overlay
 - Jump Input `#jq`

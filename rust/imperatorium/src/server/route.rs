@@ -654,7 +654,7 @@ impl Shared {
                 Body::Json(json!({"decisions": decisions(&self.state_dir(), 60)})),
             ),
             ("GET", "/api/settings") => (200, Body::Json(self.api_settings())),
-            ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue()}))),
+            ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue(), "roots": self.roots()}))),
             ("GET", "/api/changes") => (200, Body::Json(self.api_changes(&arg("session")))),
             ("GET", "/api/activity") => (200, Body::Json(self.api_activity(&arg("session")))),
             ("GET", "/api/costs") => {
