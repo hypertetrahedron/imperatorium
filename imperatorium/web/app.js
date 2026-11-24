@@ -89,7 +89,7 @@ const APP_ICON = `<svg class="app" viewBox="0 0 13 11" aria-label="Claude deskto
 // Marks a session working in a worktree rather than the main checkout.
 const WT_ICON = `<svg class="app" viewBox="0 0 11 13" aria-label="worktree"><title>in a worktree</title><circle cx="3" cy="2.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="3" cy="10.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="8.5" cy="4.5" r="1.6" fill="none" stroke="currentColor"/><path d="M3 4.1v4.8M8.5 6.1c0 2.2-5.5 1.4-5.5 2.8" fill="none" stroke="currentColor"/></svg>`;
 
-// Pure: the prompt cache's countdown for a tile, "-4" minutes until it
+// Pure: the prompt cache's countdown for a tile, "cache 4m" until it
 // expires. A closed tile shows it only in the last CACHE_SOON seconds, when
 // it is worth acting on; `all` (the open tile) shows it whenever it is warm.
 // Nothing once it has expired: the chat's cold-cache button says that.
@@ -106,7 +106,8 @@ function workParts(w, now, all){
   // `fill`: what is left of the cache's lifetime (work.cache_ttl), drawn as
   // a bar draining under the minutes (2026-11-21, from the survey).
   const fill = w.cache_ttl > 0 ? Math.max(0, Math.min(1, left / w.cache_ttl)) : null;
-  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "-" + Math.ceil(left / 60), cls: "cache", fill,
+  // "cache 4m", not a bare "-4" no one could read (persona runs, 2026-11-24).
+  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "cache " + Math.ceil(left / 60) + "m", cls: "cache", fill,
     title: `prompt cache expires in ${Math.ceil(left / 60)} min; a prompt after that re-sends the whole context`});
   return out;
 }
@@ -4145,12 +4146,21 @@ async function fileDiff(l, file){
 // or for a background one `claude stop`, which its supervisor honours (a
 // killed one it starts again) - and takes the tile off the list either way.
 // The chat says what is happening while the dispatcher works on it.
+// Pure: the question before closing `s`, or null when nothing is lost.
+function closeAsk(s){
+  if (!(s.status === "busy" || s.state === "working" || RUNNING[s.status])) return null;
+  return (s.kind === "background" ? "Stop the background session " : "Close ") + nameOf(s) +
+    "? It is working right now - its turn will be interrupted. The conversation can be resumed from History.";
+}
 async function closeSession(k){
   const s = sessions.find(x => key(x) === k);
   const bg = !!s && s.kind === "background";
-  if (!s || closing.has(k) || !confirm((bg ? "Stop the background session " : "Close ") + nameOf(s) +
-      (bg ? "" : " and its window") + "? Its tile is removed; the conversation can be resumed from History." +
-      (s.status === "busy" || s.state === "working" ? "\n\nIt is working right now - its turn will be interrupted." : ""))) return;
+  if (!s || closing.has(k)) return;
+  // Asked only when it would cut work short: an idle session's conversation
+  // resumes from History, and four steps per close was the cost of asking
+  // every time (persona runs, 2026-11-24).
+  const ask = closeAsk(s);
+  if (ask && !confirm(ask)) return;
   const n = addNote(k, bg ? "Stopping this background session…" : "Closing this session and its terminal tab…");
   closing.add(k);
   say("closing " + nameOf(s) + "…", k);
@@ -6120,7 +6130,10 @@ $("#histbias").addEventListener("click", e => {
   if (!e.target.closest("#hall")) return;
   $("#hfolder").value = ""; $("#histbias").hidden = true; search();
 });
-$("#days").onchange = loadInsights;
+// One range for both cards: picking it on either sets the other (they had
+// different choices, and 90 days of failures could not be asked for:
+// persona runs, 2026-11-24).
+$("#days").onchange = () => { $("#cdays").value = $("#days").value; loadInsights(); };
 $("#pjpick").onchange = () => { projFor = $("#pjpick").value; loadProject(); };
 $("#pjrefresh").onclick = () => loadProject();
 // A new dispatcher came up: load its page, on the same session. The prompt
@@ -6291,7 +6304,7 @@ $("#findpop").addEventListener("keydown", e => {
 });
 $("#cfprev").onclick = () => goFind(-1);
 $("#cfnext").onclick = () => goFind(1);
-$("#cdays").onchange = loadCosts;
+$("#cdays").onchange = () => { $("#days").value = $("#cdays").value; loadInsights(); };
 
 loadPrefs().then(tick);
 openStream();

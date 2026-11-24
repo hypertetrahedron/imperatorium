@@ -389,12 +389,12 @@ describe("WorkAtAGlance", () => {
   it("a closed tile counts down only the last ten minutes", () => {
     const far = { cache_expires_at: 1000 + 58 * 60 - 10 };
     assert.deepEqual(parts(far), []);
-    assert.deepEqual(parts(far, 1000, true), ["-58"]);
-    assert.deepEqual(parts({ cache_expires_at: 1000 + 4 * 60 - 10 }), ["-4"]);
+    assert.deepEqual(parts(far, 1000, true), ["cache 58m"]);
+    assert.deepEqual(parts({ cache_expires_at: 1000 + 4 * 60 - 10 }), ["cache 4m"]);
   });
 
   it("minutes round up and an expired cache shows nothing", () => {
-    assert.deepEqual(parts({ cache_expires_at: 1030 }), ["-1"]);
+    assert.deepEqual(parts({ cache_expires_at: 1030 }), ["cache 1m"]);
     assert.deepEqual(parts({ cache_expires_at: 900 }, 1000, true), []);
     assert.deepEqual(parts(null), []);
   });
@@ -456,7 +456,7 @@ describe("WorkAtAGlance", () => {
                           work: { cache_expires_at: 1200 },
                           attention: true, attention_since: 40,
                           pr: { state: "open", checks: "failing" } });
-    const order = [">new<", ">-4<", ">ctx 91%<", ">2 queued<", "[PR]"].map((x) => got.indexOf(x));
+    const order = [">new<", ">cache 4m<", ">ctx 91%<", ">2 queued<", "[PR]"].map((x) => got.indexOf(x));
     assert.ok(order.every((i) => i >= 0), String(order));
     assert.deepEqual(order, [...order].sort((a, b) => a - b));
     assertNotIn('class="since"', got);   // the open tile's idle time says it
@@ -491,7 +491,7 @@ describe("WorkAtAGlance", () => {
                           pr: { state: "open", checks: "failing" } }, 1000, true);
     assertNotIn("ctx", got);
     assertNotIn("[PR]", got);
-    assertIn(">-34<", got);
+    assertIn(">cache 34m<", got);
   });
 });
 
