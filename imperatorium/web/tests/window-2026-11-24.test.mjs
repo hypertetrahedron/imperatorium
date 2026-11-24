@@ -51,7 +51,7 @@ describe("QueueList", () => {
 
   it("each change redraws at once and a refusal is said", () => {
     assertIn('"/api/queue/move"', SCRIPT);
-    assertIn("if (!r.ok) say(r.error || \"refused\", key(s));", SCRIPT);
+    assertIn("that prompt is no longer queued", SCRIPT);
     assertIn("await drawQueued(current());", SCRIPT);
   });
 });

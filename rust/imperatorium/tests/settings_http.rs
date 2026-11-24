@@ -285,7 +285,9 @@ fn the_gear_sits_left_of_the_matrix_button() {
     let page = home_page(&d);
     assert!(page.find("id=setbtn").unwrap() < page.find("id=matrixbtn").unwrap());
     assert!(page.contains("aria-label=\"Settings\""));
-    assert!(script(&d, &page, "app.js").contains("window.open(\"/settings\", \"imperatorium-settings\""));
+    // The Settings window, at a section when one is named (2026-11-24).
+    let app = script(&d, &page, "app.js");
+    assert!(app.contains("window.open(\"/settings\" + (section ? \"#\" + section : \"\"), \"imperatorium-settings\""));
 }
 
 #[test]

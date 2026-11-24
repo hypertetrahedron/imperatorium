@@ -4651,7 +4651,7 @@ async function drawQueued(s){
   const act = async (path, body) => {
     $("#queued").querySelectorAll("button").forEach(b => b.disabled = true);
     const r = await post(path, Object.assign({session: pkey(s)}, body)).catch(() => ({ok: false, error: "the dispatcher did not answer"}));
-    if (!r.ok) say(r.error || "refused", key(s));
+    if (!r.ok) say(r.error || "that prompt is no longer queued - it was sent or cancelled", key(s));
     queuedSig = "";
     await drawQueued(current());
   };

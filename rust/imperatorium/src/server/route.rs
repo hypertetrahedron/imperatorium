@@ -50,11 +50,8 @@ impl Shared {
                     .unwrap_or_default();
                 let ok = store.unqueue(&sid, p.get("id").unwrap_or(&Value::Null));
                 self.invalidate();
-                if ok {
-                    json!({"ok": true})
-                } else {
-                    json!({"ok": false, "error": "that prompt is no longer queued - it was sent or cancelled"})
-                }
+                // As the Python twin answered: the window says why (gone).
+                json!({"ok": ok})
             }
             "/api/queue/move" => {
                 let sid = p
