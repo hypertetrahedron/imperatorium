@@ -18,9 +18,134 @@ use crate::pyish::take;
 const TIMEOUT: f64 = 20.0;
 pub(crate) const MAX_DIFF: usize = 400 * 1024;
 
+/// What runs as `git`: the program and what to add to its environment.
+///
+/// Git for Windows puts `cmd\git.exe` on PATH, a wrapper that starts the real
+/// `<arch>\bin\git.exe` and waits for it. Windows 11 25H2 (win32kfull
+/// 10.0.26100.9974) leaks the token of any process that starts a console
+/// program and is still running when it attaches to its console: freed only
+/// by a reboot, ~2.5 KB each, ~14 MB/h at the dispatcher's git rate
+/// (reported to Microsoft 2026-11-24). So the wrapper is skipped and the
+/// real git run with what the wrapper would have given it: its `bin` and
+/// `usr\bin` ahead on PATH (for sh, ssh, credential helpers), MSYSTEM and
+/// PLINK_PROTOCOL. The same leak is why [`current_branch`] reads HEAD
+/// rather than run git on every poll.
+fn git_command() -> Command {
+    let found = crate::launch::which("git").map(std::path::PathBuf::from);
+    match found.as_deref().and_then(real_git) {
+        Some(real) => {
+            let mut c = Command::new(&real.exe);
+            let mut path = std::ffi::OsString::from(real.bin.as_os_str());
+            path.push(";");
+            path.push(real.usr_bin.as_os_str());
+            if let Some(p) = std::env::var_os("PATH") {
+                path.push(";");
+                path.push(p);
+            }
+            c.env("PATH", path);
+            if std::env::var_os("MSYSTEM").is_none() {
+                c.env("MSYSTEM", real.msystem);
+            }
+            if std::env::var_os("PLINK_PROTOCOL").is_none() {
+                c.env("PLINK_PROTOCOL", "ssh");
+            }
+            c
+        }
+        None => Command::new("git"),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RealGit {
+    exe: std::path::PathBuf,
+    bin: std::path::PathBuf,
+    usr_bin: std::path::PathBuf,
+    msystem: &'static str,
+}
+
+/// The git behind Git for Windows' `<top>\cmd\git.exe` wrapper, if `found`
+/// is that wrapper and the real one is where an install puts it.
+fn real_git(found: &std::path::Path) -> Option<RealGit> {
+    if !cfg!(windows) || !found.file_name()?.to_str()?.eq_ignore_ascii_case("git.exe") {
+        return None;
+    }
+    let cmd = found.parent()?;
+    if !cmd.file_name()?.to_str()?.eq_ignore_ascii_case("cmd") {
+        return None;
+    }
+    let top = cmd.parent()?;
+    for (dir, msystem) in [("mingw64", "MINGW64"), ("clangarm64", "CLANGARM64"), ("mingw32", "MINGW32")] {
+        let bin = top.join(dir).join("bin");
+        let exe = bin.join("git.exe");
+        if exe.is_file() {
+            return Some(RealGit { exe, bin, usr_bin: top.join("usr").join("bin"), msystem });
+        }
+    }
+    None
+}
+
+/// `git branch --show-current` for `cwd`, read from HEAD where that is a
+/// plain file (no process, see [`git_command`]: the PR tracker asks for
+/// every session's folder every 5 s); git itself otherwise.
+/// Err when `cwd` is in no repository.
+pub fn current_branch(cwd: &str) -> Result<String, String> {
+    match head_branch(std::path::Path::new(cwd)) {
+        Head::Branch(b) => Ok(b),
+        Head::NoRepo => Err("not a git repository".into()),
+        Head::AskGit => git(cwd, &["branch", "--show-current"], true)
+            .map(|o| crate::pyish::strip(&o).to_string()),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Head {
+    /// The branch checked out; empty when HEAD is detached.
+    Branch(String),
+    /// No `.git` in `cwd` or above it.
+    NoRepo,
+    /// Something only git can read (reftable, an odd HEAD, unreadable).
+    AskGit,
+}
+
+fn head_branch(cwd: &std::path::Path) -> Head {
+    let Ok(start) = std::path::absolute(cwd) else { return Head::AskGit };
+    for dir in start.ancestors() {
+        let dotgit = dir.join(".git");
+        if dotgit.is_dir() {
+            return head_in(&dotgit);
+        }
+        if dotgit.is_file() {
+            // A worktree or submodule: "gitdir: <path>", maybe relative.
+            let Ok(text) = std::fs::read_to_string(&dotgit) else { return Head::AskGit };
+            let Some(gitdir) = text.trim_end().strip_prefix("gitdir:") else { return Head::AskGit };
+            return head_in(&dir.join(gitdir.trim()));
+        }
+        if dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir() {
+            return head_in(dir); // a bare repository
+        }
+    }
+    Head::NoRepo
+}
+
+fn head_in(gitdir: &std::path::Path) -> Head {
+    let Ok(text) = std::fs::read_to_string(gitdir.join("HEAD")) else { return Head::AskGit };
+    let head = text.trim_end_matches(['\n', '\r']);
+    if let Some(target) = head.strip_prefix("ref: ") {
+        return match target.strip_prefix("refs/heads/") {
+            // reftable keeps HEAD as a stub pointing here.
+            Some(b) if !b.is_empty() && b != ".invalid" => Head::Branch(b.to_string()),
+            _ => Head::AskGit,
+        };
+    }
+    if matches!(head.len(), 40 | 64) && head.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Head::Branch(String::new()); // detached
+    }
+    Head::AskGit
+}
+
 /// stdout of `git -C cwd args`; Err(message) as changes.git raises it.
 pub fn git(cwd: &str, args: &[&str], check: bool) -> Result<String, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("-C").arg(cwd).args(args);
     let o = match crate::proc::run_timeout(&mut cmd, Duration::from_secs_f64(TIMEOUT)) {
         Ok(o) => o,
@@ -594,6 +719,111 @@ mod tests {
         git(cwd, args, true).unwrap();
     }
 
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("imp-head-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// HEAD read from the file agrees with `git branch --show-current`: on a
+    /// branch, from a subfolder, detached, in a linked worktree.
+    #[test]
+    fn the_branch_is_read_from_head_as_git_reports_it() {
+        let d = scratch("agree");
+        let top = d.to_string_lossy().into_owned();
+        sh(&top, &["init", "-q", "-b", "trunk"]);
+        let asked = |cwd: &str| crate::pyish::strip(&git(cwd, &["branch", "--show-current"], true).unwrap()).to_string();
+        assert_eq!(head_branch(&d), Head::Branch("trunk".into()));
+        sh(&top, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+        sh(&top, &["switch", "-q", "-c", "feature/x"]);
+        std::fs::create_dir_all(d.join("sub").join("deeper")).unwrap();
+        let sub = d.join("sub").join("deeper").to_string_lossy().into_owned();
+        assert_eq!(current_branch(&sub).unwrap(), "feature/x");
+        assert_eq!(current_branch(&sub).unwrap(), asked(&sub));
+        sh(&top, &["switch", "-q", "--detach"]);
+        assert_eq!(head_branch(&d), Head::Branch(String::new()));
+        assert_eq!(current_branch(&top).unwrap(), asked(&top));
+        let wt = d.join("wt");
+        sh(&top, &["worktree", "add", "-q", "-b", "side", &wt.to_string_lossy()]);
+        assert!(wt.join(".git").is_file());
+        let w = wt.to_string_lossy().into_owned();
+        assert_eq!(current_branch(&w).unwrap(), "side");
+        assert_eq!(current_branch(&w).unwrap(), asked(&w));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_head_only_git_can_read_is_left_to_git() {
+        let d = scratch("odd");
+        let gd = d.join(".git");
+        std::fs::create_dir_all(&gd).unwrap();
+        for (head, want) in [
+            ("ref: refs/heads/main\n", Head::Branch("main".into())),
+            ("ref: refs/heads/main\r\n", Head::Branch("main".into())),
+            ("ref: refs/heads/.invalid\n", Head::AskGit), // reftable's stub
+            ("ref: refs/remotes/origin/x\n", Head::AskGit),
+            (&format!("{}\n", "a".repeat(40)), Head::Branch(String::new())),
+            ("garbage\n", Head::AskGit),
+        ] {
+            std::fs::write(gd.join("HEAD"), head).unwrap();
+            assert_eq!(head_branch(&d), want, "{head:?}");
+        }
+        std::fs::remove_file(gd.join("HEAD")).unwrap();
+        assert_eq!(head_branch(&d), Head::AskGit);
+        // A gitdir file pointing somewhere relative.
+        let wt = d.join("w");
+        std::fs::create_dir_all(wt.join("meta")).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: meta\n").unwrap();
+        std::fs::write(wt.join("meta").join("HEAD"), "ref: refs/heads/rel\n").unwrap();
+        assert_eq!(head_branch(&wt), Head::Branch("rel".into()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_folder_in_no_repository_needs_no_git() {
+        let d = scratch("none");
+        // Under the temp folder, which is in no repository here.
+        if head_branch(&std::env::temp_dir()) == Head::NoRepo {
+            assert_eq!(head_branch(&d), Head::NoRepo);
+            assert!(current_branch(&d.to_string_lossy()).is_err());
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_wrapper_is_passed_over_for_the_git_it_starts() {
+        let top = scratch("gfw");
+        for p in ["cmd", "mingw64/bin", "usr/bin"] {
+            std::fs::create_dir_all(top.join(p)).unwrap();
+        }
+        std::fs::write(top.join("cmd/git.exe"), "").unwrap();
+        assert_eq!(real_git(&top.join("cmd/git.exe")), None, "no real git beside it yet");
+        std::fs::write(top.join("mingw64/bin/git.exe"), "").unwrap();
+        let real = real_git(&top.join("cmd").join("GIT.EXE")).unwrap();
+        assert_eq!(real.exe, top.join("mingw64").join("bin").join("git.exe"));
+        assert_eq!(real.usr_bin, top.join("usr").join("bin"));
+        assert_eq!(real.msystem, "MINGW64");
+        // The real one found first on PATH, or any other git, is run as found.
+        assert_eq!(real_git(&top.join("mingw64/bin/git.exe")), None);
+        assert_eq!(real_git(&top.join("cmd/gitk.exe")), None);
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// Through the real install: git run this way still finds sh (an alias
+    /// with `!` needs it), as it does through the wrapper.
+    #[cfg(windows)]
+    #[test]
+    fn the_real_git_keeps_what_the_wrapper_gave_it() {
+        let Some(found) = crate::launch::which("git") else { return };
+        if real_git(std::path::Path::new(&found)).is_none() {
+            return; // PATH finds the real git already (a Git Bash shell)
+        }
+        let out = git(".", &["-c", "alias.e=!echo $MSYSTEM", "e"], true).unwrap();
+        assert!(out.trim().starts_with("MINGW") || out.trim().starts_with("CLANG"), "{out:?}");
+    }
+
     /// A repository on `main` with a long-lived `feat` beside it, ahead.
     fn repo_with_feature() -> (std::path::PathBuf, String, String) {
         let top = std::env::temp_dir().join(format!(
@@ -700,7 +930,7 @@ fn find(project: &str, path: &str) -> Result<Found, Value> {
 
 /// changes._run: (exit code, stdout + stderr), 60 s at most.
 fn run(cmd: &[&str], cwd: Option<&str>) -> (i32, String) {
-    let mut c = Command::new(cmd[0]);
+    let mut c = if cmd[0] == "git" { git_command() } else { Command::new(cmd[0]) };
     c.args(&cmd[1..]);
     if let Some(d) = cwd {
         c.current_dir(d);
