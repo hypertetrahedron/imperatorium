@@ -99,6 +99,8 @@ fn without_a_mod_the_socket_is_used_as_before() {
     rig.start_hook(SID, "tok", &socket);
     let out = as_window(&rig, json!({"prompt": "hello", "session_id": SID}));
     assert_eq!(out["ok"], true, "{out}");
+    // The pipe's reader thread records it a moment after the write.
+    common::dispatch::eventually("it reaches the socket", || !rig.received(&socket).is_empty());
     assert_eq!(rig.received(&socket).len(), 1);
 }
 
