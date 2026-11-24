@@ -810,6 +810,8 @@ details.menu .cap{padding:2px 9px;font-size:12px;text-transform:uppercase;letter
 .card{border:1px solid var(--line);border-radius:6px;padding:9px 11px;margin:0 0 9px;
   background:var(--panel)}
 .card h3{margin:0 0 4px;font-size:13.5px}
+.wres{margin-top:6px;font-size:12px;color:var(--ok)}
+.wres.bad{color:var(--fail)}
 .card .btns{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
 .card small{color:var(--muted)}
 button.sm{padding:3px 9px;font-size:12px}
@@ -818,6 +820,10 @@ button.danger{background:var(--fail)}
 #stop{color:var(--onaccent);border-color:var(--fail);font-weight:600}
 .hits{font-size:12.5px}
 .hit{padding:8px 0;border-bottom:1px solid var(--line)}
+.hprev{margin-top:6px;padding:6px 8px;border-left:2px solid var(--line);max-height:320px;overflow:auto;font-size:12.5px}
+.hprev .pv{margin:0 0 6px;white-space:pre-wrap;overflow-wrap:anywhere}
+.hprev .pv.you b{color:var(--you,var(--accent))}
+.hprev .pv.tools{color:var(--muted);font-size:12px}
 .hit .tt{font-weight:600}
 .hit .sn{color:var(--muted);font-size:12px;margin-top:2px}
 .hit .btns{margin-top:5px;display:flex;gap:6px}

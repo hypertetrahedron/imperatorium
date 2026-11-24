@@ -242,6 +242,8 @@ impl Shared {
     /// No verdict is a silent "ask": the terminal prompts.
     pub(super) fn park_request(&self, p: &Map<String, Value>) -> Value {
         let wait = self.park_wait(p);
+        // Wake the window's stream: it says "pending" once the request is in.
+        self.invalidate();
         let (verdict, who, answers) = self.pending.park_while(p, wait, |item| self.park_abandoned(item));
         let mut reply = json!({"verdict": verdict, "decided_by": who});
         if truthy(Some(&answers)) {

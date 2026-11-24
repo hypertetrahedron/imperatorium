@@ -833,7 +833,12 @@
   {
    "where": "Window",
    "keys": "N, Alt+N",
-   "what": "next session waiting for you"
+   "what": "next session waiting for you: blocked ones first, then failed, then finished"
+  },
+  {
+   "where": "Window",
+   "keys": "A / D",
+   "what": "allow / deny the first permission request (not while typing)"
   },
   {
    "where": "Window",
@@ -853,7 +858,7 @@
   {
    "where": "Window",
    "keys": "Esc",
-   "what": "close an open menu"
+   "what": "close an open menu or pop-up"
   },
   {
    "where": "Conversation",

@@ -222,6 +222,9 @@ impl Shared {
                     who,
                     p.get("answers"),
                 );
+                if ok {
+                    self.invalidate(); // other windows drop it from their bar now
+                }
                 return (if ok { 200 } else { 409 }, Body::Json(json!({"ok": ok})));
             }
             _ => {}

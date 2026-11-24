@@ -29,6 +29,9 @@ pub const PASS: &str = "pass";
 pub struct Pending {
     items: Mutex<IndexMap<String, Map<String, Value>>>,
     changed: Condvar,
+    /// Bumped on every change, so the window's stream can say "look again"
+    /// at once rather than on its next poll (2.4-3.8 s late: persona runs).
+    version: std::sync::atomic::AtomicU64,
 }
 
 fn now() -> f64 {
@@ -91,6 +94,7 @@ impl Pending {
         }
         let mut items = self.items.lk();
         items.insert(id.clone(), item);
+        self.bump();
         self.changed.notify_all();
         // Python's min(max(nan, 0), 600) is nan, and a nan deadline is
         // already past: no wait.
@@ -130,6 +134,7 @@ impl Pending {
         if verdict.is_null() {
             // Expired or passed: the window stops offering it.
             items.shift_remove(&id);
+            self.bump();
         }
         let who = item.get("decided_by").cloned().unwrap_or(Value::Null);
         let answers = item.get("answers").cloned().unwrap_or(Value::Null);
@@ -161,8 +166,18 @@ impl Pending {
         }
         item.insert("verdict".into(), json!(v));
         item.insert("decided_by".into(), who);
+        self.bump();
         self.changed.notify_all();
         true
+    }
+
+    fn bump(&self) {
+        self.version.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Changes so far: a new number means a request came or went.
+    pub fn version(&self) -> u64 {
+        self.version.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Pending.waiting: everything still awaiting an answer, oldest first.

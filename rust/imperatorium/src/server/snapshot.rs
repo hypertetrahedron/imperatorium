@@ -623,6 +623,7 @@ impl Shared {
         }
         let (mut quiet, mut looked) = (Self::now(), 0.0);
         let mut last: Option<Arc<PublicSnap>> = None;
+        let mut asked = self.pending.version();
         loop {
             let gap = stream_min_gap() - (Self::now() - looked);
             if gap > 0.0 {
@@ -634,6 +635,16 @@ impl Shared {
             let moved = last
                 .as_ref()
                 .is_none_or(|l| !Arc::ptr_eq(l, &snap) && l.same != snap.same);
+            // A permission request or question came or went: the page reads
+            // /api/pending at once (it polled every 3 s).
+            let now_asked = self.pending.version();
+            if now_asked != asked {
+                asked = now_asked;
+                quiet = Self::now();
+                if out.write_all(b"event: pending\ndata: {}\n\n").and_then(|_| out.flush()).is_err() {
+                    return;
+                }
+            }
             let sent = if moved {
                 let r = write!(out, "event: sessions\ndata: {}\n\n", snap.data)
                     .and_then(|_| out.flush());

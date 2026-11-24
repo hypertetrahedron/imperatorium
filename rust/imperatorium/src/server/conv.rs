@@ -112,7 +112,7 @@ impl Shared {
     /// cache when it holds this transcript as it is, else read - and not
     /// remembered, so a search over hundreds of sessions does not push out
     /// the ones the window is showing. None when it cannot be read.
-    fn search_text(&self, sid: &str) -> Option<String> {
+    pub(super) fn search_text(&self, sid: &str) -> Option<String> {
         let stamp = self.stamp(sid);
         if let Some(st) = &stamp {
             let hit = self.convs.lk().get(sid).filter(|c| &c.stamp == st).cloned();

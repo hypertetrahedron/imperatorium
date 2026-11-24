@@ -3107,6 +3107,9 @@ function openStream(){
     gotSessions(d.sessions || []);
   });
   es.addEventListener("ping", heard);
+  // A permission request or question came or went: show it now, not on the
+  // next poll (that was 2.4-3.8 s; persona runs, 2026-11-24).
+  es.addEventListener("pending", () => { if (es !== streamES) return; heard(); pendingSig = ""; drawPending(); });
   es.onopen = () => { heard(); checkBoot(reloadForNewDispatcher); };
   es.onerror = () => { if (es === streamES) streamUp = false; };
 }
@@ -3458,6 +3461,11 @@ async function loadPrefs(){
 // says which host, first.
 let pendingSig = "";
 const hostTag = i => i.host ? `<span class="dqhost" title="a session on ${esc(i.host)}">${esc(i.host)}</span>` : "";
+// Pure: the verdict a key gives the first permission request, if any.
+function decisionKey(k, rowThere){
+  if (!rowThere) return null;
+  return k === "a" ? "allow" : k === "d" ? "deny" : null;
+}
 async function drawPending(){
   let d;
   try { d = await get("/api/pending"); } catch (e) { return; }
@@ -3473,10 +3481,11 @@ async function drawPending(){
   keepQuestions();
   $("#decide").innerHTML = items.map(i => i.questions ? questionHtml(i) : `<div class="dq"><span title="${esc(i.input)}">${
     hostTag(i)}<b>${esc(folder(i.cwd))}</b> wants ${esc(i.tool)}: ${esc(i.input)}${i.reason ? " - " + esc(i.reason) : ""}</span>
-    <button class="sm" data-dv="allow" data-di="${esc(i.id)}">Allow</button>
-    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}">Deny</button>
+    <button class="sm" data-dv="allow" data-di="${esc(i.id)}" title="A">Allow</button>
+    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}" title="D">Deny</button>
     <button class="sm ghost" data-dv="pass" data-di="${esc(i.id)}" title="answer it in the session's console instead${
-      i.host ? " (on " + esc(i.host) + ")" : ""}">Console</button></div>`).join("");
+      i.host ? " (on " + esc(i.host) + ")" : ""}">Console</button>${
+      i === items.find(x => !x.questions) ? `<span class="qkeys">A allow · D deny</span>` : ""}</div>`).join("");
   document.querySelectorAll("[data-dv]").forEach(b => b.onclick = async () => {
     const card = b.closest(".dqq");
     const body = {id: b.dataset.di, verdict: b.dataset.dv, who: "window"};
@@ -3904,10 +3913,11 @@ async function loadWorktrees(){
         w.subject ? " · last: " + esc(w.subject) : ""}</div>
       <div class="btns"><button class="sm ghost" data-wd="${esc(w.path)}">Diff</button>${w.agent ? `
         <button class="sm" data-wa="merge" data-wp="${esc(w.path)}" ${w.ahead && !w.dirty ? "" : "disabled"}>Merge into ${esc(w.base || d.base)}</button>
+        <button class="sm ghost" data-wa="mergeremove" data-wp="${esc(w.path)}" ${w.ahead && !w.dirty ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
         <button class="sm ghost" data-wa="pr" data-wp="${esc(w.path)}" ${w.dirty ? "disabled" : ""}>Push + open PR</button>
-        <button class="sm danger" data-wa="discard" data-wp="${esc(w.path)}">Discard</button>` : ""}</div>
+        <button class="sm danger" data-wa="discard" data-wp="${esc(w.path)}">Discard</button>` : ""}</div>${worktreeNoteHtml(worktreeNotes[w.path])}
       <div class="wdiff" data-for="${esc(w.path)}"></div></div>`).join("");
-  const sig = JSON.stringify(d.worktrees);
+  const sig = JSON.stringify([d.worktrees, worktreeNotes]);
   if ($("#worktrees").dataset.sig === sig) return;
   $("#worktrees").dataset.sig = sig;
   $("#worktrees").innerHTML = `<div class="kv">worktrees of ${esc(d.main)} (base ${esc(d.base)})</div>${
@@ -3919,7 +3929,8 @@ async function loadWorktrees(){
     box.innerHTML = r.ok ? `<pre class="files">${esc(r.log)}</pre><div class="diff">${diffHtml(r.diff)}${r.truncated ? "\n… (truncated)" : ""}</div>`
       : `<div class="note">${esc(r.error)}</div>`;
   });
-  document.querySelectorAll("[data-wa]").forEach(b => b.onclick = () => finishWorktree(s, b.dataset.wa, b.dataset.wp));
+  const infoOf = p => { const w = d.worktrees.find(x => x.path === p) || {}; return {ahead: w.ahead || 0, dirty: !!w.dirty, base: w.base || d.base}; };
+  document.querySelectorAll("[data-wa]").forEach(b => b.onclick = () => finishWorktree(s, b.dataset.wa, b.dataset.wp, false, infoOf(b.dataset.wp)));
 }
 
 // Who a worktree card says works in it: the live sessions there (a click
@@ -3932,19 +3943,45 @@ function worktreeWho(w){
     : "no session running in it";
 }
 
-async function finishWorktree(s, action, path, force){
-  const say = {merge: "Merge this branch into the main checkout?",
-               pr: "Push this branch to origin and open a pull request?",
-               discard: "Remove this worktree and delete its branch?"}[action];
-  if (!force && !confirm(say)) return;
-  const r = await post("/api/worktree", {project: s.cwd, path, action, force: !!force});
+// Pure: the one question a worktree action asks, saying up front what a
+// discard loses (it asked twice: a confirm, a refusal for unmerged commits,
+// a second confirm - persona runs, 2026-11-24). `info`: {ahead, dirty, base}
+// as the card shows them; `force` is whether the answer covers the loss.
+function worktreeAsk(action, info){
+  const i = info || {}, base = i.base || "its base";
+  const loses = [i.ahead ? plural(i.ahead, "commit") + " not in " + base : "", i.dirty ? "uncommitted changes" : ""].filter(Boolean);
+  if (action === "merge") return {text: "Merge this branch into " + base + "?", force: false};
+  if (action === "mergeremove") return {text: "Merge this branch into " + base + ", then remove the worktree and its branch?", force: false};
+  if (action === "pr") return {text: "Push this branch to origin and open a pull request?", force: false};
+  return {text: "Remove this worktree and delete its branch?" + (loses.length ? " Its " + loses.join(" and ") + " will be lost." : ""),
+          force: loses.length > 0};
+}
+// What each worktree action came to, shown on its card until the next one.
+const worktreeNotes = {};
+async function finishWorktree(s, action, path, force, info){
+  const ask = worktreeAsk(action, info);
+  if (!force && !confirm(ask.text)) return;
+  const merging = action === "merge" || action === "mergeremove";
+  let r = await post("/api/worktree", {project: s.cwd, path, action: merging ? "merge" : action, force: !!force || ask.force});
   if (!r.ok && r.needs_force){
-    if (confirm(r.error + ". Discard anyway?")) return finishWorktree(s, action, path, true);
+    // Something the card did not know of (it was a few seconds old).
+    if (confirm(r.error + ". Discard anyway?")) return finishWorktree(s, action, path, true, info);
     return;
   }
-  $("#say").textContent = r.ok ? (action === "pr" && r.url ? "opened " + r.url : action + " done: " + (r.branch || ""))
+  let note = r.ok ? (action === "pr" && r.url ? "opened " + r.url : merging ? "merged into " + ((info && info.base) || "its base") + (r.branch ? " (" + r.branch + ")" : "") : "removed")
     : (r.error || "refused");
+  if (r.ok && action === "mergeremove"){
+    const gone = await post("/api/worktree", {project: s.cwd, path, action: "discard", force: false});
+    note += gone.ok ? ", and the worktree removed" : " - the worktree stays: " + (gone.error || "refused");
+  }
+  worktreeNotes[path] = {ok: !!r.ok, text: note};
+  $("#say").textContent = (r.ok ? "" : action + ": ") + note;
   $("#worktrees").dataset.sig = ""; loadWorktrees();
+  return r;
+}
+// Pure: a card's note on what its last action came to.
+function worktreeNoteHtml(n){
+  return n ? `<div class="wres${n.ok ? "" : " bad"}">${esc(n.text)}</div>` : "";
 }
 
 // -- Project Changes (2026-11-17) ---------------------------------------------
@@ -4046,8 +4083,9 @@ function drawProject(){
     const chips = mine.map(s => `<button class="sm ghost pjs" data-pjs="${esc(key(s))}" title="open this session">${esc(nameOf(s))}</button>`).join("");
     const acts = l.kind === "worktree" && l.agent ? `<div class="btns">
         <button class="sm" data-pja="merge" data-pjp="${esc(l.path)}" ${l.ahead && !un.size ? "" : "disabled"}>Merge into ${esc(l.base || d.base)}</button>
+        <button class="sm ghost" data-pja="mergeremove" data-pjp="${esc(l.path)}" ${l.ahead && !un.size ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
         <button class="sm ghost" data-pja="pr" data-pjp="${esc(l.path)}" ${un.size ? "disabled" : ""}>Push + open PR</button>
-        <button class="sm danger" data-pja="discard" data-pjp="${esc(l.path)}">Discard</button></div>` : "";
+        <button class="sm danger" data-pja="discard" data-pjp="${esc(l.path)}">Discard</button></div>${worktreeNoteHtml(worktreeNotes[l.path])}` : "";
     const list = files.map(f => `<div class="pjf${shared.has(f) ? " shared" : ""}" data-pjf="${esc(f)}" data-pjl="${i}" title="show its diff">${
         un.has(f) ? "<span class=code>~</span>" : "<span class=code>+</span>"}${esc(f)}${shared.has(f) ? " <span class=kv>· also elsewhere</span>" : ""}</div><div class="pjfd" hidden></div>`).join("");
     return `<div class="card pjline${shared.size && files.some(f => shared.has(f)) ? " meets" : ""}">
@@ -4081,8 +4119,12 @@ function drawProject(){
     if (!box.hidden && !box.innerHTML) box.innerHTML = await fileDiff(lines[+el.dataset.pjl], el.dataset.pjf);
   });
   pane.querySelectorAll("[data-pja]").forEach(b => b.onclick = async () => {
-    await finishWorktree({cwd: d.main}, b.dataset.pja, b.dataset.pjp);
+    const l = lines.find(x => x.path === b.dataset.pjp) || {};
+    await finishWorktree({cwd: d.main}, b.dataset.pja, b.dataset.pjp, false,
+      {ahead: l.ahead || 0, dirty: !!(l.uncommitted || []).length, base: l.base || d.base});
     loadProject();
+    // Focus back inside the pop-up, so Esc still closes it.
+    $("#pjrefresh").focus();
   });
 }
 
@@ -4667,18 +4709,52 @@ async function search(){
         `<button class="sm" data-rs="${esc(r.session_id)}" data-w="window">Resume</button>
          <button class="sm ghost" data-rs="${esc(r.session_id)}" data-w="background">Resume in bg</button>`}
         <button class="sm ghost" data-rs="${esc(r.session_id)}" data-w="window" data-fork="1">Fork</button>
-        <button class="sm ghost" data-cp="claude --resume ${esc(r.session_id)}">Copy cmd</button></div>
+        <button class="sm ghost" data-cp="claude --resume ${esc(r.session_id)}">Copy cmd</button>${
+        r.live ? "" : `<button class="sm ghost" data-hread="${esc(r.session_id)}" title="read it here, without resuming it">Read</button>`}</div>
+      <div class="hprev" hidden></div>
     </div>`).join("") || `<div class="note">${chosen || $("#hdays").value ? "nothing found with these filters" : "nothing found"}</div>`) +
     (d.complete ? "" : `<div class="note">still indexing older sessions - search again for complete results</div>`);
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
     openPopup("history", false); pick(b.dataset.open); });
   document.querySelectorAll("[data-rs]").forEach(b => b.onclick = async () => {
     const r = await spawnFrom(b.dataset.fork ? "fork" : "resume", b.dataset.w, {session_id: b.dataset.rs, prompt: ""});
-    if (r && (r.ok || r.error)) b.parentNode.insertAdjacentHTML("beforeend",
-      `<small>${esc(r.ok ? spawnOutcome(r) : r.error)}</small>`);
+    // Started: History gets out of the way of the session it opened (it
+    // stayed over it: persona runs, 2026-11-24). Refused: it says why here.
+    if (r && r.ok){ openPopup("history", false); say(spawnOutcome(r)); }
+    else if (r && r.error) b.parentNode.insertAdjacentHTML("beforeend", `<small>${esc(r.error)}</small>`);
+  });
+  document.querySelectorAll("[data-hread]").forEach(b => b.onclick = async () => {
+    const box = b.closest(".hit").querySelector(".hprev");
+    if (!box.hidden){ box.hidden = true; b.textContent = "Read"; return; }
+    box.hidden = false; b.textContent = "Hide";
+    box.innerHTML = `<div class="note">reading…</div>`;
+    let d;
+    try { d = await get("/api/conversation?session=" + encodeURIComponent(b.dataset.hread) + "&limit=80"); }
+    catch (e) { d = {error: "the dispatcher did not answer"}; }
+    box.innerHTML = d.items ? previewHtml(d.items) : `<div class="note">${esc(d.error || "it could not be read")}</div>`;
   });
   document.querySelectorAll("[data-cp]").forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.cp); b.textContent = "copied"; } catch (e) { b.textContent = b.dataset.cp; } });
+}
+
+// Pure: a past conversation, read-only, for History's preview: what you
+// asked and what Claude said, tool calls counted, the latest last. (A past
+// session could not be looked at without resuming it.)
+function previewHtml(items){
+  const out = [];
+  let tools = 0;
+  const flush = () => { if (tools){ out.push(`<div class="pv tools">${plural(tools, "tool call")}</div>`); tools = 0; } };
+  for (const it of items || []){
+    const blocks = it.blocks || [];
+    const text = blocks.filter(b => b.kind === "text").map(b => b.text || "").join("\n").trim();
+    tools += blocks.filter(b => b.kind === "tool").length;
+    if (!text || (it.speaker !== "you" && it.speaker !== "claude")) continue;
+    flush();
+    out.push(`<div class="pv ${it.speaker === "you" ? "you" : "cl"}"><b>${it.speaker === "you" ? "you" : "Claude"}</b> ${
+      esc(text.length > 600 ? text.slice(0, 600) + "…" : text)}</div>`);
+  }
+  flush();
+  return out.join("") || `<div class="note">nothing said in it</div>`;
 }
 
 // -- insights: cost and failures --------------------------------------
@@ -6180,6 +6256,10 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (e.ctrlKey || e.altKey || e.metaKey) return;
+  // A / D answer the first permission request in the Decision Bar, as the
+  // number keys answer a question card (Allow and Deny needed the mouse).
+  const verdict = decisionKey(k, !!$("#decide .dq [data-dv]"));
+  if (verdict){ e.preventDefault(); $(`#decide .dq [data-dv="${verdict}"]`).click(); return; }
   if (k === "j"){ e.preventDefault(); stepSession(1); }
   else if (k === "k"){ e.preventDefault(); stepSession(-1); }
   else if (k === "n"){ e.preventDefault(); goWaiting(); }

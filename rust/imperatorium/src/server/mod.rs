@@ -524,6 +524,23 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
             start_tunnels(&shared, fleet);
         }
     }
+    {
+        // History's first search read every transcript while the person
+        // waited (2.6-3.4 s over 500 sessions: persona runs, 2026-11-24).
+        // Read them once soon after start instead; a search that matches
+        // nothing reads them all, within its own time budget.
+        let me = Arc::clone(&shared);
+        std::thread::Builder::new()
+            .name("history-warm".into())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs_f64(crate::timing::secs(3.0)));
+                let read = |sid: &str| me.search_text(sid);
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    me.history.search_with("zq9xv7-history-warm-matches-nothing", 1, &crate::history::Filter::default(), &read)
+                }));
+            })
+            .ok();
+    }
     println!("imperatorium (native) listening on http://{addr}");
     // A fixed pool answers the ordinary requests, fed by a bounded queue:
     // a burst (or a client opening connections in a loop) gets a 503 rather
