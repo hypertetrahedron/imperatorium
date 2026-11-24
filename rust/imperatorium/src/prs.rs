@@ -145,8 +145,7 @@ impl Tracker {
                 return;
             }
             let key = crate::paths::abs_normcase(&cwd).unwrap_or_else(|| cwd.clone());
-            let Ok(branch) = crate::changes::git(&cwd, &["branch", "--show-current"], true) else { continue };
-            let branch = crate::pyish::strip(&branch).to_string();
+            let Ok(branch) = crate::changes::current_branch(&cwd) else { continue };
             {
                 let inner = self.inner.lk();
                 if let Some(hit) = inner.cache.get(&key) {

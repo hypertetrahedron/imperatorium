@@ -1,7 +1,7 @@
 # Roadmap
 
 Status legend: Not Started · In Progress · Complete · Deferred
-Last updated: 2026-11-23
+Last updated: 2026-11-24
 
 Imperatorium (package `imperatorium`): a single input
 surface for dispatching prompts to, and tracking attention across, ~20
@@ -10,6 +10,7 @@ https://github.com/hypertetrahedron/imperatorium (MIT).
 
 | Feature | Status | Notes |
 |---|---|---|
+| Dispatcher runs the real git and reads branches from HEAD | Complete | 2026-11-24: skips Git for Windows' `cmd\git.exe` wrapper and reads `.git/HEAD` for the PR tracker's branch poll, to avoid a Windows token leak (reason in `changes::git_command`). Verified: full release suite 984 passed, 0 failed; clippy clean. Not yet deployed. |
 | Persona friction runs | In Progress | 2026-11-23 (user request): `personas/` - 14 personas from this machine's transcripts and published practice (`PERSONAS.md`), set 1 (6) scripted: headless Chrome drives the real window against a sandboxed dispatcher and a simulated Claude fleet, recording clicks, keys, waits, KLM time, API latency, errors. Run on request only (not in cargo/JS tests). Set 1 run 2026-11-23 (49 steps; findings in `personas/findings/2026-11-23-set1.md`: remote host drop hides its sessions silently, Send greyed on remote while Enter sends, `n` ranks by age not urgency, git-bound worktree waits of 1-3 s, double confirm on discard). Sets 2-3 defined, not scripted. |
 | A tile's ✕ always ends the session and removes the tile | In Progress | 2026-11-23 (user report: closing a background session left the tile offering Resume, and a second ✕ made it active again). Cause, reproduced on 2.1.330: the ✕ killed the `claude --bg` process and Claude Code's supervisor started it again ~20 s later. Now a background session is stopped with `claude stop <id>` (checked live: it stays stopped), a ✕ on one between processes stops it before removing it, and every successful ✕ also takes the tile off the list (dismissed until it has a process again). Tested: `tests/close_background.rs` (agents stub), dispatch_close, session twin, web tests. Built, not deployed; not yet clicked in the live window. |
 | Feedback while a session starts or closes | In Progress | 2026-11-23 (user request). Starting one: a provisional tile at once ("starting…") with a chat note that it is loading; it gives way to the real session when that shows up (by session id, or a background one by its `claude --bg` short id); a refused start or one that has not shown up in 90 s (15 min for a mid-turn fork's first turn) removes it and opens a dialog saying why. A resume of a listed session gets the note in its own chat. Closing: a note in the chat and "closing…" on the tile until the dispatcher answers; a failure stays in the chat. Web tests for the pure pieces; not yet seen in a browser. |
