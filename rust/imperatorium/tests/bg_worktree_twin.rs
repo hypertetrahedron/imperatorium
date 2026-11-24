@@ -66,10 +66,11 @@ fn left(main: &Path) -> Value {
 fn background_dispatch_answers_as_python_did() {
     let tmp = TempDir::new("bgwt");
     let (main, feat) = bg_project(&tmp.path, "rs");
-    // The catalogue's default root is the folder the home sits in: the
-    // twin's home was <tmp>/rs-home, so the project is found under <tmp>.
+    // The project is found under <tmp>: the Python twin's default root was
+    // the folder its home sat in; since 2026-11-24 an empty `roots` lists
+    // no folders, so <tmp> is named.
     let d = Dispatcher::start(Options {
-        config: Some(json!({"background": {"model": "sonnet"}})),
+        config: Some(json!({"background": {"model": "sonnet"}, "roots": [tmp.path.to_string_lossy()]})),
         fake_cli: vec!["claude.exe"],
         home: Some(tmp.join("rs-home")),
         ..Options::new()

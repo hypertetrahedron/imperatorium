@@ -24,13 +24,22 @@ export default {
       d.observe("hintText", await page.locator("#nbghint").innerText().catch(() => ""));
       await d.click("#nbg", { decide: true });
       d.observe("promptBoxEmpty", (await page.locator("#prompt").inputValue()) === "");
+      const TASK = "Profile the nightly import and cut its time in half";
+      const taskBox = await page.locator("#ntask:not([hidden])").count();
+      d.observe("taskBox", taskBox > 0);
+      if (taskBox) await d.type("#ntask", TASK, { content: true });
       await d.click("#nstart");
       const sid = await newSession(d, "the background job starts", t0, { bg: true });
       bg.push(sid);
       d.observe("tileAfterMs", await tileShows(d, sid, t0));
-      d.note("the dialog has no field for the task: it takes the prompt box, so the job started idle and needs a second send");
-      await d.selectSession(sid);
-      await d.send(sid, "Profile the nightly import and cut its time in half", { waitReply: false });
+      if (taskBox) {
+        const ev = await d.fleetEvent("it starts on its task", e => e.kind === "turn-start" && e.sid === sid, { since: t0, timeout: 30000, sits: false }).catch(() => null);
+        d.observe("startedOnTask", !!ev);
+      } else {
+        d.note("the dialog has no field for the task: it takes the prompt box, so the job started idle and needs a second send");
+        await d.selectSession(sid);
+        await d.send(sid, TASK, { waitReply: false });
+      }
     });
 
     for (const task of ["Write the reconciliation report job", "Add a CSV export to the ledger API"]) {

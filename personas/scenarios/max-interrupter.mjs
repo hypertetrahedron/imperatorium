@@ -44,7 +44,15 @@ export default {
       d.observe("controlsPerItem", ctl);
       const canMove = await page.locator("#queued [draggable=true], #queued [data-qup], #queued [data-qmv]").count();
       d.observe("canReorder", canMove > 0);
-      if (!canMove) {
+      if (canMove) {
+        // Move "changelog" (third) to the front: Earlier twice.
+        for (let i = 0; i < 2; i++) {
+          d.op("M");
+          const at = await page.locator("#queued .qi span").allInnerTexts().then(a => a.findIndex(x => /changelog/.test(x)));
+          await d.click(`#queued .qi:nth-child(${at + 1}) [data-qmv][data-by="-1"]`);
+          await d.waitFor("it moved", { fn: n => [...document.querySelectorAll("#queued .qi span")].findIndex(x => /changelog/.test(x.innerText)) === n, arg: at - 1 }, { timeout: 5000 });
+        }
+      } else {
         d.note("queued prompts cannot be reordered: cancel and queue again");
         // Move "changelog" first: cancel the other two, queue them again after it.
         for (let i = 0; i < 2; i++) { d.op("M"); await d.click("#queued .qi [data-uq]", { nth: 0 }); await d.pause(400); }
@@ -54,7 +62,7 @@ export default {
         }
       }
       await d.waitFor("three queued again", { fn: () => document.querySelectorAll("#queued .qi").length >= 3, arg: null }, { timeout: 10000 });
-      d.observe("order", await page.locator("#queued .qi span").allInnerTexts().then(a => a.map(x => x.slice(8, 40))));
+      d.observe("order", await page.locator("#queued .qi span").allInnerTexts().then(a => a.map(x => x.replace(/^(queued: |[0-9]+[.] )/, "").slice(0, 32))));
       s.workMs = undefined;
     });
 

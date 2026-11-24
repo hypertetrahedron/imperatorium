@@ -94,9 +94,18 @@ export default {
       d.observe("ms", Date.now() - t0);
       // Allowing it: is there a key?
       const keyHint = await page.locator("#decide").innerText();
-      d.observe("decisionKeyHint", /\b(y|a|enter|ctrl)\b/i.test(keyHint));
-      await d.click("#decide [data-dv=allow]", { decide: true });
-      d.note("permission rows have no key to allow or deny (question cards do: 1-9, Enter); the mouse was needed");
+      const hinted = /A allow/.test(keyHint);
+      d.observe("decisionKeyHint", hinted);
+      if (hinted) {
+        await page.locator("#log").click();
+        const t1 = Date.now();
+        await d.press("a", { decide: true });
+        const ev = await d.fleetEvent("the session is allowed", e => e.kind === "decided" && e.sid === s.sid, { since: t1, timeout: 15000 });
+        d.observe("allowedByKeyMs", ev.t - t1);
+      } else {
+        await d.click("#decide [data-dv=allow]", { decide: true });
+        d.note("permission rows have no key to allow or deny (question cards do: 1-9, Enter); the mouse was needed");
+      }
     });
   },
 };

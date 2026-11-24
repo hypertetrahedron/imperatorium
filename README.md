@@ -1049,10 +1049,15 @@ same class of mistake as firing at the wrong repository.
 
 Each host is polled on a thread of its own every 20 seconds, never on the
 request path, so a host on a slow link or timing out delays only its own
-sessions. A host that fails is parked with a growing backoff and its real
+sessions. A host that fails is tried again at the poll interval three
+times, then parked with a growing backoff (up to 15 minutes) and its real
 reason, so a machine that is asleep costs nothing and never hides a working
-one. Settings > Remote machines shows how each host's last poll went and has
-**Refresh now**, which polls every host at once, a parked one too. Each host
+one. Its sessions stay on the list for 30 minutes from its last answer,
+marked as not answering, with the error and the next try; a prompt to one
+is refused with why. The Host Line under the session filter names each
+machine that is not answering, and it and each such tile have **Retry
+now**. Settings > Remote machines shows how each host's last poll went and
+has **Refresh now**, which polls every host at once, a parked one too. Each host
 has a **Test** button (what `remote check` prints for it), and **Add a
 machine** does `remote add` from the window: test the connection first, then
 Add, which shows each step as it goes and then offers to restart the

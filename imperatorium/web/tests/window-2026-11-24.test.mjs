@@ -216,3 +216,15 @@ describe("PopupsAndPanels", () => {
     assertIn('$("#cdays").value = $("#days").value; loadInsights();', SCRIPT);
   });
 });
+
+describe("Polling", () => {
+  it("the task list is asked for every tick only while something runs", () => {
+    const due = (s, same, shown, tick) => run(["procsDue"], `procsDue(${j(s)}, ${j(same)}, ${j(shown)}, ${j(tick)})`);
+    assert.equal(due({tasks: {}}, false, 0, 1), true);          // a session just opened
+    assert.equal(due({tasks: {}}, true, 0, 1), false);          // nothing running: skipped
+    assert.equal(due({tasks: {}}, true, 0, 4), true);           // but every 4th tick
+    assert.equal(due({tasks: {shells: 1}}, true, 0, 1), true);  // a shell running
+    assert.equal(due({status: "busy"}, true, 0, 1), true);
+    assert.equal(due({tasks: {}}, true, 2, 1), true);           // tasks still shown
+  });
+});

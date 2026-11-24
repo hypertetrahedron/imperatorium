@@ -36,7 +36,11 @@ export default {
         if ((await page.locator("#cdays").inputValue()) !== days) await d.select("#cdays", days);
         await d.waitFor("the cost chart", { fn: b => !!document.querySelector("#costs svg.chart") && document.querySelector("#costs").innerText !== b, arg: before }, { timeout: 40000 })
           .catch(async e => { if (days !== "30") throw e; }); // 30 is the default: no change to wait for
-        if (days === "30") d.note("the failures card's range (#days: 1/7/30 days) is a separate picker from the cost range (7/30/90); 90 days of failures is not offered");
+        if (days === "90") {
+          const failuresFollow = (await page.locator("#days").inputValue()) === "90";
+          d.observe("failuresRangeFollows", failuresFollow);
+          if (!failuresFollow) d.note("the failures card's range is a separate picker from the cost range; it did not follow to 90 days");
+        }
         d.observe("loadMs", Date.now() - t0);
         d.observe("tables", await page.locator("#costs table").count());
         d.observe("firstRows", (await page.locator("#costs table").allInnerTexts().catch(() => [])).map(t => t.split("\n").slice(0, 3).join(" | ").slice(0, 160)));

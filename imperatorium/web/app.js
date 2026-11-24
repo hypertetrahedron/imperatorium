@@ -2424,11 +2424,22 @@ function procWanted(){
 }
 
 let remoteAskedAt = 0;
+// Pure: whether the task list is asked for again on this tick: always for a
+// newly opened session or one with something running; else every 4th.
+function procsDue(s, same, shown, tick){
+  if (!same || shown) return true;
+  const t = (s && (s.tasks || {})) || {};
+  const busy = Object.values(t).some(n => n > 0) || (s && (s.background_tasks || s.status === "busy"));
+  return !!busy || tick % 4 === 0;
+}
 async function loadProcs(){
   const want = selected;
   if (!procWanted()){ procTasks = []; procFor = want; drawProcs(); return; }
   const s = current();
   if (s && s.remote && procFor === want && Date.now() - remoteAskedAt < 3000) return;
+  // Nothing running by the row's count: asked every fourth tick, not every
+  // one (it was the window's busiest call: persona runs, 2026-11-24).
+  if (!procsDue(s, procFor === want, procTasks.length, ticks)) return;
   if (s && s.remote) remoteAskedAt = Date.now();
   loadTaskExtra();
   let d;

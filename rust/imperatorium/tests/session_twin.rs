@@ -133,6 +133,9 @@ fn session_twin_answers_as_python_did() {
                    "speak": {"enabled": false}},
         "background": {"model": "sonnet", "permission_mode": "plan"},
         "chat": {"send_as_typed": true},
+        // The Python twin's default root, the folder its home sat in; an
+        // empty `roots` lists no folders since 2026-11-24.
+        "roots": [twin.path.to_string_lossy()],
     });
     let d = Dispatcher::start(Options {
         config: Some(config),

@@ -25,13 +25,14 @@ export default {
 
     await d.step("group by host", "see which machine each session is on", async () => {
       d.observe("groupOptions", await page.locator("#group option").allInnerTexts());
-      d.observe("hostShownOnTile", await page.locator("#sessions .s .m").first().innerText().catch(() => ""));
-      await d.select("#group", "folder");
-      d.observe("groups", await page.locator("#sessions .g, #sessions .fam").allInnerTexts().then(a => a.map(x => x.trim().slice(0, 40))));
+      const byHost = await page.locator('#group option[value="host"]').count();
+      await d.select("#group", byHost ? "host" : "folder");
+      await d.pause(300);
+      d.observe("groups", await page.locator("#sessions .g, #sessions .fam").allInnerTexts().then(a => a.map(x => x.replace(/\s+/g, " ").trim().slice(0, 40))));
       const lines = await page.locator("#sessions .s").evaluateAll(ts => ts.map(t => t.innerText.replace(/\s+/g, " ").trim().slice(0, 70)));
       d.observe("tileLines", lines);
-      d.observe("tilesNamingTheirHost", lines.filter(n => /gpu1|gpu2|build|staging|\bpi\b/.test(n)).length);
-      d.note("no 'by host' grouping: a host shows only on the open tile's Meta Line");
+      d.observe("tilesNamingTheirHost", await page.locator("#sessions .s .hb").count());
+      if (!byHost) d.note("no 'by host' grouping: a host shows only on the open tile's Meta Line");
     });
 
     await d.step("a host flaps", "build drops and returns every 20 s for a minute: watch the list", async () => {
@@ -43,37 +44,36 @@ export default {
         const el = Date.now() - t0;
         const want = Math.floor(el / 20000) % 2 === 0;
         if (want !== isDown && el < 60000) { isDown = want; flips++; if (isDown) fs.writeFileSync(down, ""); else fs.rmSync(down, { force: true }); }
-        samples.push({ s: Math.round(el / 1000), tiles: await count() });
+        samples.push({ s: Math.round(el / 1000), tiles: await count(), unreachable: await page.locator("#sessions .w.unr").count(), hostLine: !(await page.locator("#hostline").isHidden()) });
         await d.pause(1000);
       }
       fs.rmSync(down, { force: true });
-      const changes = samples.filter((x, i) => i && x.tiles !== samples[i - 1].tiles).length;
+      const key = x => `${x.tiles}/${x.unreachable}/${x.hostLine}`;
       d.observe("flips", flips);
-      d.observe("listChanges", changes);
-      d.observe("tileCounts", samples.filter((x, i) => !i || x.tiles !== samples[i - 1].tiles));
-      d.observe("windowSaysHostDown", /unreachable|offline|down|lost|refused|reach/i.test(await page.locator("#side").innerText()));
-      d.cur.waitMs += 0; // watching, not waiting on the window
+      d.observe("listChanges", samples.filter((x, i) => i && key(x) !== key(samples[i - 1])).length);
+      d.observe("samples", samples.filter((x, i) => !i || key(x) !== key(samples[i - 1])));
+      d.observe("tilesNeverDropped", samples.every(x => x.tiles === 9));
+      d.observe("windowSaysHostDown", samples.some(x => x.unreachable > 0 || x.hostLine));
     });
 
-    await d.step("Refresh now after the host is back", "make the window see build again without waiting", async () => {
+    await d.step("Retry now after the host is back", "make the window see build again without waiting", async () => {
       fs.writeFileSync(path.join(sb.bin, "down-build"), "");
-      await d.waitFor("build's sessions go", { fn: () => document.querySelectorAll("#sessions .s").length < 9, arg: null }, { timeout: 120000 });
+      await d.waitFor("build is marked not answering", { fn: () => !!document.querySelector("#sessions .w.unr") || !!document.querySelector("#hostline:not([hidden])") || document.querySelectorAll("#sessions .s").length < 9, arg: null }, { timeout: 120000 });
       fs.rmSync(path.join(sb.bin, "down-build"));
       const t0 = Date.now();
-      const popup = page.context().waitForEvent("page", { timeout: 5000 }).catch(() => null);
-      await d.click("#setbtn", { decide: true });
-      const p2 = (await popup) || page;
-      await p2.getByText("Remote machines", { exact: true }).first().waitFor({ timeout: 15000 });
-      d.op("M"); d.op("P"); d.op("B"); d.cur.clicks++;
-      await p2.getByText("Remote machines", { exact: true }).first().click().catch(() => {});
-      await p2.locator("#rrefresh").scrollIntoViewIfNeeded();
-      d.op("P"); d.op("B"); d.cur.clicks++;
-      await p2.locator("#rrefresh").click();
-      d.observe("hostStates", (await p2.locator("#set .hst").allInnerTexts()).map(x => x.slice(0, 40)));
-      if (p2 !== page) await p2.close();
-      await d.waitFor("every session listed again", { fn: () => document.querySelectorAll("#sessions .s").length >= 9, arg: null }, { timeout: 120000 });
+      const inMain = await page.locator("#sessions [data-retry], #hostline [data-retry]").count();
+      d.observe("retryInMainWindow", inMain > 0);
+      if (inMain) await d.click("#sessions [data-retry], #hostline [data-retry]", { decide: true });
+      else {
+        const popup = page.context().waitForEvent("page", { timeout: 5000 }).catch(() => null);
+        await d.click("#setbtn", { decide: true });
+        const p2 = (await popup) || page;
+        await p2.getByText("Remote machines", { exact: true }).first().waitFor({ timeout: 15000 });
+        await p2.locator("#rrefresh").click();
+        if (p2 !== page) await p2.close();
+      }
+      await d.waitFor("every session listed and answering again", { fn: () => document.querySelectorAll("#sessions .s").length >= 9 && !document.querySelector("#sessions .w.unr"), arg: null }, { timeout: 120000 });
       d.observe("recoveredMs", Date.now() - t0);
-      d.note("Refresh now is only in the Settings window, not in the main window where the sessions went missing");
     });
 
     await d.step("send to a session on each host", "a quick nudge to one session per machine", async () => {

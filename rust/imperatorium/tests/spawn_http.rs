@@ -46,7 +46,8 @@ fn spawn_plans_and_starts_where_the_rules_say() {
     let tmp = TempDir::new("spawn");
     let (main, _feat) = bg_project(&tmp.path, "rs");
     let d = Dispatcher::start(Options {
-        config: Some(json!({"background": {"permission_mode": "acceptEdits"}})),
+        config: Some(json!({"background": {"permission_mode": "acceptEdits"},
+                            "roots": [tmp.path.to_string_lossy()]})),
         fake_cli: vec!["claude.exe", "wt.exe"],
         home: Some(tmp.join("rs-home")),
         ..Options::new()
