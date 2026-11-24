@@ -118,7 +118,8 @@ describe("SidebarMenu", () => {
     for (const m of ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"])
       assertIn(`<option value=${m}>`, page);
     assertIn('spawnFrom("new", bg ? "background" : "window", {session_id: null, cwd: p.path,', SCRIPT);
-    assertIn('prompt: bg ? text || "Ready when you are." : "", permission_mode: mode, model, effort});', SCRIPT);
+    // 2026-11-23: no greeting - a background session with no task starts idle.
+    assertIn('prompt: bg ? text : "", permission_mode: mode, model, effort});', SCRIPT);
   });
 
   it("projects are found by name or folder", () => {
@@ -174,8 +175,8 @@ describe("HistoryInsightsPopups", () => {
 
   /** openPopup against stub boxes: which are shown after `calls`. */
   const shown = (calls) => evalJson(cat(
-    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hookbox': {hidden: true}, '#slashbox': {hidden: true}, '#hq': {focus() {}}};\n",
-    "let projFor = null; const openFleetView = () => {}, leaveFleet = () => {};\n",
+    "const els = {'#histbox': {hidden: true}, '#insightbox': {hidden: true}, '#projbox': {hidden: true}, '#hookbox': {hidden: true}, '#slashbox': {hidden: true}, '#hq': {focus() {}}, '#hfolder': {value: ''}, '#histbias': {hidden: true}};\n",
+    "let projFor = null, histBiased = false; const openFleetView = () => {}, leaveFleet = () => {};\n",
     "const $ = s => els[s]; const document = {querySelectorAll: () => []};\n",
     "let searched = 0, loaded = 0; const search = () => searched++, loadInsights = () => loaded++, closeMenus = () => {};\n",
     between(SCRIPT, "const POPUPS =", "\n\nfunction setTab("), "\n", calls,

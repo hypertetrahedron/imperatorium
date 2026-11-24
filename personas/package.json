@@ -1,0 +1,13 @@
+{
+  "name": "imperatorium-personas",
+  "private": true,
+  "description": "Persona friction runs for the Imperatorium window (run on request; not part of the test suite)",
+  "type": "module",
+  "scripts": {
+    "run": "node run.mjs",
+    "report": "node report.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.65.0"
+  }
+}

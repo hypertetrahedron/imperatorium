@@ -246,9 +246,37 @@ impl Index {
 
     /// Index.search: newest first; full text read until `budget` seconds
     /// are spent, so a first search answers rather than hanging.
+    #[cfg(test)]
     pub fn search(&self, query: &str, limit: usize, read: &dyn Fn(&str) -> Option<String>) -> Value {
+        self.search_with(query, limit, &Filter::default(), read)
+    }
+
+    /// [`Index::search`] over the sessions `filter` keeps, in its order,
+    /// with `folders`: every project folder in the listing (a worktree
+    /// counted under its main checkout), most recently active first, for
+    /// the History filter (2026-11-23).
+    pub fn search_with(
+        &self,
+        query: &str,
+        limit: usize,
+        filter: &Filter,
+        read: &dyn Fn(&str) -> Option<String>,
+    ) -> Value {
+        let all = self.list();
+        let folders = folders_of(&all);
+        let mut got = self.search_rows(query, limit, &filter.apply(&all), read);
+        got["folders"] = folders;
+        got
+    }
+
+    fn search_rows(
+        &self,
+        query: &str,
+        limit: usize,
+        rows: &[Map<String, Value>],
+        read: &dyn Fn(&str) -> Option<String>,
+    ) -> Value {
         let query = strip(query);
-        let rows = self.list();
         if query.is_empty() {
             let results: Vec<Value> = rows
                 .iter()
@@ -301,6 +329,125 @@ impl Index {
         }
         json!({"results": out, "complete": complete})
     }
+}
+
+/// What History is narrowed to and in which order (2026-11-23).
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct Filter {
+    /// A project folder: its sessions and those of its worktrees under
+    /// `.claude/worktrees`.
+    pub folder: Option<String>,
+    /// Active (modified) at or after this, in seconds.
+    pub since: Option<f64>,
+    pub sort: Sort,
+}
+
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub enum Sort {
+    /// Most recently active first (the listing's own order).
+    #[default]
+    Modified,
+    /// Newest first by when it was started.
+    Created,
+    /// Oldest started first.
+    Oldest,
+    /// Largest transcript first.
+    Size,
+    /// By title, A to Z.
+    Title,
+}
+
+impl Sort {
+    pub fn parse(s: &str) -> Sort {
+        match s {
+            "created" => Sort::Created,
+            "oldest" => Sort::Oldest,
+            "size" => Sort::Size,
+            "title" => Sort::Title,
+            _ => Sort::Modified,
+        }
+    }
+}
+
+/// A folder compared whatever its slashes, case or trailing slash.
+pub fn norm_dir(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// The checkout a folder belongs to: a worktree under `.claude/worktrees`
+/// is its main folder's (as the window's managedWorktree), else itself.
+pub fn main_folder(cwd: &str) -> &str {
+    let t = cwd.trim_end_matches(['\\', '/']);
+    let flat = t.replace('\\', "/");
+    match flat.rfind("/.claude/worktrees/") {
+        Some(i) if !flat[i + "/.claude/worktrees/".len()..].contains('/') => &t[..i],
+        _ => t,
+    }
+}
+
+fn num(r: &Map<String, Value>, k: &str) -> f64 {
+    r.get(k).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn title_of(r: &Map<String, Value>) -> String {
+    [r.get("title"), r.get("first_prompt")]
+        .into_iter()
+        .flatten()
+        .find(|v| truthy(Some(v)))
+        .map(py_str)
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
+impl Filter {
+    /// The rows it keeps, in its order (ties keep the listing's order).
+    pub fn apply(&self, rows: &[Map<String, Value>]) -> Vec<Map<String, Value>> {
+        let want = self.folder.as_deref().map(norm_dir).filter(|f| !f.is_empty());
+        let mut out: Vec<Map<String, Value>> = rows
+            .iter()
+            .filter(|r| {
+                let cwd = r.get("cwd").map(py_str).unwrap_or_default();
+                want.as_ref().is_none_or(|f| norm_dir(main_folder(&cwd)) == *f)
+                    && self.since.is_none_or(|t| num(r, "modified") >= t)
+            })
+            .cloned()
+            .collect();
+        let desc = |k: &'static str| move |a: &Map<String, Value>, b: &Map<String, Value>| {
+            num(b, k).partial_cmp(&num(a, k)).unwrap_or(std::cmp::Ordering::Equal)
+        };
+        match self.sort {
+            Sort::Modified => {}
+            Sort::Created => out.sort_by(desc("created")),
+            Sort::Size => out.sort_by(desc("size")),
+            Sort::Oldest => out.sort_by(|a, b| {
+                num(a, "created").partial_cmp(&num(b, "created")).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            Sort::Title => out.sort_by_key(title_of),
+        }
+        out
+    }
+}
+
+/// [{folder, count, modified}] - each main folder in `rows` once.
+fn folders_of(rows: &[Map<String, Value>]) -> Value {
+    let mut by: IndexMap<String, (String, usize, f64)> = IndexMap::new();
+    for r in rows {
+        let cwd = r.get("cwd").map(py_str).unwrap_or_default();
+        if cwd.is_empty() {
+            continue;
+        }
+        let main = main_folder(&cwd).to_string();
+        let e = by.entry(norm_dir(&main)).or_insert((main, 0, 0.0));
+        e.1 += 1;
+        e.2 = e.2.max(num(r, "modified"));
+    }
+    let mut list: Vec<(String, usize, f64)> = by.into_values().collect();
+    list.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    Value::Array(
+        list.into_iter()
+            .map(|(f, n, m)| json!({"folder": f, "count": n, "modified": m}))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -417,6 +564,77 @@ mod features_tests {
         assert_eq!(got["results"][0]["where"], "text");
         assert!(got["results"][0]["snippet"].as_str().unwrap().contains("leaky"));
         assert_eq!(got["complete"], true);
+    }
+
+    fn at(sid: &str, cwd: &str, modified: f64, created: f64, size: u64, title: &str) -> Map<String, Value> {
+        rec(json!({"session_id": sid, "title": title, "first_prompt": "", "cwd": cwd,
+                   "modified": modified, "created": created, "size": size}))
+    }
+
+    fn ids(v: &Value) -> Vec<String> {
+        v["results"].as_array().unwrap().iter().map(|r| r["session_id"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn a_worktree_belongs_to_its_main_folder() {
+        assert_eq!(main_folder(r"C:\w\app\.claude\worktrees\fix-1"), r"C:\w\app");
+        assert_eq!(main_folder("/w/app/.claude/worktrees/fix-1/"), "/w/app");
+        assert_eq!(main_folder(r"C:\w\app"), r"C:\w\app");
+        // Deeper than a worktree's own folder is not the worktree.
+        assert_eq!(main_folder("/w/app/.claude/worktrees/fix-1/sub"), "/w/app/.claude/worktrees/fix-1/sub");
+        assert_eq!(norm_dir(r"C:\W\App\"), "c:/w/app");
+    }
+
+    #[test]
+    fn history_narrows_to_a_folder_and_its_worktrees_before_the_limit() {
+        let mut rows = vec![];
+        // 50 newer sessions elsewhere would fill a limit of 40 on their own.
+        for i in 0..50 {
+            rows.push(at(&format!("o{i}"), r"C:\w\other", 100.0 + i as f64, 1.0, 1, "x"));
+        }
+        rows.push(at("a1", r"C:\w\App", 50.0, 1.0, 1, "x"));
+        rows.push(at("a2", r"c:/w/app/.claude/worktrees/fix", 40.0, 1.0, 1, "x"));
+        rows.push(at("b1", r"C:\w\apple", 45.0, 1.0, 1, "x"));
+        rows.sort_by(|a, b| num(b, "modified").partial_cmp(&num(a, "modified")).unwrap());
+        let idx = index_of(rows);
+        let f = Filter {folder: Some(r"C:\w\app\".into()), ..Default::default()};
+        let got = idx.search_with("", 40, &f, &|_| None);
+        assert_eq!(ids(&got), vec!["a1", "a2"]);
+        let folders = got["folders"].as_array().unwrap();
+        assert_eq!(folders.len(), 3);
+        assert_eq!(folders[0]["folder"], r"C:\w\other");
+        assert_eq!(folders[0]["count"], 50);
+        let app = folders.iter().find(|f| f["folder"] == r"C:\w\App").unwrap();
+        assert_eq!(app["count"], 2); // the worktree counts under its checkout
+    }
+
+    #[test]
+    fn history_sorts_and_keeps_recent_ones() {
+        let idx = index_of(vec![
+            at("new", "/w", 30.0, 10.0, 5, "beta"),
+            at("mid", "/w", 20.0, 30.0, 50, "Alpha"),
+            at("old", "/w", 10.0, 20.0, 1, "gamma"),
+        ]);
+        let by = |sort, since| ids(&idx.search_with("", 40, &Filter {folder: None, since, sort}, &|_| None));
+        assert_eq!(by(Sort::Modified, None), vec!["new", "mid", "old"]);
+        assert_eq!(by(Sort::Created, None), vec!["mid", "old", "new"]);
+        assert_eq!(by(Sort::Oldest, None), vec!["new", "old", "mid"]);
+        assert_eq!(by(Sort::Size, None), vec!["mid", "new", "old"]);
+        assert_eq!(by(Sort::Title, None), vec!["mid", "new", "old"]);
+        assert_eq!(by(Sort::Modified, Some(15.0)), vec!["new", "mid"]);
+        assert_eq!(Sort::parse("created"), Sort::Created);
+        assert_eq!(Sort::parse("anything"), Sort::Modified);
+    }
+
+    #[test]
+    fn a_search_keeps_the_filter_and_its_order() {
+        let idx = index_of(vec![
+            at("x1", "/w/a", 30.0, 1.0, 1, "tunnel one"),
+            at("x2", "/w/b", 20.0, 3.0, 1, "tunnel two"),
+            at("x3", "/w/a", 10.0, 2.0, 1, "tunnel three"),
+        ]);
+        let f = Filter {folder: Some("/w/a".into()), since: None, sort: Sort::Created};
+        assert_eq!(ids(&idx.search_with("tunnel", 40, &f, &|_| None)), vec!["x3", "x1"]);
     }
 
     #[test]

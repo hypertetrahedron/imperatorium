@@ -66,7 +66,11 @@ pub fn build_command(prompt: &str, options: &Map<String, Value>) -> Vec<String> 
     {
         cmd.push(crate::pyish::py_str(x));
     }
-    cmd.push(prompt.to_string());
+    // No prompt: Claude Code (2.1.330, checked 2026-11-23) starts it idle,
+    // "send a prompt to start", rather than spending a turn on a greeting.
+    if !crate::pyish::strip(prompt).is_empty() {
+        cmd.push(prompt.to_string());
+    }
     cmd
 }
 
@@ -81,9 +85,6 @@ pub fn parse_id(stdout: &str) -> Option<String> {
 
 /// background.start: {id, command, output}, or why not.
 pub fn start(prompt: &str, cwd: &str, options: &Map<String, Value>) -> Result<Value, String> {
-    if crate::pyish::strip(prompt).is_empty() {
-        return Err("prompt is empty".into());
-    }
     if cwd.is_empty() || !std::path::Path::new(cwd).is_dir() {
         return Err(format!("not a directory: {cwd}"));
     }
@@ -278,10 +279,9 @@ mod core_tests {
     }
 
     #[test]
-    fn an_empty_prompt_is_refused_before_launching() {
-        let here = std::env::current_dir().unwrap().to_string_lossy().into_owned();
-        for bad in ["", "   "] {
-            assert_eq!(start(bad, &here, &Map::new()).unwrap_err(), "prompt is empty", "{bad:?}");
+    fn no_prompt_starts_it_idle() {
+        for none in ["", "   "] {
+            assert_eq!(build_command(none, &Map::new()), vec!["claude", "--bg"], "{none:?}");
         }
     }
 

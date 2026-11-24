@@ -155,9 +155,42 @@ impl Shared {
         let Some(row) = row.filter(|r| truthy(r.get("pid"))) else {
             return json!({"ok": false, "error": NOT_RUNNING});
         };
-        let got = self.close_row(store, &row);
+        // A `claude --bg` session is run by Claude Code's supervisor, which
+        // starts a killed one again (~20 s later, seen 2026-11-23 on
+        // 2.1.330): it is stopped through `claude stop`, which it honours.
+        let got = match bg_id(&row) {
+            Some(id) => self.stop_background(store, &row, &id),
+            None => self.close_row(store, &row),
+        };
+        // The ✕ ends the session and takes its tile off the list
+        // (2026-11-23): the conversation is still in History to resume.
+        if got.get("ok") == Some(&json!(true)) {
+            self.forget_row(store, &row);
+        }
         self.invalidate();
         got
+    }
+
+    /// `claude stop <id>` for a background session: {ok, how: "stopped"}.
+    fn stop_background(&self, store: &crate::store::Store, row: &Row, id: &str) -> Value {
+        let got = run_claude_stop(id);
+        let summary = got.get("how").or(got.get("error")).cloned().unwrap_or(Value::Null);
+        let e = json!({"kind": "close", "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
+                       "session_id": row.get("sessionId").cloned().unwrap_or(Value::Null), "summary": summary});
+        store.add_event_json(e);
+        got
+    }
+
+    /// Off the list until it has a process again (snapshot's undismiss).
+    fn forget_row(&self, store: &crate::store::Store, row: &Row) {
+        let key = row.get("key").and_then(Value::as_str).unwrap_or("");
+        let sid = row.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        if !key.is_empty() {
+            store.dismiss(key);
+        }
+        if !sid.is_empty() {
+            store.forget(sid);
+        }
     }
 
     /// Control._close_row. (A herdr-core terminal is closed through hc,
@@ -1223,18 +1256,20 @@ impl Shared {
         if truthy(row.get("pid")) {
             return json!({"ok": false, "error": "that session is still running - close it instead"});
         }
-        let key = row
-            .get("key")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
         let sid = row
             .get("sessionId")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        store.dismiss(&key);
-        store.forget(&sid);
+        // A background session between processes (its supervisor restarting
+        // it) would come back: stop it first. One already stopped or done
+        // needs nothing, and a failed stop does not keep it on the list.
+        if let Some(id) = bg_id(&row).filter(|_| {
+            !matches!(row.get("state").and_then(Value::as_str), Some("stopped" | "done"))
+        }) {
+            let _ = run_claude_stop(&id);
+        }
+        self.forget_row(store, &row);
         let e = json!({"kind": "dismiss", "cwd": row.get("cwd").cloned().unwrap_or(Value::Null),
                        "session_id": sid, "name": row.get("name").cloned().unwrap_or(Value::Null)});
         store.add_event_json(e);
@@ -1348,6 +1383,36 @@ impl Shared {
 
 /// dispatcher.NOT_RUNNING.
 const NOT_RUNNING: &str = "that session is not running here, so there is nothing to close";
+
+/// The short id `claude stop` takes, for a `claude --bg` session's row.
+fn bg_id(row: &Row) -> Option<String> {
+    if row.get("kind").and_then(Value::as_str) != Some("background") {
+        return None;
+    }
+    row.get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .map(str::to_string)
+}
+
+/// `claude stop <id>`: {ok, how: "stopped"} or {ok: false, error}.
+fn run_claude_stop(id: &str) -> Value {
+    let mut c = std::process::Command::new("claude");
+    c.args(["stop", id])
+        .env_clear()
+        .envs(crate::launch::launch_env());
+    crate::proc::no_window(&mut c);
+    match crate::proc::run_timeout(&mut c, std::time::Duration::from_secs(30)) {
+        Ok(o) if o.status.success() => json!({"ok": true, "how": "stopped"}),
+        Ok(o) => {
+            let said = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+            let said = crate::pyish::take(crate::pyish::strip(&said), 300);
+            json!({"ok": false, "error": if said.is_empty() { format!("claude stop {id} failed") } else { said }})
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({"ok": false, "error": "claude is not on PATH"}),
+        Err(e) => json!({"ok": false, "error": format!("claude stop {id}: {e}")}),
+    }
+}
 
 /// str(uuid.uuid4()).
 pub(super) fn uuid4() -> String {

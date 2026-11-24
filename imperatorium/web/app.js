@@ -1,5 +1,9 @@
 
 let sessions = [], selected = null, lastSig = "", busy = false;
+// Sessions whose ✕ was clicked and the dispatcher has not answered yet, and
+// ones just closed: {key: when}, kept off the list for a moment so a list
+// fetched before the close cannot put the tile back (2026-11-23).
+const closing = new Set(), closedAt = new Map();
 
 function age(t){
   if (!t) return "";
@@ -170,7 +174,9 @@ function tileSignals(s, now, open){
 // would only be said twice; the chat header still carries the full name.
 // `depth` nests a fork under the session it was forked from (forkOrder).
 function tile(s, short, depth){
-  const [dot, label] = stateOf(s);
+  // A session still starting (provisional) or being closed says so.
+  const [dot, label] = s.provisional ? ["d-busy", "starting…"]
+    : closing.has(key(s)) ? ["d-busy", "closing…"] : stateOf(s);
   const fd = Math.min(depth || 0, 4);
   const now = Date.now() / 1000, open = key(s) === selected && view !== "fleet";
   const mark = s.attention ? (s.attention_kind === "failure" ? " fail"
@@ -189,10 +195,11 @@ function tile(s, short, depth){
   // tile, not only archived ones: a finished job that is not archived used to
   // have no way off the list at all.
   // A job still working but not yet matched to its process gets neither.
-  const x = s.remote ? ""
-    : s.pid ? `<span data-close="${esc(key(s))}" title="close this session and its window (the conversation stays resumable)">✕</span>`
+  // Since 2026-11-23 either way the tile goes; History still resumes it.
+  const x = s.remote || s.provisional || closing.has(key(s)) ? ""
+    : s.pid ? `<span data-close="${esc(key(s))}" title="end this session and remove its tile (it can be resumed from History)">✕</span>`
     : s.state === "working" || RUNNING[s.status] ? ""
-    : `<span data-dismiss="${esc(key(s))}" title="nothing is running: take it off the list (the conversation stays resumable)">✕</span>`;
+    : `<span data-dismiss="${esc(key(s))}" title="remove its tile (it can be resumed from History)">✕</span>`;
   const acts = `<span data-pin="${esc(pkey(s))}" title="${pinned?"unpin":"pin to top"}">${
       pinned ? "★" : "☆"}</span>${archived ? `<span data-arch="${esc(pkey(s))}" title="unarchive">↩</span>` : ""}${x}`;
   const spend = open && statusFor === key(s) && statusData ? statusData.spend : null;
@@ -208,8 +215,8 @@ function tile(s, short, depth){
       tileSignals(s, now, open)}</span>${
       // Pin and close sit in the open tile's top right corner (2026-11-16);
       // a closed tile has none.
-      open ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl st-${dot}" title="${esc(label)}">${
-      esc(label)}</div>${lines}${details}${open ? `<div class="mcpl"></div><div class="tk"></div>` : ""}
+      open && !s.provisional ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl st-${dot}" title="${esc(label)}">${
+      esc(label)}</div>${lines}${details}${open && !s.provisional ? `<div class="mcpl"></div><div class="tk"></div>` : ""}
   </div>`;
 }
 
@@ -475,9 +482,10 @@ function drawHead(){
   const sub = s ? headSub(s, statusFor === key(s) && statusData && statusData.stat ? statusData.stat.branch : "") : "";
   if ($("#sub").dataset.sig !== sub){ $("#sub").innerHTML = sub; $("#sub").dataset.sig = sub; }
   $("#sub").title = $("#sub").textContent;
-  $("#send").disabled = !s || !!s.remote;
-  $("#sendmore").classList.toggle("off", !s || !!s.remote);
-  $("#queue").disabled = !s;
+  const off = !s || !!s.remote || !!s.provisional;
+  $("#send").disabled = off;
+  $("#sendmore").classList.toggle("off", off);
+  $("#queue").disabled = !s || !!s.provisional;
   $("#stop").hidden = !canStop(s);
   const acts = [];
   if (s && !s.remote){
@@ -492,7 +500,7 @@ function drawHead(){
   // of the New / Fork menu); Show Window and Copy resume cmd live in the
   // View menu. None applies to a remote session, and Show Window needs a
   // running one.
-  const local = !!(s && !s.remote);
+  const local = !!(s && !s.remote && !s.provisional);
   $("#showbtn").hidden = !(local && s.pid);
   document.querySelectorAll("#sendmore [data-spawn]").forEach(b => b.hidden = !local);
   $("#editbtn").hidden = !(local && s.cwd);
@@ -807,6 +815,10 @@ function drawLog(force){
     const html = pendingHtml(p);
     want.push({i: logItems.length + j, html, sig: html});
   });
+  (chatNotes[selected] || []).forEach((n, j) => {
+    const html = noteHtml(n);
+    want.push({i: logItems.length + pendingSent[selected].length + j, html, sig: html});
+  });
   if (!want.length){
     log.innerHTML = earlier + `<div class="note">${logItems.length ? "everything here is hidden - see the display settings below" : "nothing yet"}</div>` + NEWEST;
     logDom = null;
@@ -946,6 +958,8 @@ function showNewest(){
 
 async function loadLog(force){
   if (!selected) { $("#log").innerHTML = `<div class="note">select a session</div>`; return; }
+  // Still starting: nothing to read yet, only its note.
+  if ((current() || {}).provisional){ lastSig = ""; logItems = []; drawLog(force); return; }
   let data;
   // The whole conversation, as the terminal shows it; the dispatcher answers
   // "unchanged" when what this page already has is current - including
@@ -1014,7 +1028,7 @@ function span(sec){
 const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
 
 async function loadStatus(force){
-  if (!selected){ $("#status").hidden = true; return; }
+  if (!selected || (current() || {}).provisional){ $("#status").hidden = true; return; }
   if (force || statusFor !== selected || Date.now() - statusAt >= 3000){
     statusAt = Date.now();
     const want = selected;
@@ -2326,7 +2340,7 @@ tlBox.addEventListener("click", e => {
 // transcript has not moved, so an idle session costs nothing to watch.
 async function loadTimeline(){
   const s = current();
-  if (!s || statusFolded || view !== "session" || tab !== "log") return;
+  if (!s || s.provisional || statusFolded || view !== "session" || tab !== "log") return;
   if (tlFor === selected && Date.now() - tlAt < 5000){ drawTimeline(); return; }
   tlAt = Date.now();
   const want = selected, mine = tlFor === want && tlData && tlData.sig;
@@ -3004,8 +3018,13 @@ const rowSig = s => [s.status, s.status_changed_at, s.last_event_at, s.doing, s.
                      s.attention_kind, s.waiting_tasks, s.reviewed].join("|");
 let keysBefore = null, pidsBefore = null;
 function gotSessions(list){
-  const was = current(), wasSig = was ? rowSig(was) : "";
-  sessions = list;
+  const was = current(), wasSig = was ? rowSig(was) : "", wasSel = selected;
+  // Tiles just closed stay off; sessions still starting stay on.
+  const now0 = Date.now();
+  for (const [k, at] of closedAt) if (now0 - at > CLOSED_HOLD) closedAt.delete(k);
+  list = withoutClosed(list, closedAt, now0, CLOSED_HOLD);
+  sessions = list.concat(provSweep(list));
+  if (selected !== wasSel && selected && sessions.some(x => key(x) === selected)) select(selected);
   catchFollowed();
   const cleared = clearedInto(pidsBefore, list, selected);
   if (cleared) catchCleared(cleared);
@@ -3363,6 +3382,8 @@ async function tick(){
   watchStream();
   try {
     if (!streamUp) gotSessions((await get("/api/sessions")).sessions || []);
+    // A session that never started is given up on even with no news.
+    else if (provisional.some(p => p.until && Date.now() > p.until)) gotSessions(sessions.filter(x => !x.provisional));
     else drawSessions();  // ages on the tiles keep counting between pushes
     if (ticks % 3 === 0) drawMeter();
     if (ticks % 2 === 0) drawPending();
@@ -3617,7 +3638,12 @@ function openPopup(which, open){
   if (!open){ if (which === "project") projFor = null; return; }
   closeMenus();
   for (const [w, sel] of Object.entries(POPUPS)) if (w !== which){ $(sel).hidden = true; if (w === "project" && which !== "project") projFor = null; }
-  if (which === "history"){ $("#hq").focus(); search(); }
+  if (which === "history"){
+    // From the menu it shows every folder; /resume narrows it (historyFor).
+    if (!histBiased){ $("#hfolder").value = ""; $("#histbias").hidden = true; }
+    histBiased = false;
+    $("#hq").focus(); search();
+  }
   else if (which === "project"){ $("#pjrefresh").focus(); loadProject(); }
   else if (which === "hooks") drawHookHelp();
   else if (which === "slash") {}
@@ -3646,7 +3672,7 @@ function setTab(t){
 let tabAt = 0;
 async function refreshTab(force){
   if (view !== "session") return;
-  if (tab === "log") return loadLog(force);
+  if (tab === "log" || (current() || {}).provisional) return loadLog(force);
   // The other faces cost a git or transcript read; every few seconds is plenty.
   const now = Date.now();
   if (!force && now - tabAt < (tab === "activity" ? 3000 : 6000)) return;
@@ -4017,33 +4043,93 @@ async function fileDiff(l, file){
   return r.diff ? `<div class="diff">${diffHtml(r.diff)}${r.truncated ? "\n… (truncated)" : ""}</div>` : `<div class="note">no difference</div>`;
 }
 
-// The tile's ✕: ends the session, and with it its terminal tab.
+// The tile's ✕ (2026-11-23): ends the session - its terminal tab with it,
+// or for a background one `claude stop`, which its supervisor honours (a
+// killed one it starts again) - and takes the tile off the list either way.
+// The chat says what is happening while the dispatcher works on it.
 async function closeSession(k){
   const s = sessions.find(x => key(x) === k);
-  if (!s || !confirm("Close " + nameOf(s) + " and its window? The conversation stays resumable." +
-      (s.status === "busy" ? "\n\nIt is working right now - its turn will be interrupted." : ""))) return;
-  $("#say").textContent = "closing " + nameOf(s) + "…";
-  const r = await post("/api/close", {session_id: k});
-  $("#say").textContent = !r.ok ? "could not close " + nameOf(s) + ": " + (r.error || "refused")
-    : r.how === "killed" ? nameOf(s) + " had to be ended forcibly, so its tab is still open"
+  const bg = !!s && s.kind === "background";
+  if (!s || closing.has(k) || !confirm((bg ? "Stop the background session " : "Close ") + nameOf(s) +
+      (bg ? "" : " and its window") + "? Its tile is removed; the conversation can be resumed from History." +
+      (s.status === "busy" || s.state === "working" ? "\n\nIt is working right now - its turn will be interrupted." : ""))) return;
+  const n = addNote(k, bg ? "Stopping this background session…" : "Closing this session and its terminal tab…");
+  closing.add(k);
+  say("closing " + nameOf(s) + "…", k);
+  drawSessions();
+  let r;
+  try { r = await post("/api/close", {session_id: k}); }
+  catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  closing.delete(k);
+  if (!r.ok){
+    setNote(n, "Could not close it: " + (r.error || "refused"), "failed");
+    say("could not close " + nameOf(s) + ": " + (r.error || "refused"), k);
+    drawSessions();
+    return;
+  }
+  dropNote(n);
+  removeTile(k, r.how === "killed" ? nameOf(s) + " had to be ended forcibly, so its tab is still open"
     : r.how === "exit" && r.tab_closed === false ? nameOf(s) + " has exited; its tab is still open"
-    : "closed " + nameOf(s);
+    : (r.how === "stopped" ? "stopped " : "closed ") + nameOf(s));
 }
 
 // A tile's ✕ when nothing is running: no process to end, so the dispatcher
 // only takes it off the list until it starts again.
 async function dismissSession(k){
   const s = sessions.find(x => key(x) === k);
-  if (!s || !confirm("Remove " + nameOf(s) + " from the list? Nothing is running, so there is " +
-      "nothing to close. The conversation stays resumable.")) return;
-  const r = await post("/api/dismiss", {session_id: k});
-  $("#say").textContent = r.ok ? "removed " + nameOf(s)
-    : "could not remove " + nameOf(s) + ": " + (r.error || "refused");
-  if (!r.ok) return;
-  // The dispatcher also dropped it from the archive, so the prefs follow.
-  sessions = sessions.filter(x => key(x) !== k);
-  await loadPrefs();
+  if (!s || closing.has(k) || !confirm("Remove " + nameOf(s) + " from the list? Nothing is running. " +
+      "The conversation can be resumed from History.")) return;
+  closing.add(k);
   drawSessions();
+  let r;
+  try { r = await post("/api/dismiss", {session_id: k}); }
+  catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  closing.delete(k);
+  if (!r.ok){ say("could not remove " + nameOf(s) + ": " + (r.error || "refused"), k); drawSessions(); return; }
+  // The dispatcher also dropped it from the archive, so the prefs follow.
+  await loadPrefs();
+  removeTile(k, "removed " + nameOf(s));
+}
+
+// Off the list now, and kept off for a moment against a list fetched
+// before the dispatcher dropped it.
+const CLOSED_HOLD = 15000;
+function removeTile(k, said){
+  closedAt.set(k, Date.now());
+  sessions = sessions.filter(x => key(x) !== k);
+  delete chatNotes[k];
+  drawSessions();
+  say(said);
+  if (selected) refreshTab(true);
+}
+// Pure: `list` without the sessions closed less than `hold` ms ago (unless
+// one has a new process: it was started again).
+function withoutClosed(list, closed, now, hold){
+  return list.filter(s => { const at = closed.get(key(s)); return !at || now - at > hold; });
+}
+
+// -- notes in the chat --------------------------------------------------------
+// What the window is doing about a session, shown at the end of its chat
+// until it is done: closing it, or (for a session still starting) loading.
+const chatNotes = {};   // session key -> [{id, text, state}]
+let noteSeq = 0;
+function addNote(k, text, state){
+  const n = {id: ++noteSeq, k, text, state: state || "working"};
+  (chatNotes[k] || (chatNotes[k] = [])).push(n);
+  if (k === selected){ logFollow = true; drawLog(); }
+  return n;
+}
+function setNote(n, text, state){
+  n.text = text; if (state) n.state = state;
+  if (n.k === selected) drawLog();
+}
+function dropNote(n){
+  if (chatNotes[n.k]) chatNotes[n.k] = chatNotes[n.k].filter(x => x.id !== n.id);
+  if (n.k === selected) drawLog();
+}
+function noteHtml(n){
+  return `<div class="turn sys wnote ${esc(n.state)}" data-note="${n.id}"><div class="who">Imperatorium${
+    n.state === "working" ? `<span class="pnote">working…</span>` : ""}</div>${renderText(n.text)}</div>`;
 }
 
 // -- export as Markdown ------------------------------------------------------
@@ -4235,6 +4321,80 @@ function spawnOutcome(r){
     (r.terminal === "console" ? " in a console window (no Windows Terminal found)" : "") + " - selecting it once it starts";
 }
 
+// -- a session on its way (2026-11-23) ----------------------------------------
+// Starting one takes seconds - a tab to open, `claude --bg` to return, the
+// process to report in - and nothing showed meanwhile. Now a provisional
+// tile stands in for it at once, its chat saying it is loading. It gives way
+// to the real session when that shows up on the board; if the start is
+// refused, or nothing shows up in time, it goes and a dialog says why.
+let provisional = [], provSeq = 0;
+const PROV_MS = 90000, PROV_HEADLESS_MS = 15 * 60000;
+// `o`: name, cwd, where, from (the session to go back to), text.
+function provAdd(o, show){
+  const p = {sessionId: "starting-" + (++provSeq), provisional: true, name: o.name, cwd: o.cwd || "",
+    kind: o.where === "background" ? "background" : "interactive", status: "", from: o.from || null,
+    until: 0, match: null};
+  provisional.push(p);
+  p.note = addNote(p.sessionId, o.text);
+  sessions = sessions.concat([p]);
+  if (show) select(p.sessionId); else drawSessions();
+  return p;
+}
+// Pure: whether row `s` is the session provisional `p` became - by the id
+// the dispatcher gave, or a background one by the short id `claude --bg`
+// printed.
+function provMatches(p, s){
+  const m = p.match;
+  if (!m || s.provisional) return false;
+  if (m.id && key(s) === m.id) return true;
+  return !!m.bg && (s.id === m.bg || String(s.sessionId || "").startsWith(m.bg));
+}
+// Pure: what becomes of each provisional given the board's `list` at `now`:
+// {keep, found: [[p, row]], late: [p]}.
+function provSort(provs, list, now){
+  const keep = [], found = [], late = [];
+  for (const p of provs){
+    const real = p.match && list.find(s => provMatches(p, s));
+    if (real) found.push([p, real]);
+    else if (p.until && now > p.until) late.push(p);
+    else keep.push(p);
+  }
+  return {keep, found, late};
+}
+function provGone(p){
+  provisional = provisional.filter(x => x !== p);
+  sessions = sessions.filter(x => x !== p);
+  delete chatNotes[p.sessionId];
+  if (selected === p.sessionId){
+    const back = p.from && sessions.find(x => key(x) === p.from);
+    if (back) select(key(back)); else { selected = null; drawSessions(); }
+  } else drawSessions();
+}
+function provFailed(p, why){
+  provGone(p);
+  notice("Could not start " + p.name, why);
+}
+// The board's new list, with the provisionals still waiting after it.
+function provSweep(list){
+  const {keep, found, late} = provSort(provisional, list, Date.now());
+  provisional = keep;
+  for (const [p, real] of found){
+    delete chatNotes[p.sessionId];
+    if (selected === p.sessionId) selected = key(real);
+  }
+  for (const p of late){
+    delete chatNotes[p.sessionId];
+    if (selected === p.sessionId) selected = p.from;
+    notice("Could not start " + p.name, "It did not show up within " + Math.round((p.until - p.started) / 1000) +
+      " seconds. If its terminal is waiting for you (a trust question, a sign-in), it appears once that is answered.");
+  }
+  return keep;
+}
+// A popup with one button: something went wrong that should not go unseen.
+function notice(title, text){
+  return spawnDialog(title, {body: `<p>${esc(text)}</p>`, buttons: [["ok", "OK", ""]], foot: ""});
+}
+
 // kind: new | fork | resume; where: window | background. `o`: session_id
 // (default: the selected session), cwd, prompt (default: the prompt box),
 // and the New session dialog's permission_mode, model, effort.
@@ -4244,8 +4404,8 @@ async function spawnFrom(kind, where, o = {}){
   const k = s ? key(s) : undefined;
   const fromBox = o.prompt === undefined;
   const text = fromBox ? $("#prompt").value.trim() : o.prompt;
-  if (where === "background" && kind !== "resume" && !text)
-    return say("type what the background session should do first, then send it there", k);
+  // A background session with nothing to do starts idle and waits for its
+  // first message (2026-11-23: `claude --bg` needs no prompt).
   const body = {kind, where, session_id: sid, cwd: o.cwd || null, prompt: text,
     permission_mode: o.permission_mode, model: o.model, effort: o.effort};
   const title = SPAWN_TITLE[kind + " " + where] || "New session";
@@ -4260,10 +4420,34 @@ async function spawnFrom(kind, where, o = {}){
     if (choice === "nocontext") return spawnFrom("new", where, o);
   }
   say("starting…", k);
-  const r = await post("/api/spawn", {...body, worktree: choice !== "here", copy: choice === "copy"});
-  if (!r.ok){ say(r.error || "refused", k); return r; }
+  // A tile for it at once - unless it is a resume of one already listed,
+  // whose own chat says so. A window session is shown as it loads; a
+  // background one is only listed, as it will be once it starts.
+  const listed = kind === "resume" && sessions.find(x => !x.provisional && key(x) === sid);
+  const there = placeName(plan.folder || o.cwd || (s && s.cwd) || "");
+  const loading = (kind === "resume" ? "Resuming this session" : kind === "fork" ? "Starting a new session with this one's context"
+    : "Starting a new session") + (where === "background" ? " in the background" : "") + " in " + there + "… it is loading.";
+  const note = listed ? addNote(sid, loading) : null;
+  const p = listed ? null : provAdd({name: (kind === "resume" ? "resuming " : "new session · ") + there,
+    cwd: plan.folder || o.cwd, where, from: k, text: loading}, where === "window" || kind === "resume");
+  let r;
+  try { r = await post("/api/spawn", {...body, worktree: choice !== "here", copy: choice === "copy"}); }
+  catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
+  if (note) dropNote(note);
+  if (!r.ok){
+    if (p) provFailed(p, r.error || "refused"); else notice("Could not start it", r.error || "refused");
+    say(r.error || "refused", k);
+    return r;
+  }
   if (fromBox && text) clearPrompt(k);
   if (r.session_id && (r.where === "window" || kind === "resume")) follow(r.session_id);
+  if (p){
+    p.match = {id: r.session_id || null, bg: r.bg_id || null};
+    p.started = Date.now();
+    p.until = p.started + (r.first_turn === "headless" ? PROV_HEADLESS_MS : PROV_MS);
+    if (!p.match.id && !p.match.bg) provGone(p);   // nothing to know it by: the board will list it
+    else setNote(p.note, loading.replace(/… it is loading\.$/, "") + ": " + spawnOutcome(r) + ".");
+  }
   say(spawnOutcome(r), k);
   lastSig = ""; loadLog(true);
   return r;
@@ -4349,18 +4533,61 @@ async function drawQueued(s){
 }
 
 // -- history search --------------------------------------------------------
+// History's filters (2026-11-23): a project folder (its worktrees with
+// it), the order, and how recently active - narrowed by the dispatcher
+// before its limit, so a folder's sessions are all there however many newer
+// ones are elsewhere. Opened by /resume, it starts on that session's folder
+// (historyFor).
 let searchSeq = 0;
+// Pure: the query string for the History search.
+function historyQuery(q, folder, sort, days){
+  return "/api/history?q=" + encodeURIComponent(q) + (folder ? "&folder=" + encodeURIComponent(folder) : "") +
+    (sort && sort !== "modified" ? "&sort=" + encodeURIComponent(sort) : "") + (days ? "&days=" + encodeURIComponent(days) : "");
+}
+// Pure: the folder picker's options - every folder the dispatcher listed,
+// and the chosen one even when it has none (yet).
+function folderOptions(folders, chosen){
+  const list = (folders || []).slice();
+  if (chosen && !list.some(f => sameDir(f.folder, chosen))) list.unshift({folder: chosen, count: 0});
+  return `<option value="">all folders</option>` + list.map(f =>
+    `<option value="${esc(f.folder)}"${chosen && sameDir(f.folder, chosen) ? " selected" : ""} title="${esc(f.folder)}">${
+      esc(folder(f.folder))} (${f.count})</option>`).join("");
+}
+// Pure: a hit's when-line - when it was last active and, if another day,
+// when it started.
+function histWhen(r){
+  const mod = new Date(r.modified * 1000), made = r.created ? new Date(r.created * 1000) : null;
+  return "active " + mod.toLocaleString() + (made && made.toDateString() !== mod.toDateString()
+    ? " · started " + made.toLocaleDateString() : "");
+}
+// /resume (and History opened from a session) starts on its project folder.
+function historyFor(s){
+  const w = s && s.cwd ? managedWorktree(s.cwd) : null;
+  const f = s && !s.remote && s.cwd ? (w ? w.main : s.cwd) : "";
+  $("#hfolder").innerHTML = folderOptions([], f);
+  $("#hfolder").value = f;
+  $("#histbias").hidden = !f;
+  $("#histbias").innerHTML = f ? `Sessions from <b>${esc(folder(f))}</b>, the folder of ${esc(nameOf(s))}.` +
+    `<button class="ghost tiny" id="hall">Show all folders</button>` : "";
+  if (!$("#histbox").hidden) return search();
+  histBiased = true;
+  openPopup("history", true);
+}
+let histBiased = false;
 async function search(){
   const q = $("#hq").value.trim();
+  const chosen = $("#hfolder").value;
   const seq = ++searchSeq;
   $("#hits").innerHTML = `<div class="note">searching…</div>`;
   let d;
-  try { d = await get("/api/history?q=" + encodeURIComponent(q)); } catch (e) { return; }
+  try { d = await get(historyQuery(q, chosen, $("#hsort").value, $("#hdays").value)); } catch (e) { return; }
   if (seq !== searchSeq) return;
   if (!d.ok){ $("#hits").innerHTML = `<div class="note">${esc(d.error)}</div>`; return; }
+  if (d.folders){ $("#hfolder").innerHTML = folderOptions(d.folders, chosen); $("#hfolder").value = chosen; }
+  if (!chosen) $("#histbias").hidden = true;
   $("#hits").innerHTML = (d.results.map(r => `<div class="hit">
       <div class="tt">${esc(r.title || r.first_prompt || r.session_id)}</div>
-      <div class="sn">${esc(placeName(r.cwd))} · ${esc(new Date(r.modified*1000).toLocaleString())}${
+      <div class="sn">${esc(placeName(r.cwd))} · ${esc(histWhen(r))}${
         r.branch ? " · " + esc(r.branch) : ""}${r.live ? " · <b>live</b>" : ""}${r.where ? " · matched in " + esc(r.where) : ""}</div>
       ${r.snippet ? `<div class="sn">${esc(r.snippet)}</div>` : ""}
       <div class="btns">${r.live ? `<button class="sm" data-open="${esc(r.session_id)}">Open</button>` :
@@ -4368,7 +4595,7 @@ async function search(){
          <button class="sm ghost" data-rs="${esc(r.session_id)}" data-w="background">Resume in bg</button>`}
         <button class="sm ghost" data-rs="${esc(r.session_id)}" data-w="window" data-fork="1">Fork</button>
         <button class="sm ghost" data-cp="claude --resume ${esc(r.session_id)}">Copy cmd</button></div>
-    </div>`).join("") || `<div class="note">nothing found</div>`) +
+    </div>`).join("") || `<div class="note">${chosen || $("#hdays").value ? "nothing found with these filters" : "nothing found"}</div>`) +
     (d.complete ? "" : `<div class="note">still indexing older sessions - search again for complete results</div>`);
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
     openPopup("history", false); pick(b.dataset.open); });
@@ -4565,7 +4792,7 @@ async function slashHere(s, how, what, name){
   if (how === "view") return openSlashView(s, what, name);
   if (how === "close") return say("to end the session use Close (its menu in the list) - it closes the terminal tab too", key(s));
   if (how === "window"){
-    if (what === "history") return openPopup("history", true);
+    if (what === "history") return historyFor(s);
     if (what === "export") return exportMarkdown(s);
     if (what === "fork") return spawnFrom("fork", "window", {prompt: ""});
     if (what === "copy") return copyLastReply(s);
@@ -5074,7 +5301,7 @@ async function startProject(p){
   try { localStorage.setItem(BG_KEY, bg ? "1" : ""); } catch (e) {}
   openNew(false);
   const r = await spawnFrom("new", bg ? "background" : "window", {session_id: null, cwd: p.path,
-    prompt: bg ? text || "Ready when you are." : "", permission_mode: mode, model, effort});
+    prompt: bg ? text : "", permission_mode: mode, model, effort});
   if (r && r.ok && bg && text) clearPrompt();
 }
 async function openNew(show){
@@ -5657,6 +5884,11 @@ for (const [which, sel] of Object.entries(POPUPS)){
 }
 let hqTimer;
 $("#hq").addEventListener("input", () => { clearTimeout(hqTimer); hqTimer = setTimeout(search, 350); });
+["#hfolder", "#hsort", "#hdays"].forEach(sel => $(sel).addEventListener("change", search));
+$("#histbias").addEventListener("click", e => {
+  if (!e.target.closest("#hall")) return;
+  $("#hfolder").value = ""; $("#histbias").hidden = true; search();
+});
 $("#days").onchange = loadInsights;
 $("#pjpick").onchange = () => { projFor = $("#pjpick").value; loadProject(); };
 $("#pjrefresh").onclick = () => loadProject();

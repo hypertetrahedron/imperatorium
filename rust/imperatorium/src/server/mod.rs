@@ -35,6 +35,7 @@ mod dispatch;
 mod fleet;
 mod hook;
 mod prefs;
+mod remote_setup;
 mod route;
 mod snapshot;
 mod spawn;
@@ -120,6 +121,10 @@ pub struct Shared {
     /// Processes a saved setting waits on (Control._restart_needed).
     restart_needed: Mutex<std::collections::BTreeSet<String>>,
     settings_lock: Mutex<()>,
+    /// Settings > Remote machines: the add under way or last finished.
+    add_job: Mutex<remote_setup::AddJob>,
+    /// `serve --live`: the machine's own dispatcher, which may restart itself.
+    serves_live: bool,
     boot: String,
     /// The dispatcher's snapshot cache, the rows still holding their tokens
     /// - only `public()` copies leave the process.
@@ -264,6 +269,8 @@ impl Shared {
             config_live: std::sync::RwLock::new(load_config(home)),
             restart_needed: Default::default(),
             settings_lock: Default::default(),
+            add_job: Default::default(),
+            serves_live: live,
             boot,
             snap: Mutex::new(None),
             snap_build: Mutex::new(()),

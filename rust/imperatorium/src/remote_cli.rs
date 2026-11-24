@@ -38,9 +38,59 @@ const SPEC: Spec = Spec {
     flags: &[("", "no-tunnel"), ("", "install-claude"), ("", "no-restart"), ("y", "yes"), ("", "purge"), ("", "json")],
 };
 
+type Sink = Box<dyn FnMut(&str)>;
+
+thread_local! {
+    /// Where `say` writes on this thread: stdout, or (for an add the
+    /// Settings window started) that job's log.
+    static SINK: std::cell::RefCell<Option<Sink>> = const { std::cell::RefCell::new(None) };
+}
+
 fn say(s: impl AsRef<str>) {
-    println!("{}", s.as_ref());
-    let _ = std::io::stdout().flush();
+    let s = s.as_ref();
+    let captured = SINK.with(|k| match k.borrow_mut().as_mut() {
+        Some(f) => {
+            f(s);
+            true
+        }
+        None => false,
+    });
+    if !captured {
+        println!("{s}");
+        let _ = std::io::stdout().flush();
+    }
+}
+
+/// Run `f` with every `say` on this thread going to `sink` instead of stdout.
+fn captured<T>(sink: Sink, f: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SINK.with(|k| *k.borrow_mut() = None);
+        }
+    }
+    SINK.with(|k| *k.borrow_mut() = Some(sink));
+    let _reset = Reset;
+    f()
+}
+
+/// A host as the Settings window may name one: an ~/.ssh/config alias or
+/// `user@host[:port]`-ish, never something ssh would read as an option.
+pub fn check_host_name(host: &str) -> Result<(), String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("name the machine: user@host or an ~/.ssh/config alias".into());
+    }
+    if host.len() > 253 {
+        return Err("that name is too long".into());
+    }
+    if host.starts_with('-') {
+        return Err("a host name cannot start with '-'".into());
+    }
+    if let Some(c) = host.chars().find(|c| !(c.is_ascii_alphanumeric() || "._-@:[]".contains(*c))) {
+        return Err(format!("{c:?} cannot be in a host name: use user@host or an ~/.ssh/config alias"));
+    }
+    Ok(())
 }
 
 fn step(title: &str) {
@@ -368,8 +418,32 @@ fn restart_dispatcher(yes: bool, no_restart: bool, home: Option<&str>) {
 
 // -- add, remove, check ---------------------------------------------------------------------
 
-fn remote_add(host: &str, a: &Args, home: Option<&str>) -> i32 {
-    let yes = a.flag("yes");
+/// What `remote add` is asked to do. The window's add is `yes` (no
+/// questions: each takes its default) with `restart: None` (the window
+/// offers the restart itself).
+pub struct AddOpts {
+    pub label: Option<String>,
+    pub tunnel: bool,
+    pub install_claude: bool,
+    pub yes: bool,
+    /// Some(false): --no-restart. None: say nothing of a restart.
+    pub restart: Option<bool>,
+}
+
+impl AddOpts {
+    fn of(a: &Args) -> AddOpts {
+        AddOpts {
+            label: a.opt("label").map(str::to_string),
+            tunnel: !a.flag("no-tunnel"),
+            install_claude: a.flag("install-claude"),
+            yes: a.flag("yes"),
+            restart: Some(!a.flag("no-restart")),
+        }
+    }
+}
+
+fn remote_add(host: &str, opts: &AddOpts, home: Option<&str>) -> i32 {
+    let yes = opts.yes;
     say(format!("Imperatorium - onboarding {host}"));
     // A host already in config.json may name another ssh destination or a container.
     if let Ok(Some(cfg)) = load_config(home) {
@@ -414,7 +488,7 @@ fn remote_add(host: &str, a: &Args, home: Option<&str>) -> i32 {
             Some(v) => say(format!("   Claude Code {} is older than {}", ver_text(v), ver_text(MIN_REMOTE_CLAUDE))),
             None => say("   Claude Code is not installed"),
         }
-        if a.flag("install-claude") || ask(&format!("Install/update it there with the official installer ({CLAUDE_INSTALL})?"), false, yes) {
+        if opts.install_claude || ask(&format!("Install/update it there with the official installer ({CLAUDE_INSTALL})?"), false, yes) {
             if let Err(e) = ssh(host, CLAUDE_INSTALL, None, 600.0) {
                 let tail: String = e.chars().rev().take(400).collect::<Vec<_>>().into_iter().rev().collect();
                 say(format!("   the installer failed: {tail}"));
@@ -448,7 +522,7 @@ fn remote_add(host: &str, a: &Args, home: Option<&str>) -> i32 {
         }
     }
 
-    let tunnel = !a.flag("no-tunnel");
+    let tunnel = opts.tunnel;
     step(&format!("4/5 Reporting hooks on {host}"));
     if tunnel {
         if !install_remote_hooks(host, &facts.home, false) {
@@ -470,14 +544,16 @@ fn remote_add(host: &str, a: &Args, home: Option<&str>) -> i32 {
             return 1;
         }
     };
-    let entry = host_entry(host, Some(&home_relative(&claude, &facts.home)), a.opt("label"), tunnel);
+    let entry = host_entry(host, Some(&home_relative(&claude, &facts.home)), opts.label.as_deref(), tunnel);
     let (cfg, how) = upsert_host(&cfg, &entry);
     if let Err(e) = save_config(home, &cfg) {
         say(format!("   {e}"));
         return 1;
     }
     say(format!("   {how} {}", json_dumps(&entry, true)));
-    restart_dispatcher(yes, a.flag("no-restart"), home);
+    if let Some(restart) = opts.restart {
+        restart_dispatcher(yes, !restart, home);
+    }
 
     say(format!("\nDone. {host}'s sessions show in the window within ~20s of the dispatcher starting."));
     if tunnel {
@@ -591,6 +667,92 @@ fn remote_check(hosts: &[Value]) -> i32 {
     i32::from(bad > 0)
 }
 
+// -- for the Settings window -------------------------------------------------------
+
+/// ssh's words for a login that was refused, as opposed to a host that
+/// did not answer: a key would fix the first, not the second.
+pub fn is_auth_failure(err: &str) -> bool {
+    ["Permission denied", "Too many authentication failures", "no matching host key", "Authentication failed"]
+        .iter()
+        .any(|w| err.contains(w))
+}
+
+/// The Settings window's key setup, the part that needs no password: this
+/// machine's public key, made first (ed25519, no passphrase) if there is
+/// none. Ok((path, made)) or what went wrong. Never overwrites a key.
+pub fn ensure_key() -> Result<(std::path::PathBuf, bool), String> {
+    if let Some(k) = public_key() {
+        return Ok((k, false));
+    }
+    let dir = crate::paths::user_home().join(".ssh");
+    let target = dir.join("id_ed25519");
+    if target.exists() {
+        return Err(format!("{} is there without its .pub: make the public half with  ssh-keygen -y -f \"{}\" > \"{}.pub\"", target.display(), target.display(), target.display()));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let out = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&target)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run ssh-keygen: {e}"))?;
+    match public_key() {
+        Some(k) if out.status.success() => Ok((k, true)),
+        _ => Err(format!("ssh-keygen failed: {}", String::from_utf8_lossy(&out.stderr).trim())),
+    }
+}
+
+/// The one command that puts `key` on `host`, asking its password once: what
+/// `remote add` does at a terminal. Windows has no ssh-copy-id; `type` reads
+/// the file in both cmd and PowerShell.
+pub fn copy_key_command(host: &str, key: &std::path::Path) -> String {
+    if cfg!(windows) {
+        format!("type \"{}\" | ssh {host} \"umask 077; mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys\"", key.display())
+    } else {
+        format!("ssh-copy-id -i \"{}\" {host}", key.display())
+    }
+}
+
+/// The Settings window's Test: one probe of `host`, as `remote check` rows.
+/// `ok` is false if anything is MISSING; a host that does not answer is
+/// one MISSING ssh row with ssh's own words.
+pub fn test_host(host: &str, tunnel: bool) -> Value {
+    let row = |mark: &str, what: &str, detail: &str| json!({"mark": mark.trim(), "what": what, "detail": detail});
+    match probe(host) {
+        Err(e) => {
+            let auth = is_auth_failure(&e);
+            let hint = if auth {
+                "The host refused the login: Imperatorium logs in with an SSH key, never a password. Set up key login below.".to_string()
+            } else {
+                format!("The host did not answer: check that it is on and that `ssh {host}` works from a terminal here.")
+            };
+            json!({"ok": false, "reachable": false, "auth": auth, "host": host, "error": e,
+                   "rows": [row("MISSING", "ssh", &e)], "hint": hint})
+        }
+        Ok(f) => {
+            let rows = check_rows(&f, tunnel);
+            let ok = rows.iter().all(|r| r.0 != "MISSING");
+            json!({"ok": ok, "reachable": true, "host": host, "home": f.home,
+                   "rows": rows.iter().map(|(m, w, d)| row(m, w, d)).collect::<Vec<_>>()})
+        }
+    }
+}
+
+/// The Settings window's Add: `remote add` with no questions (each takes
+/// its default; Claude Code is installed only with `install_claude`, as
+/// --install-claude; nothing restarts), every line it would print going to
+/// `line`. True if the host was written to config.json.
+pub fn add_for_window(host: &str, label: Option<&str>, tunnel: bool, install_claude: bool, home: Option<&str>, line: impl FnMut(&str) + 'static) -> bool {
+    let opts = AddOpts {
+        label: label.map(str::trim).filter(|l| !l.is_empty()).map(str::to_string),
+        tunnel,
+        install_claude,
+        yes: true,
+        restart: None,
+    };
+    captured(Box::new(line), || remote_add(host.trim(), &opts, home)) == 0
+}
+
 pub fn main(args: &[String], home: Option<&str>) -> i32 {
     let a = match parse(args, &SPEC) {
         Ok(a) => a,
@@ -616,7 +778,7 @@ pub fn main(args: &[String], home: Option<&str>) -> i32 {
             remote_check(&hosts)
         }
         "add" | "remove" => match host {
-            Some(h) if action == "add" => remote_add(h, &a, home),
+            Some(h) if action == "add" => remote_add(h, &AddOpts::of(&a), home),
             Some(h) => remote_remove(h, &a, home),
             None => {
                 say(format!("usage: imperatorium remote {action} HOST   (user@host or an ~/.ssh/config alias)"));
@@ -713,6 +875,51 @@ mod tests {
         crate::install::apply_remote_hooks(&mut s, true, bin);
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(s["hooks"].as_object().unwrap().len(), 1, "{:?}", s["hooks"]);
+    }
+
+    #[test]
+    fn host_names_from_the_window_are_ssh_destinations_not_options() {
+        for ok in ["devbox", "me@pi.local", "me@10.0.0.5", "box_2", "me@[fe80::1]"] {
+            assert!(check_host_name(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "  ", "-oProxyCommand=calc", "a b", "a;b", "a$(x)", "a\nb", "a'b"] {
+            assert!(check_host_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_host_name(&"a".repeat(300)).is_err());
+    }
+
+    #[test]
+    fn a_refused_login_is_told_from_a_host_that_does_not_answer() {
+        assert!(is_auth_failure("me@pi: Permission denied (publickey,password)."));
+        assert!(is_auth_failure("Received disconnect: Too many authentication failures"));
+        assert!(!is_auth_failure("ssh: connect to host pi port 22: Connection timed out"));
+        assert!(!is_auth_failure("ssh: Could not resolve hostname pi: No such host is known."));
+    }
+
+    #[test]
+    fn the_copy_command_names_the_key_and_the_host() {
+        let c = copy_key_command("me@pi", std::path::Path::new("/k/id_ed25519.pub"));
+        assert!(c.contains("me@pi") && c.contains("id_ed25519.pub"), "{c}");
+        if cfg!(windows) {
+            assert!(c.starts_with("type ") && c.contains("authorized_keys"), "{c}");
+        } else {
+            assert!(c.starts_with("ssh-copy-id"), "{c}");
+        }
+    }
+
+    #[test]
+    fn say_goes_to_the_sink_while_captured_and_to_stdout_after() {
+        let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let g = std::rc::Rc::clone(&got);
+        let n = captured(Box::new(move |s: &str| g.borrow_mut().push(s.to_string())), || {
+            say("one");
+            step("two");
+            7
+        });
+        assert_eq!(n, 7);
+        assert_eq!(*got.borrow(), ["one", "\n== two"]);
+        say("not captured");
+        assert_eq!(got.borrow().len(), 2);
     }
 
     #[test]

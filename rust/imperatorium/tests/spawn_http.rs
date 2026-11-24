@@ -88,9 +88,8 @@ fn spawn_plans_and_starts_where_the_rules_say() {
     assert_eq!(plan["dirty_count"], 2, "{plan}");
     assert_eq!(plan["mid_turn"], false);
 
-    // A background session with nothing to do is refused.
-    let (_, r) = d.post_window("/api/spawn", &json!({"kind": "new", "where": "background", "session_id": A}), &token);
-    assert!(r["error"].as_str().unwrap().contains("background session should do"), "{r}");
+    // A background session with nothing to do starts idle since 2026-11-23
+    // (tests/close_background.rs), so it is no longer refused here.
 
     // Copy and continue: a tab on a fork in a new worktree that has the work.
     let (_, r) = d.post_window("/api/spawn", &json!({"kind": "fork", "where": "window", "session_id": A,

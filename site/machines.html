@@ -38,6 +38,12 @@ imperatorium remote remove HOST [--purge]</code></pre>
 repeat: an SSH key login (it offers to make and copy one), Claude Code there (it offers
 Anthropic's installer), the binary (copied and checked by SHA-256), the reporting hooks,
 and the host entry in your config.</p>
+<p>Or do it from the window: Settings &gt; Remote machines has <strong>Add a machine</strong>,
+with <strong>Test connection</strong> to see what the host has and lacks before adding it, a
+<strong>Test</strong> button beside every host already there, and a button to restart the
+dispatcher once the host is added. If the host refuses the login, the window makes your SSH
+key and gives you the one command that copies it there; ssh asks the host's password in your
+terminal, never in Imperatorium. A box on the form installs Claude Code on the host too.</p>
 
 <h2>As controllable as a local session</h2>
 <ul>

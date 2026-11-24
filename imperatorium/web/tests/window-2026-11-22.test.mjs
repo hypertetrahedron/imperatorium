@@ -72,7 +72,8 @@ describe("SlashPickers", () => {
     assertIn("<label for=nmodel>Model</label><select id=nmodel>", page);
     assertIn("<select id=neffort", page);
     assertIn('spawnFrom("new", bg ? "background" : "window", {session_id: null, cwd: p.path,', SCRIPT);
-    assertIn('prompt: bg ? text || "Ready when you are." : "", permission_mode: mode, model, effort});', SCRIPT);
+    // 2026-11-23: no greeting - a background session with no task starts idle.
+    assertIn('prompt: bg ? text : "", permission_mode: mode, model, effort});', SCRIPT);
   });
 });
 
