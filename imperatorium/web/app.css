@@ -181,6 +181,7 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 .s .n{flex:0 1 auto;min-width:3em;font-weight:600;font-size:13.5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s .n .hb{display:inline-block;margin-left:6px;padding:0 4px;border:1px solid var(--line);border-radius:3px;font-size:12px;font-weight:500;color:var(--muted);vertical-align:1px}
+.s .n .hb.adm{color:var(--warn);border-color:var(--warn)}
 .s .why{flex:0 100 auto;min-width:0;color:var(--muted);font-size:12px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s.attn .why{color:var(--warn)}
@@ -304,6 +305,7 @@ button.tiny{background:transparent;border:1px solid var(--line);color:var(--mute
 /* The branch and worktree lead the subtitle, so where work goes is plain. */
 #sub .hbr{color:var(--ink);font:600 12px var(--mono);border:1px solid var(--line);border-radius:4px;padding:0 5px}
 #sub .hwt{color:var(--ok);font-weight:600}
+#sub .hadm{color:var(--warn);font:600 12px var(--mono);border:1px solid var(--warn);border-radius:4px;padding:0 5px}
 #sub .hwt.main{color:var(--muted);font-weight:400}
 #sub .hwt svg{width:10px;height:12px;vertical-align:-1px}
 #sessionpane{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}

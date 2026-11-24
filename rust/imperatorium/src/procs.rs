@@ -195,6 +195,68 @@ pub fn kill(pid: u32) -> Result<(), String> {
     }
 }
 
+/// Every process beneath `root` in `table`, parents before their children
+/// (depth first). Pure.
+pub fn descendants(root: u32, table: &[Proc]) -> Vec<u32> {
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for p in table {
+        children.entry(p.1).or_default().push(p.0);
+    }
+    let mut out = Vec::new();
+    let mut seen: HashSet<u32> = HashSet::from([root]);
+    let mut stack: Vec<u32> = children.get(&root).map(|k| k.iter().rev().copied().collect()).unwrap_or_default();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p) {
+            continue;
+        }
+        out.push(p);
+        if let Some(kids) = children.get(&p) {
+            stack.extend(kids.iter().rev().copied());
+        }
+    }
+    out
+}
+
+/// Whether `pid` runs as administrator (an elevated token); None when its
+/// token cannot be read. A session started from an administrator terminal
+/// is one: a dispatcher that is not cannot type into its console, and
+/// `taskkill` is refused on it (2026-11-24, imperatorium-c9).
+#[cfg(windows)]
+pub fn elevated(pid: u32) -> Option<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows_sys::Win32::System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let mut token: HANDLE = std::ptr::null_mut();
+        let opened = OpenProcessToken(h, TOKEN_QUERY, &mut token) != 0;
+        CloseHandle(h);
+        if !opened {
+            return None;
+        }
+        let mut e: TOKEN_ELEVATION = std::mem::zeroed();
+        let mut len = 0u32;
+        let size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
+        let ok = GetTokenInformation(token, TokenElevation, &mut e as *mut _ as *mut _, size, &mut len) != 0;
+        CloseHandle(token);
+        ok.then_some(e.TokenIsElevated != 0)
+    }
+}
+
+#[cfg(not(windows))]
+pub fn elevated(_pid: u32) -> Option<bool> {
+    None
+}
+
+/// Whether `pid` runs as administrator while this process does not: then
+/// Windows lets us end it but not type into it.
+pub fn above_us(pid: u32) -> bool {
+    elevated(pid) == Some(true) && elevated(std::process::id()) != Some(true)
+}
+
 /// {pid: shells beneath it that have outlived MIN_AGE}; a shell inside a
 /// shell is one task, so only the topmost on each branch counts.
 pub fn waiting_shells(pids: &[u32], table: &[Proc], now: f64) -> HashMap<u32, u64> {
@@ -229,9 +291,18 @@ pub fn waiting_shells(pids: &[u32], table: &[Proc], now: f64) -> HashMap<u32, u6
     out
 }
 
-/// procs.annotate: `shell_processes` on every live local row, and
-/// `background_tasks` on idle ones still waiting on a shell.
+/// procs.annotate: `shell_processes` on every live local row,
+/// `background_tasks` on idle ones still waiting on a shell, and
+/// `elevated` on one that runs as administrator.
 pub fn annotate(rows: &mut [Map<String, Value>]) {
+    for r in rows.iter_mut() {
+        let local = !crate::pyish::truthy(r.get("remote"));
+        if let Some(pid) = r.get("pid").and_then(Value::as_u64).filter(|_| local) {
+            if elevated(pid as u32) == Some(true) {
+                r.insert("elevated".into(), Value::Bool(true));
+            }
+        }
+    }
     let live: Vec<usize> = rows
         .iter()
         .enumerate()
@@ -281,6 +352,34 @@ mod tests {
         ];
         assert_eq!(waiting_shells(&[10], &t, 100.0).get(&10), Some(&2));
         assert!(waiting_shells(&[99], &t, 100.0).is_empty());
+    }
+
+    #[test]
+    fn descendants_come_parents_first() {
+        // imperatorium-c9's tree: claude > cmd > (conhost, pwsh > livekd).
+        let t: Vec<Proc> = vec![
+            (87244, 81924, "claude".into(), None),
+            (88576, 87244, "cmd".into(), None),
+            (81528, 88576, "conhost".into(), None),
+            (83308, 88576, "pwsh".into(), None),
+            (61700, 83308, "livekd64".into(), None),
+            (5, 1, "other".into(), None),
+        ];
+        let d = descendants(87244, &t);
+        assert_eq!(d.len(), 4);
+        let at = |p: u32| d.iter().position(|x| *x == p).unwrap();
+        assert!(at(88576) < at(81528) && at(88576) < at(83308) && at(83308) < at(61700));
+        assert!(descendants(5, &t).is_empty());
+        // A pid loop (a reused pid) does not spin.
+        let looped: Vec<Proc> = vec![(1, 2, "a".into(), None), (2, 1, "b".into(), None)];
+        assert_eq!(descendants(1, &looped), vec![2]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn this_process_has_a_readable_elevation() {
+        assert!(elevated(std::process::id()).is_some());
+        assert_eq!(elevated(u32::MAX - 3), None);
     }
 
     #[test]

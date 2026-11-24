@@ -642,6 +642,19 @@ turn as Esc at its terminal does: through the mod (0.3.0 and later) with
 `$.turn.abort`, the beat's reply carrying the request and the next beat
 saying what came of it; for a session without one, Esc is pressed in its
 console, never twice within 3 s (Esc Esc there opens the rewind menu).
+When the turn is already over and what still runs is a background shell it
+started (Claude Code says `shell`, the mod says no turn), Stop says so and
+opens that shell's task view, where Stop on the task or ending its process
+finishes it.
+
+A session started from an administrator terminal is marked **admin** on
+its tile and in its header. Windows does not let a dispatcher that is not
+elevated type into its console, so Close's typed `/exit` does not reach it
+and Close ends its processes instead, one by one with TerminateProcess
+(`taskkill /T` left one running), leaving its terminal tab open. Keys that
+never arrived are not waited on. If even that fails, Close says to
+type `/exit` in its own window or run `taskkill` from an administrator
+prompt.
 
 From 0.4.0 the beat's reply can also carry **ops**:
 - a slash command from the window, run once with `$.command.run`;

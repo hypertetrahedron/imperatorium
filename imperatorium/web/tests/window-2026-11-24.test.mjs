@@ -228,3 +228,25 @@ describe("Polling", () => {
     assert.equal(due({tasks: {}}, true, 2, 1), true);           // tasks still shown
   });
 });
+
+// imperatorium-c9 (2026-11-24): a session started from an administrator
+// terminal could be neither stopped nor closed from the window, and nothing
+// said why. It is marked "admin" now, and Stop on a session whose turn is
+// over but whose background shell runs opens that shell's task view.
+describe("sessions that run as administrator, and Stop with only a shell left", () => {
+  const tip = SCRIPT.slice(find(SCRIPT, "const ADMIN_TIP"), find(SCRIPT, ";\n", find(SCRIPT, "const ADMIN_TIP")) + 2);
+  const head = (s) => evalJson(cat(SHARED, STUBS, tip, "\n", fn("headSub"),
+    "\nprocess.stdout.write(JSON.stringify(headSub(", j(s), ", '')));"));
+
+  it("puts an admin badge in the Session Subtitle of an elevated session only", () => {
+    const admin = head({cwd: "C:/src/imperatorium", elevated: true});
+    assertIn('<span class="hadm" title="runs as administrator: Imperatorium cannot type into its terminal', admin);
+    assertIn(">admin</span>", admin);
+    assertNotIn("hadm", head({cwd: "C:/src/imperatorium"}));
+  });
+
+  it("marks the tile, and Stop opens the task view it names", () => {
+    assertIn('s.elevated ? `<span class="hb adm" title="${esc(ADMIN_TIP)}">admin</span>` : ""', SCRIPT);
+    assertIn("if (r.background && r.task && selected === k) openTask(r.task);", SCRIPT);
+  });
+});

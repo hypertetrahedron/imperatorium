@@ -217,6 +217,7 @@ function tile(s, short, depth){
       // Every remote tile names its machine: the same checkout on five
       // hosts made five tiles alike (persona runs, 2026-11-24).
       s.host && prefs.group !== "host" ? `<span class="hb" title="on ${esc(s.host)}">${esc(s.host)}</span>` : ""}${
+      s.elevated ? `<span class="hb adm" title="${esc(ADMIN_TIP)}">admin</span>` : ""}${
       pinned ? `<span class="pin">★</span>` : ""}</span>${
       plain ? "" : `<span class="why" title="${esc(label)}">${esc(label)}</span>`}<span class="sig">${
       tileSignals(s, now, open)}</span>${
@@ -453,12 +454,17 @@ function drawSessions(){
 // click away in Show Current Prompt.
 function headSub(s, branch){
   const parts = [];
+  if (s.elevated) parts.push(`<span class="hadm" title="${esc(ADMIN_TIP)}">admin</span>`);
   if (branch) parts.push(`<span class="hbr" title="git branch">&#9095; ${esc(branch)}</span>`);
   if (s.worktree) parts.push(`<span class="hwt" title="a worktree, not the main checkout">${WT_ICON} worktree ${esc(s.worktree)}</span>`);
   else if (branch) parts.push(`<span class="hwt main" title="the project's main checkout">main checkout</span>`);
   const rest = s.cwd ? esc(s.cwd) : "";
   return parts.join(" ") + (parts.length && rest ? " <span class=hsep>·</span> " : "") + rest;
 }
+// A session started from an administrator terminal (2026-11-24,
+// imperatorium-c9): Windows keeps the window from typing into it.
+const ADMIN_TIP = "runs as administrator: Imperatorium cannot type into its terminal, " +
+  "so Stop and Close may not reach it - use its own window";
 // Pure: whether the window's Stop applies to row `s`: a session on this
 // machine in the middle of a turn.
 const canStop = s => !!s && !s.remote && (!!RUNNING[s.status] || s.state === "working");
@@ -476,7 +482,12 @@ async function stopTurn(){
   say("stopping…", k);
   let r;
   try { r = await post("/api/stop", {session_id: k}); } catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
-  if (!r.ok){ say(r.error || "could not stop it", k); return true; }
+  if (!r.ok){
+    say(r.error || "could not stop it", k);
+    // Only a background shell is left: its task view is where it ends.
+    if (r.background && r.task && selected === k) openTask(r.task);
+    return true;
+  }
   if (r.via !== "mod"){ say("pressed Esc in its terminal", k); return true; }
   say("asked its mod to stop the turn…", k);
   for (let i = 0; i < 12; i++){

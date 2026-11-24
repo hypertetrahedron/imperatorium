@@ -1284,6 +1284,9 @@ impl Shared {
         if !working {
             return json!({"ok": false, "error": "it is not working on anything"});
         }
+        if let Some(task) = background_only(&row, state.as_ref()) {
+            return json!({"ok": false, "background": true, "task": task, "error": BACKGROUND_ONLY});
+        }
         let event = |via: &str| json!({"kind": "stop", "session_id": sid,
             "cwd": row.get("cwd").cloned().unwrap_or(Value::Null), "summary": format!("asked to stop (via {via})")});
         if let (Some(l), Some(s)) = (link, state.as_ref()) {
@@ -1506,4 +1509,71 @@ pub(super) fn uuid4() -> String {
         &h[16..20],
         &h[20..32]
     )
+}
+
+/// What Stop says to a session whose turn is over while a background shell
+/// it started still runs: Esc would end nothing.
+pub(super) const BACKGROUND_ONLY: &str =
+    "its turn is over - what is still running is a background shell it started. End that from its task view: Stop on the task, or end its process.";
+
+/// Pure: the task to show when Stop finds no turn to end, only a background
+/// shell: Claude Code says `shell` and the session's mod says no turn is
+/// running (Stop said "it had already finished" to one stuck on a dead
+/// shell, 2026-11-24, imperatorium-c9). The running shell's task id when it
+/// is known, else the process list. None while a turn may be running,
+/// including when there is no mod to ask.
+pub(super) fn background_only(row: &Row, mod_state: Option<&Map<String, Value>>) -> Option<Value> {
+    if row.get("status").and_then(Value::as_str) != Some("shell")
+        || row.get("state").and_then(Value::as_str) == Some("working")
+    {
+        return None;
+    }
+    if truthy(mod_state?.get("busy")) {
+        return None;
+    }
+    let shell = row
+        .get("stop_background_tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|t| {
+            t.get("type").and_then(Value::as_str) == Some("shell")
+                && t.get("status").and_then(Value::as_str).is_none_or(|s| s == "running")
+        })
+        .and_then(|t| t.get("id").cloned())
+        .filter(|id| truthy(Some(id)));
+    Some(shell.unwrap_or_else(|| json!("processes")))
+}
+
+#[cfg(test)]
+mod background_only_tests {
+    use super::*;
+
+    fn row(v: Value) -> Row {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_dead_background_shell_is_not_a_turn_to_stop() {
+        // imperatorium-c9 as the dispatcher saw it: turn over, one shell left.
+        let c9 = row(json!({"status": "shell", "stop_background_tasks": [
+            {"id": "bdone", "type": "shell", "status": "completed"},
+            {"id": "bh85eoxtg", "type": "shell", "status": "running"}]}));
+        let idle = row(json!({"busy": false}));
+        assert_eq!(background_only(&c9, Some(&idle)), Some(json!("bh85eoxtg")));
+        // No task id known: the process list, where the shell can be ended.
+        let bare = row(json!({"status": "shell"}));
+        assert_eq!(background_only(&bare, Some(&idle)), Some(json!("processes")));
+    }
+
+    #[test]
+    fn a_running_turn_is_still_stopped() {
+        let shell = row(json!({"status": "shell"}));
+        assert_eq!(background_only(&shell, Some(&row(json!({"busy": true})))), None);
+        // No mod to say whether a turn runs: Esc as before.
+        assert_eq!(background_only(&shell, None), None);
+        assert_eq!(background_only(&row(json!({"status": "busy"})), Some(&row(json!({"busy": false})))), None);
+        let bg = row(json!({"status": "shell", "state": "working"}));
+        assert_eq!(background_only(&bg, Some(&row(json!({"busy": false})))), None);
+    }
 }
