@@ -142,6 +142,8 @@ the Chat Matrix; everything else is filled in by the script).
 - **History Pop-up** `#histbox` (over the window; Esc, ✕ `[data-popclose]` or a
   click outside returns to the chat), holding the History Pane `#historypane`
   - History Search `#hq`
+  - History Filters `#histfilters`: Folder `#hfolder`, Sort `#hsort`, Active Within `#hdays`
+  - History Folder Note `#histbias` (opened by /resume: the session's folder, with Show All Folders `#hall`)
   - History Results `#hits`, made of History Hits (`.hit`)
 - **Insights Pop-up** `#insightbox`, likewise, holding the Insights Pane `#insightpane`
   - Cost Card `#costs`: Cost Chart (`svg.chart`) and Cost Tables

@@ -368,6 +368,14 @@ details.tgroup>.gb{border-left:2px solid var(--line);padding:2px 0 2px 10px;marg
 .turn.pend .pnote{margin-left:8px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)}
 .turn.pend.failed .pnote{color:var(--fail)}
 .turn.pend .who button{margin-left:6px;padding:0 5px;font-size:12px;line-height:1.3}
+.turn.wnote .pnote{margin-left:8px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)}
+.turn.wnote.working>:not(.who){color:var(--muted)}
+.turn.wnote.failed>:not(.who){color:var(--fail)}
+#histfilters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0 2px}
+#histfilters select{max-width:100%}
+#histfilters #hfolder{max-width:min(320px,100%)}
+#histbias{font-size:12px;color:var(--muted);margin:2px 0 4px}
+#histbias button{margin-left:6px}
 .turn.pend:not(.failed)>:not(.who){opacity:.8}
 .turn.flash{outline:2px solid var(--busy);outline-offset:4px;border-radius:2px}
 .turn.cur-find{outline:2px solid var(--warn);outline-offset:4px;border-radius:2px}

@@ -107,9 +107,8 @@ impl Shared {
         if where_ == "window" && self.hc_hosting() {
             return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
         }
-        if where_ == "background" && kind != Kind::Resume && prompt.trim().is_empty() {
-            return json!({"ok": false, "error": "type what the background session should do first"});
-        }
+        // A background session with no first message starts idle and waits
+        // for one (2026-11-23: `claude --bg` no longer needs a prompt).
         let cut = if cut_needed {
             let sid = parent.as_deref().unwrap_or("");
             let entries = crate::sessionstat::transcript_path(sid)

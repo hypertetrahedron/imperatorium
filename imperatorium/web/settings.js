@@ -237,16 +237,70 @@ function wireDesk(){
     say(box.checked ? "Desktop notifications on." : "Desktop notifications off.");
   };
 }
-// Each host with how its last poll went (`/api/hosts`), and a button that
-// polls them all now - a parked one too - rather than at their next turn.
+// Each host with how its last poll went (`/api/hosts`), a Test button that
+// checks it piece by piece (`/api/remote/test`, what `remote check` prints),
+// a button that polls them all now - a parked one too - rather than at their
+// next turn, and the form that adds a machine (`remote add`, run by the
+// dispatcher: `/api/remote/add`, followed with `/api/remote/job`).
 function hostsHtml(hosts){
-  if (!hosts || !hosts.length) return `<div class="help">No remote hosts.</div>`;
-  return `<div class="f"><label>Hosts</label><div class="ctl"><ul class="hosts">` + hosts.map(h =>
+  const list = !hosts || !hosts.length ? `<div class="f"><label>Hosts</label><div class="ctl">` +
+    `<span class="help">No remote machines yet. Add one below.</span></div></div>` :
+    `<div class="f"><label>Hosts</label><div class="ctl"><ul class="hosts">` + hosts.map(h =>
     `<li>${esc(h.label || h.name)}${h.label && h.label !== h.name ? ` (${esc(h.name)})` : ""}${
-      h.tunnel ? " · tunnel" : ""} <span class="hst" data-host="${esc(h.name)}"></span></li>`).join("") +
+      h.tunnel ? " · tunnel" : ""} <span class="hst" data-host="${esc(h.name)}"></span> ` +
+    `<button type=button class="small inl" data-test="${esc(h.name)}">Test</button>` +
+    `<div class="rres" data-res="${esc(h.name)}" hidden></div></li>`).join("") +
     `</ul><button type=button class="small" id="rrefresh">Refresh now</button>` +
     `<span class="help">Polls every host at once instead of on its next turn (every 20 s, ` +
     `longer for a host that is failing).</span></div></div>`;
+  return list + `<div class="f" id="radd"><label for="radd-host">Add a machine</label><div class="ctl">` +
+    `<input type=text id="radd-host" spellcheck=false autocomplete=off placeholder="user@host or an ~/.ssh/config alias">` +
+    `<input type=text id="radd-label" spellcheck=false autocomplete=off placeholder="label (optional)">` +
+    `<label class="chk"><input type=checkbox id="radd-tunnel" checked> Tunnel: reply to its sessions ` +
+    `and answer their permission requests from here</label>` +
+    `<label class="chk"><input type=checkbox id="radd-claude"> Install or update Claude Code there if it is ` +
+    `missing or too old (Anthropic's installer)</label>` +
+    `<span><button type=button class="small" id="radd-test">Test connection</button> ` +
+    `<button type=button class="small" id="radd-go">Add</button></span>` +
+    `<div class="rres" id="radd-res" hidden></div>` +
+    `<pre class="rlog" id="radd-log" hidden></pre><div id="radd-done" hidden></div>` +
+    `<span class="help">Imperatorium logs in with an SSH key, never a password: if Test connection says ` +
+    `the login was refused, it offers to set one up. Add checks a recent Claude Code is on ` +
+    `the machine (installing it if you tick the box), copies Imperatorium's binary there, installs its reporting hooks ` +
+    `(with a tunnel) and writes the machine into config.json; the dispatcher polls it after a restart.</span>` +
+    `</div></div>`;
+}
+const MARK = {"ok": ["ok", "ok"], "MISSING": ["missing", "miss"], "--": ["not yet", "na"]};
+// The answer of /api/remote/test as rows: what is there and what is missing.
+function testHtml(d){
+  if (!d || (!d.rows && d.error)) return `<div class="rhead miss">${esc((d && d.error) || "not answered")}</div>`;
+  const head = d.ok ? (d.reachable ? "Connected. Everything it needs is there." : "")
+    : d.reachable ? "Connected, but something is missing:" : "Cannot log in:";
+  return `<div class="rhead ${d.ok ? "ok" : "miss"}">${esc(head)}</div><ul class="rrows">` + (d.rows || []).map(r => {
+    const [word, cls] = MARK[r.mark] || [r.mark, "na"];
+    return `<li class="${cls}"><b>${esc(word)}</b> ${esc(r.what)}: ${esc(r.detail)}</li>`;
+  }).join("") + `</ul>` + (d.hint ? `<div class="help">${esc(d.hint)}</div>` : "") +
+    (d.auth && d.host ? `<button type=button class="small" data-keyfor="${esc(d.host)}">Set up key login</button>` +
+      `<div class="rkey" hidden></div>` : "") +
+    (d.reachable && !d.ok && !d.configured ? `<div class="help">Add sets up what it can: the binary and the hooks, ` +
+      `and Claude Code if you tick the box.</div>` : "");
+}
+// /api/remote/key's answer: the key (made just now, or the one there was)
+// and the one command, run in a terminal, that copies it to the host. The
+// host's password goes to ssh there, never through Imperatorium.
+function keyHtml(d, host){
+  if (!d || !d.ok) return `<div class="rhead miss">${esc((d && d.error) || "not answered")}</div>`;
+  return `<div class="help">${d.made ? `Made a key for this computer: <code>${esc(d.key)}</code>. ` : ""}` +
+    `Run this once in a terminal. It asks for ${esc(host)}'s password, then copies the key there; ` +
+    `then press Test again.</div><pre class="rcmd">${esc(d.command)}</pre>` +
+    `<button type=button class="small" data-copy>Copy</button>`;
+}
+async function testHost(host, tunnel, out){
+  out.hidden = false; out.innerHTML = `<div class="rhead">Testing ${esc(host)}…</div>`;
+  let d;
+  try { d = await post("/api/remote/test", {host, tunnel}); } catch (e) { d = {error: "dispatcher not answering"}; }
+  out.innerHTML = testHtml(d);
+  return d;
 }
 function hostState(st, now){
   if (!st) return {text: "not polled yet", bad: false};
@@ -263,20 +317,104 @@ async function drawHosts(){
     el.textContent = "- " + s.text; el.classList.toggle("bad", s.bad);
   }
 }
+// The add under way or last finished: its lines, then what comes next.
+function drawAddJob(j){
+  const log = document.getElementById("radd-log"), done = document.getElementById("radd-done");
+  if (!log || !j || !j.job) return;
+  log.hidden = false; log.textContent = (j.log || []).join("\n") + (j.running ? "\n…" : "");
+  log.scrollTop = log.scrollHeight;
+  for (const id of ["radd-go", "radd-test"]) document.getElementById(id).disabled = !!j.running;
+  done.hidden = j.running;
+  if (j.running) return;
+  done.innerHTML = j.added
+    ? `<div class="rhead ok">${esc(j.host)} is added. The dispatcher starts polling it when it restarts.</div>` +
+      (j.can_restart ? `<button type=button class="small" id="radd-restart">Restart the dispatcher now</button>`
+        : `<div class="help">Restart it with <code>imperatorium restart dispatcher</code>.</div>`)
+    : `<div class="rhead miss">${esc(j.host)} was not added: the lines above say why.</div>`;
+  const rb = document.getElementById("radd-restart");
+  if (rb) rb.onclick = async () => {
+    rb.disabled = true;
+    let d;
+    try { d = await post("/api/remote/restart", {}); } catch (e) { d = {error: "dispatcher not answering"}; }
+    // A new dispatcher is noticed by checkBoot, which reloads this page.
+    say(d.ok ? "Restarting the dispatcher - this page reloads when it is back." : (d.error || "not restarted"), !d.ok);
+    if (!d.ok) rb.disabled = false;
+  };
+}
+async function followAdd(){
+  let j;
+  try { j = await get("/api/remote/job"); } catch (e) { setTimeout(followAdd, 2000); return; }
+  drawAddJob(j);
+  if (j.running) { setTimeout(followAdd, 1000); return; }
+  if (j.added && !document.querySelector(`#set .hst[data-host="${CSS.escape(j.host)}"]`)) {
+    // Redraw for the new host and the restart banner, unless that would drop unsaved edits.
+    if (form && Object.keys(changes()).length) say(`${j.host} added - save or revert your other changes, then reload to see it listed.`);
+    else load();
+  }
+}
 function wireHosts(){
   const btn = document.getElementById("rrefresh");
-  if (!btn) return;
-  drawHosts();
-  btn.onclick = async () => {
-    btn.disabled = true;
-    try {
-      const d = await post("/api/remote/refresh", {});
-      say(d.ok ? `Polling ${d.hosts} host${d.hosts === 1 ? "" : "s"} now.` : (d.error || "not refreshed"), !d.ok);
-    } catch (e) { say("dispatcher not answering", true); }
-    // An answering host is back within seconds; one that times out, in ~30.
-    for (const ms of [3000, 10000, 35000]) setTimeout(drawHosts, ms);
-    setTimeout(() => { btn.disabled = false; }, 3000);
+  if (btn) {
+    drawHosts();
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        const d = await post("/api/remote/refresh", {});
+        say(d.ok ? `Polling ${d.hosts} host${d.hosts === 1 ? "" : "s"} now.` : (d.error || "not refreshed"), !d.ok);
+      } catch (e) { say("dispatcher not answering", true); }
+      // An answering host is back within seconds; one that times out, in ~30.
+      for (const ms of [3000, 10000, 35000]) setTimeout(drawHosts, ms);
+      setTimeout(() => { btn.disabled = false; }, 3000);
+    };
+  }
+  for (const b of document.querySelectorAll("#set [data-test]")) b.onclick = async () => {
+    b.disabled = true;
+    await testHost(b.dataset.test, true, document.querySelector(`#set [data-res="${CSS.escape(b.dataset.test)}"]`));
+    b.disabled = false;
   };
+  // Key setup, under any test that says the login was refused.
+  const pane = document.getElementById("sec-remote");
+  if (pane) pane.onclick = async e => {
+    const kb = e.target.closest("[data-keyfor]"), cb = e.target.closest("[data-copy]");
+    if (kb) {
+      kb.disabled = true;
+      let d;
+      try { d = await post("/api/remote/key", {host: kb.dataset.keyfor}); } catch (x) { d = {error: "dispatcher not answering"}; }
+      const out = kb.nextElementSibling;
+      out.hidden = false; out.innerHTML = keyHtml(d, kb.dataset.keyfor);
+      kb.disabled = false;
+    } else if (cb) {
+      const text = cb.previousElementSibling.textContent;
+      try { await navigator.clipboard.writeText(text); say("Copied."); }
+      catch (x) { say("could not copy: select the command and copy it", true); }
+    }
+  };
+  const host = document.getElementById("radd-host");
+  if (!host) return;
+  const value = () => host.value.trim(), tunnel = () => document.getElementById("radd-tunnel").checked;
+  const need = () => { if (!value()) { say("Name the machine first: user@host or an ~/.ssh/config alias.", true); host.focus(); } return !!value(); };
+  const test = document.getElementById("radd-test"), go = document.getElementById("radd-go");
+  test.onclick = async () => {
+    if (!need()) return;
+    test.disabled = true;
+    await testHost(value(), tunnel(), document.getElementById("radd-res"));
+    test.disabled = false;
+  };
+  go.onclick = async () => {
+    if (!need()) return;
+    go.disabled = test.disabled = true;
+    let d;
+    try { d = await post("/api/remote/add", {host: value(), label: document.getElementById("radd-label").value.trim(),
+      tunnel: tunnel(), install_claude: document.getElementById("radd-claude").checked}); }
+    catch (e) { d = {error: "dispatcher not answering"}; }
+    if (!d.ok) { say(d.error || "not started", true); go.disabled = test.disabled = false; return; }
+    document.getElementById("radd-res").hidden = true;
+    say(`Adding ${d.host}…`);
+    followAdd();
+  };
+  host.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); test.click(); } };
+  // An add started before this page was drawn (or before a reload).
+  get("/api/remote/job").then(j => { drawAddJob(j); if (j && j.running) followAdd(); }).catch(() => {});
 }
 // The native binary's update check (`/api/update`): this version, the newest
 // release the last check saw and what is new in it, and the button that

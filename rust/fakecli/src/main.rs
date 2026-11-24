@@ -11,7 +11,7 @@
 //! - `ssh ...` (copied to `ssh.exe`, named by IMPERATORIUM_SSH): a fake
 //!   host, never the network. FAKESSH_MODE=sh runs the remote command with
 //!   `sh` in a sandbox HOME ($FAKEHOST_HOME; host `downhost` refuses the
-//!   connection); otherwise it answers as a host with one live session and
+//!   connection, `lockedhost` the login); otherwise it answers as a host with one live session and
 //!   records each call in $FAKESSH_DIR/log.jsonl (rust/conformance/
 //!   fakessh.py, which it replaces).
 //! - anything else: logged, exits 0.
@@ -258,6 +258,10 @@ mod ssh {
     fn sandbox(host: &str, cmd: &str) -> i32 {
         if host == "downhost" {
             eprintln!("ssh: connect to host downhost port 22: Connection refused");
+            return 255;
+        }
+        if host == "lockedhost" {
+            eprintln!("lockedhost: Permission denied (publickey,password).");
             return 255;
         }
         let Some(sh) = find_sh() else {

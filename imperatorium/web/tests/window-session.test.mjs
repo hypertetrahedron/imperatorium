@@ -186,12 +186,12 @@ describe("SessionTree", () => {
     assertNotIn(".s:hover .acts", CSS);
     // 2026-11-16: pin and close in the open tile's first line (its top right
     // corner), and on no closed tile.
-    assertIn('open ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl', SCRIPT);
+    assertIn('open && !s.provisional ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl', SCRIPT);
     assertNotIn('prBadge(s.pr)}</span><span class="acts">', SCRIPT);
   });
 
   it("tile x closes a running local session rather than archiving", () => {
-    for (const needle of ['data-close="${esc(key(s))}"', 's.remote ? ""',
+    for (const needle of ['data-close="${esc(key(s))}"', 's.remote || s.provisional || closing.has(key(s)) ? ""',
                           ': s.pid ? `<span data-close=',
                           'post("/api/close"', "closeSession(el.dataset.close)",
                           "famClicked(el.dataset.fam)"]) {

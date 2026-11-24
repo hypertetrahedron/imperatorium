@@ -286,8 +286,8 @@ background options apply at once, the rest after the restart the window
 names. A save checks every value first and changes nothing if one is wrong,
 keeps the previous file as `config.json.bak`, and keeps its `_comment` keys.
 Some things are left to `config.json` by design: the auto-approval rules
-(`policy.json`), a bypass permission mode, the ntfy token, and adding or
-removing remote hosts (`imperatorium remote add|remove`).
+(`policy.json`), a bypass permission mode, the ntfy token, and removing
+remote hosts (`imperatorium remote remove`).
 The bottom of the window lists every keyboard shortcut, with the ones you
 can set showing their current keys.
 
@@ -380,7 +380,10 @@ matches, newest first. In the **Changes** tab, click a line of the diff to
 leave a comment on it; the comments go to the session as one prompt, or into
 the prompt box to edit first.
 
-**history** searches every past session; **insights** tallies tool
+**history** searches every past session, narrowed to one project folder
+(its worktrees included), sorted by when it was last active or started,
+by title or length, and limited to a recent stretch; `/resume` opens it on
+the current session's folder. **insights** tallies tool
 failures across projects, estimates what the last 7/30/90 days of tokens
 would cost at API list prices (by day, project and model, from the
 transcripts). The phone, spoken and desktop alerts are switched on in the
@@ -496,6 +499,11 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | GET | `/api/decisions` | recent auto-approval verdicts |
 | GET | `/api/hosts` | configured hosts and their reachability |
 | POST | `/api/remote/refresh` | poll every remote host now, parked or not |
+| POST | `/api/remote/test` | `{host, tunnel}`: probe one host, as `remote check` rows (Settings window only) |
+| POST | `/api/remote/add` | `{host, label, tunnel, install_claude}`: start `remote add` without questions (Settings window only) |
+| POST | `/api/remote/key` | `{host}`: this computer's SSH key (made if there is none) and the command that copies it to the host (Settings window only) |
+| GET | `/api/remote/job` | that add's progress: its lines, running, added |
+| POST | `/api/remote/restart` | restart the dispatcher's own unit, so it polls a new host (Settings window only; the live dispatcher only) |
 | GET | `/api/health` | liveness: `{ok, pid, boot}` - `boot` changes on every dispatcher start |
 | POST | `/hook` | Claude Code hook events |
 | POST | `/api/transcribe` | raw audio in, text out |
@@ -511,7 +519,7 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | GET | `/api/worktree_diff` | `?project=&path=` - what a worktree's branch would bring |
 | POST | `/api/worktree` | `{project, path, action: merge\|pr\|discard, force}` |
 | POST | `/api/spawn` | `{kind: new\|fork\|resume, where: window\|background, session_id, cwd, prompt, plan, worktree, copy}` - only from the window: start another session where the worktree rules put it; with `plan`, only say where |
-| GET | `/api/history` | `?q=` - search past sessions |
+| GET | `/api/history` | `?q=&folder=&sort=modified\|created\|oldest\|title\|size&days=` - search past sessions; also lists every folder with its count |
 | POST | `/api/resume` | `{session_id, where: window\|background, fork, prompt}` |
 | POST | `/api/new` | `{session_id, cwd, close}` - a fresh session in that project, in a new tab; answers its `session_id`. With `close`, the old session is then ended (typed `/exit`, killed if it stays) |
 | POST | `/api/close` | `{session_id}` - end a running local session and its terminal tab |
@@ -1041,7 +1049,17 @@ request path, so a host on a slow link or timing out delays only its own
 sessions. A host that fails is parked with a growing backoff and its real
 reason, so a machine that is asleep costs nothing and never hides a working
 one. Settings > Remote machines shows how each host's last poll went and has
-**Refresh now**, which polls every host at once, a parked one too. `claude` is
+**Refresh now**, which polls every host at once, a parked one too. Each host
+has a **Test** button (what `remote check` prints for it), and **Add a
+machine** does `remote add` from the window: test the connection first, then
+Add, which shows each step as it goes and then offers to restart the
+dispatcher so it starts polling the new host. When a test says the host
+refused the login, **Set up key login** makes this computer's SSH key if it
+has none (ed25519, no passphrase; an existing key is never replaced) and shows
+the one command that copies it there: run it in a terminal, where ssh asks the
+host's password once, then Test again. The password never passes through
+Imperatorium. A box on the form installs or updates Claude Code on the host
+with Anthropic's installer, as `remote add --install-claude` does. `claude` is
 called by absolute path: it is not on PATH for a non-interactive SSH session on
 Ubuntu, because `.bashrc` returns early.
 

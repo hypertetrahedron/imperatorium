@@ -50,6 +50,24 @@ body{overflow:hidden}
 #set .hosts{margin:0;padding-left:18px;font-size:13px}
 #set .hosts .hst{color:var(--muted);font-size:12px}
 #set .hosts .hst.bad{color:var(--fail)}
+#set .hosts li{margin:0 0 4px}
+#set button.small.inl{margin-top:0;padding:1px 8px}
+#set #radd input[type=text]{width:24em}
+#set .f .ctl label.chk{font-weight:400;padding:0;display:flex;gap:6px;align-items:center;font-size:13px}
+#set .f .ctl label.chk input{margin:0}
+#set .rres{font-size:13px;margin:4px 0}
+#set .rhead{font-weight:600;margin:2px 0}
+#set .rhead.ok{color:var(--ok)}
+#set .rhead.miss{color:var(--fail)}
+#set .rrows{margin:2px 0;padding-left:18px}
+#set .rrows b{display:inline-block;min-width:4.5em;font-weight:600}
+#set .rrows .ok b{color:var(--ok)}
+#set .rrows .miss b{color:var(--fail)}
+#set .rrows .na b{color:var(--muted)}
+#set .rcmd{white-space:pre-wrap;word-break:break-all;font:12px var(--mono);margin:4px 0;padding:6px 8px;
+  border:1px solid var(--line);border-radius:6px;user-select:all}
+#set .rlog{white-space:pre-wrap;font:12px var(--mono);margin:6px 0;padding:8px 10px;
+  border:1px solid var(--line);border-radius:6px;max-height:260px;overflow:auto}
 #set #updst.bad{color:var(--fail)}
 #set #updnotes{white-space:pre-wrap;font:inherit;font-size:13px;margin:6px 0;padding:8px 10px;
   border:1px solid var(--line);border-radius:6px;max-height:260px;overflow:auto}

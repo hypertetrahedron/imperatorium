@@ -196,9 +196,13 @@ pub fn resume(
                 .unwrap_or_default();
             all.extend(extra.iter().cloned());
             opts.insert("extra".into(), Value::Array(all));
-            let text = prompt
-                .filter(|p| !p.is_empty())
-                .unwrap_or("Continue where you left off.");
+            // A resume carries on; a fork with nothing to do yet waits idle
+            // (2026-11-23), as a new background session does.
+            let text = match prompt.filter(|p| !p.trim().is_empty()) {
+                Some(p) => p,
+                None if fork => "",
+                None => "Continue where you left off.",
+            };
             let started = crate::background::start(text, cwd, &opts)?;
             let mut shown = vec!["claude".to_string(), "--bg".into()];
             shown.extend(extra.iter().map(crate::pyish::py_str));

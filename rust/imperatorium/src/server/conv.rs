@@ -282,7 +282,20 @@ impl Shared {
     pub(super) fn api_history(&self, q: &HashMap<String, String>) -> Value {
         let query = q.get("q").cloned().unwrap_or_default();
         let read = |sid: &str| self.search_text(sid);
-        let mut got = self.history.search(&query, 40, &read);
+        // History's filters (2026-11-23): folder=<a project folder, its
+        // worktrees included>, days=<active within>, sort=modified|created|
+        // oldest|size|title. Narrowed before the limit, so a folder's
+        // sessions are all there however many newer ones are elsewhere.
+        let arg = |k: &str| q.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
+        let filter = crate::history::Filter {
+            folder: arg("folder").map(str::to_string),
+            since: arg("days")
+                .and_then(|d| d.parse::<f64>().ok())
+                .filter(|d| *d > 0.0)
+                .map(|d| Self::now() - d * 86400.0),
+            sort: crate::history::Sort::parse(arg("sort").unwrap_or("")),
+        };
+        let mut got = self.history.search_with(&query, 60, &filter, &read);
         let live: std::collections::HashSet<String> = self
             .sessions(2.0)
             .iter()

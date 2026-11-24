@@ -148,6 +148,10 @@ impl Shared {
             "/api/notify",
             "/api/settings",
             "/api/remote/refresh",
+            "/api/remote/test",
+            "/api/remote/add",
+            "/api/remote/restart",
+            "/api/remote/key",
             "/api/open_path",
             "/api/stop",
             "/api/fleet/watch",
@@ -216,6 +220,22 @@ impl Shared {
             "/api/remote/refresh" => {
                 let n = self.fleet.as_ref().map(|f| f.refresh()).unwrap_or(0);
                 (200, Body::Json(json!({"ok": true, "hosts": n})))
+            }
+            // Each runs ssh to a host the caller names, writes to that host
+            // and config.json, or restarts this process: the Settings window's alone.
+            "/api/remote/test" | "/api/remote/add" | "/api/remote/key" | "/api/remote/restart" => {
+                if !from_window {
+                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window"})));
+                }
+                if self.store.is_none() {
+                    return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
+                }
+                (200, Body::Json(match path {
+                    "/api/remote/test" => self.remote_test(p),
+                    "/api/remote/add" => self.remote_add_start(p),
+                    "/api/remote/key" => self.remote_key(p),
+                    _ => self.restart_self(),
+                }))
             }
             "/api/dispatch" => {
                 let Some(store) = &self.store else {
@@ -563,6 +583,7 @@ impl Shared {
             ("GET", "/api/slash/commands") => (200, Body::Json(self.api_slash_commands(&arg("session")))),
             // Remote hosts are phase 4: until then this dispatcher polls none.
             ("GET", "/api/hosts") => (200, Body::Json(self.hosts_status())),
+            ("GET", "/api/remote/job") => (200, Body::Json(self.remote_add_status())),
             ("GET", "/api/update") => (200, Body::Json(self.updates.status(&self.config()))),
             ("GET", "/api/events") => {
                 // store.events(100): the newest hundred, newest first.
