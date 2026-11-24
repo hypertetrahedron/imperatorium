@@ -107,6 +107,9 @@ The first release of the native build: 0.4.0.
   "waiting for you" for good, and the window took the moment for a finished
   turn. Now a wait is cleared only by a new prompt or reply, and "new" goes by
   when the last turn ended.
+- A background job that Claude Code shut down while it was waiting on you now
+  says "resume to answer" instead of "waiting for you", since its Resume button
+  is the way to answer it.
 
 ### Breaking
 

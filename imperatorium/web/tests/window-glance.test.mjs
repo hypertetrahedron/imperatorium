@@ -45,6 +45,18 @@ describe("Unread", () => {
     assert.deepEqual(got, [false, true, true]);
   });
 
+  it("a retired job still waiting on you says resume to answer (2026-11-23)", () => {
+    // ready-when-you-are: background, no process, Claude Code says blocked.
+    const job = "{kind: 'background', state: 'blocked', resumable: true, attention: true," +
+      " attention_kind: 'notification', attention_reason: 'waiting for you'}";
+    const got = glanceJs(cat("[stateOf(", job, "),",
+      " stateOf(Object.assign(", job, ", {resumable: false})),",
+      " stateOf(Object.assign(", job, ", {attention_kind: 'failure', attention_reason: 'login required'})),",
+      " stateOf(Object.assign(", job, ", {attention_kind: 'complete'}))]"));
+    assert.deepEqual(got, [["d-attn", "resume to answer"], ["d-attn", "waiting for you"],
+      ["d-fail", "login required"], ["d-comp", "complete"]]);
+  });
+
   it("gone sessions drop out but an empty list changes nothing", () => {
     const got = glanceJs(cat(
       "[updateSeen({a: 5, b: 6}, [{id: 'a', status: 'busy'}], null, 9),",

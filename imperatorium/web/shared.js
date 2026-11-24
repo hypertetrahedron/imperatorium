@@ -387,6 +387,10 @@ function stateOf(s){
   if (s.attention){
     if (s.attention_kind === "failure") return ["d-fail", s.attention_reason || "failed"];
     if (s.attention_kind === "complete") return ["d-comp", "complete"];
+    // No process left to wait in: a background job Claude Code retired
+    // while it waited on you is still "blocked", and Resume is the way to
+    // answer (2026-11-23).
+    if (s.resumable) return ["d-attn", "resume to answer"];
     return ["d-attn", s.attention_reason || s.waitingFor ||
       WAITING[s.last_notification] || s.last_notification || "waiting for you"];
   }
