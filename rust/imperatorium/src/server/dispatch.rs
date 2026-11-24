@@ -245,11 +245,36 @@ impl Shared {
         // Wake the window's stream: it says "pending" once the request is in.
         self.invalidate();
         let (verdict, who, answers) = self.pending.park_while(p, wait, |item| self.park_abandoned(item));
+        if !verdict.is_null() {
+            self.answered(p);
+        }
         let mut reply = json!({"verdict": verdict, "decided_by": who});
         if truthy(Some(&answers)) {
             reply["answers"] = answers;
         }
         reply
+    }
+
+    /// A parked request was answered: the session is no longer blocked on
+    /// it, so the "needs permission" its Notification raised goes. It stayed
+    /// while the session worked on after an Allow, until its turn ended - a
+    /// working session read as blocked, and `n` went to it first (persona
+    /// runs, 2026-11-24). A wait of any other kind is left alone.
+    fn answered(&self, p: &Map<String, Value>) {
+        let (Some(store), Some(sid)) = (&self.store, p.get("session_id").and_then(Value::as_str).filter(|s| !s.is_empty())) else {
+            return;
+        };
+        let key = match p.get("_host").and_then(Value::as_str).filter(|h| !h.is_empty()) {
+            Some(host) => super::snapshot::remote_key(host, sid),
+            None => sid.to_string(),
+        };
+        let rec = store.session(&key).unwrap_or_default();
+        let blocked = rec.get("attention_kind").and_then(Value::as_str) == Some("notification")
+            && matches!(rec.get("attention_reason").and_then(Value::as_str), Some("needs permission" | "input needed"));
+        if blocked {
+            store.clear_attention(&key);
+            self.invalidate();
+        }
     }
 
     /// Whether nobody waits for parked `item` any more: this machine's hook
