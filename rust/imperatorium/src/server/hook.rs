@@ -60,11 +60,6 @@ impl Shared {
         if let Some(sock) = payload.get("messaging_socket").filter(|v| truthy(Some(v))) {
             meta.insert("socket".into(), sock.clone());
         }
-        // herdr-core hosting comes with step 3; a SessionStart outside it
-        // replaces the old terminal's record, as in Python.
-        if host.is_none() && !truthy(payload.get("hc_terminal")) && event == "SessionStart" {
-            meta.insert("hc".into(), json!({}));
-        }
         let ev = |kind: &str, extra: Value| {
             let mut e = json!({"kind": kind, "session_id": sid})
                 .as_object()
@@ -124,6 +119,11 @@ impl Shared {
                     // its session file says "input needed": keep those words.
                     "permission_prompt" if self.asking(&key, &sid, host) => Some("input needed"),
                     "permission_prompt" => Some("needs permission"),
+                    // A session that has never finished a turn (a
+                    // background one started with no task) is ready, not
+                    // waiting on you: Claude Code still sends idle_prompt
+                    // a minute in (2026-11-24).
+                    "idle_prompt" if self.never_ran_background(&key) => None,
                     "idle_prompt" => Some("waiting for you"),
                     "agent_needs_input" => Some("needs input"),
                     "elicitation_dialog" => Some("needs an answer"),
@@ -251,6 +251,19 @@ impl Shared {
     /// Control._idle_check: the `idle_prompt` Claude Code no longer sends. A
     /// minute after Stop, a session that is idle, has had no hook since and
     /// has nothing running is waiting for you. True when it raised it.
+    /// A background session that has never been given a prompt (started
+    /// with no task): idle because nobody has asked it anything yet. Claude
+    /// Code names a job after its first prompt; until then its name is its
+    /// own short id. And no Stop has been recorded for it.
+    fn never_ran_background(&self, key: &str) -> bool {
+        let stopped = self
+            .store
+            .as_ref()
+            .and_then(|s| s.session(key))
+            .is_some_and(|rec| truthy(rec.get("last_stop_at")) || rec.get("last_event").and_then(Value::as_str) == Some("Stop"));
+        !stopped && self.row(key).is_some_and(|r| registry::never_prompted(&r))
+    }
+
     fn idle_check(&self, key: &str, stop_at: &Value, host: Option<&str>, sid: &str) -> bool {
         let Some(store) = &self.store else {
             return false;

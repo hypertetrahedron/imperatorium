@@ -74,26 +74,34 @@ export default {
     await d.step("the host drops", "the container restarts; how soon does the window say so", async () => {
       fs.writeFileSync(path.join(sb.bin, "down-devbox"), "");
       const t0 = Date.now();
+      const SAYS = /not answering|unreachable|offline|lost|refused|can't reach|cannot reach|not reachable/i;
       // Either it says so, or the session just goes.
-      await d.waitFor("the window reacts", { fn: () => /unreachable|offline|down|lost|refused|can't reach|cannot reach|not reachable/i.test(document.querySelector("#side").innerText + (document.querySelector("#sub")?.innerText || "")) || !document.querySelector("#sessions .s"), arg: null }, { timeout: 120000 });
+      await d.waitFor("the window reacts", { fn: () => /not answering|unreachable|offline|lost|refused|can't reach|cannot reach|not reachable/i.test(document.querySelector("#side").innerText + (document.querySelector("#sub")?.innerText || "")) || !document.querySelector("#sessions .s"), arg: null }, { timeout: 120000 });
       d.observe("reactedAfterMs", Date.now() - t0);
-      const said = await page.evaluate(() => /unreachable|offline|down|lost|refused|can't reach|cannot reach|not reachable/i.test(document.querySelector("#side").innerText + document.querySelector("#main").innerText));
+      const said = SAYS.test(await page.locator("#side").innerText());
       d.observe("windowSaysHostUnreachable", said);
+      d.observe("sessionStillListed", await page.locator("#sessions .s").count() > 0);
       if (!said) d.note("the host's session vanished from the list with no word that the host is unreachable");
       d.observe("tileText", (await page.locator("#sessions").innerText()).slice(0, 300));
+      d.observe("hostLine", (await page.locator("#hostline").innerText().catch(() => "")).slice(0, 200));
+      d.observe("sendDisabled", await page.locator("#send").isDisabled());
+      d.observe("sendTitle", await page.locator("#send").getAttribute("title"));
       await d.type("#prompt", "are you still there?", { content: true });
       await d.press("Enter");
-      await d.pause(4000);
+      await d.pause(2000);
       d.observe("sayAfterSendWhileDown", await page.locator("#say").innerText().catch(() => ""));
-      d.observe("pendingText", await page.locator("#log .turn.pend").last().innerText().catch(() => ""));
     });
 
     await d.step("the host comes back", "how soon is the session usable again", async () => {
       fs.rmSync(path.join(sb.bin, "down-devbox"));
       const t0 = Date.now();
-      await d.waitFor("the session is listed again", "#sessions .s", { timeout: 240000 });
+      const retry = page.locator("#sessions [data-retry], #hostline [data-retry]").first();
+      if (await retry.count()) {
+        await d.click("#sessions [data-retry], #hostline [data-retry]", { decide: true });
+        d.observe("usedRetryNow", true);
+      } else d.note("no way in the window to poll the host again now: the wait is the dispatcher's retry schedule");
+      await d.waitFor("the session is listed and answering again", { fn: () => !!document.querySelector("#sessions .s") && !document.querySelector("#sessions .w.unr"), arg: null }, { timeout: 240000 });
       d.observe("recoveredAfterMs", Date.now() - t0);
-      d.note("no way in the window to poll the host again now: the wait is the dispatcher's retry schedule");
     });
   },
 };

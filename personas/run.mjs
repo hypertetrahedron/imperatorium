@@ -2,6 +2,7 @@
 //
 //   node run.mjs                 every persona in set 1
 //   node run.mjs --set 2         every persona in set 2
+//   node run.mjs --all           every persona
 //   node run.mjs wren tessa      just those
 //   --headed                     show the browser   --keep  keep sandboxes
 //
@@ -26,7 +27,7 @@ for (const f of fs.readdirSync(path.join(HERE, "scenarios")).filter(f => f.endsW
   const m = (await import(pathToFileURL(path.join(HERE, "scenarios", f)))).default;
   all.push(m);
 }
-const chosen = names.length ? all.filter(p => names.includes(p.id)) : all.filter(p => p.set === (setArg ?? 1));
+const chosen = names.length ? all.filter(p => names.includes(p.id)) : flag("--all") ? all.sort((a, b) => a.set - b.set) : all.filter(p => p.set === (setArg ?? 1));
 if (!chosen.length) { console.error("no personas chosen; known:", all.map(p => `${p.id} (set ${p.set})`).join(", ")); process.exit(2); }
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);

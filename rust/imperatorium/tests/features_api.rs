@@ -720,3 +720,45 @@ fn features_a_parked_request_is_held_as_long_as_its_kind_of_session_allows() {
     assert!(q > 1.9 && q < 4.5, "{t:?}");
     assert!(by("background question") > 5.0, "{t:?}");
 }
+
+#[test]
+fn features_an_answered_request_no_longer_marks_the_session_blocked() {
+    // After an Allow the session works on; its "needs permission" stayed
+    // until the turn ended, so a working session read as blocked and `n`
+    // went to it first (persona runs, 2026-11-24).
+    let fx = Fx::start("answered", vec![], vec![], &[]);
+    fx.record("w", json!({"kind": "interactive", "status": "waiting"}));
+    fx.session_start("w", None, None);
+    fx.hook(json!({"hook_event_name": "Notification", "session_id": "w",
+                   "notification_type": "permission_prompt",
+                   "message": "Claude needs your permission to use Bash"}));
+    let row = fx.row("w").unwrap();
+    assert_eq!((row["attention"].clone(), row["attention_reason"].clone()), (json!(true), json!("needs permission")), "{row}");
+    let url = fx.d.url("/permission/park");
+    let parked = std::thread::spawn(move || {
+        ureq::post(&url)
+            .set("Content-Type", "application/json")
+            .timeout(Duration::from_secs(60))
+            .send_string(&json!({"session_id": "w", "tool_name": "Bash", "tool_input": {"command": "make"}, "wait": 30}).to_string())
+            .unwrap()
+            .into_string()
+            .unwrap()
+    });
+    let started = Instant::now();
+    let id = loop {
+        let listed: Value = serde_json::from_str(&ureq::get(&fx.d.url("/api/pending")).call().unwrap().into_string().unwrap()).unwrap();
+        if let Some(id) = listed["pending"].get(0).and_then(|p| p["id"].as_str()).map(str::to_string) {
+            break id;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "the request was never parked");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let decided = fx.post("/api/decide", json!({"id": id, "verdict": "allow", "who": "window"}));
+    assert_eq!(decided["ok"], json!(true), "{decided}");
+    let answer: Value = serde_json::from_str(&parked.join().unwrap()).unwrap();
+    assert_eq!(answer["verdict"], json!("allow"));
+    // The tool runs: Claude Code's session file says it is busy again.
+    fx.record("w", json!({"kind": "interactive", "status": "busy"}));
+    let row = fx.row("w").unwrap();
+    assert!(!row["attention"].as_bool().unwrap_or(false), "still flagged after the answer: {row}");
+}

@@ -439,7 +439,8 @@ fn fnv(s: &str) -> u64 {
 /// that it has the new console's own handles (a child of this test would
 /// have the test's pipes for stdin, and read nothing). Stopped on drop.
 pub struct Console {
-    launcher: Child,
+    #[allow(dead_code)] // held: dropping it ends the console
+    launcher: Launched,
     pub pid: u32,
 }
 
@@ -468,12 +469,6 @@ impl Console {
     }
 }
 
-impl Drop for Console {
-    fn drop(&mut self) {
-        kill_tree(&mut self.launcher);
-        let _ = self.launcher.wait();
-    }
-}
 
 /// Until `imperatorium type-into PID` (no keys) can attach to the process's
 /// console: a console that has only just been made refuses for a moment.
@@ -491,10 +486,59 @@ pub fn wait_typeable(pid: u32) {
     assert!(ok.is_some(), "console of {pid} never took a keystroke");
 }
 
-/// `cmd /c start "" /wait <command line>`: the program in a new console
-/// window, with that console's handles. The returned child is the cmd that
-/// waits for it.
-pub fn start_in_new_console(d: &Dispatcher, command_line: &str) -> Child {
+/// What `start_in_new_console` started: the cmd that runs the program.
+/// Dropping it ends it and everything beneath it.
+pub struct Launched {
+    #[cfg(windows)]
+    inner: super::console::Console,
+    #[cfg(not(windows))]
+    inner: Child,
+}
+
+impl Launched {
+    pub fn id(&self) -> u32 {
+        #[cfg(windows)]
+        {
+            self.inner.pid
+        }
+        #[cfg(not(windows))]
+        {
+            self.inner.id()
+        }
+    }
+}
+
+#[cfg(not(windows))]
+impl Drop for Launched {
+    fn drop(&mut self) {
+        kill_tree(&mut self.inner);
+        let _ = self.inner.wait();
+    }
+}
+
+/// `cmd /c <command line>` in a new console of its own, hidden, so the
+/// program has that console's handles. Hidden, not `cmd /c start`: a visible
+/// new console is handed to Windows Terminal when it is the default
+/// terminal, and each tab whose program a test killed stayed open with
+/// "error 0x800700e8 when launching" (2026-11-24).
+#[cfg(windows)]
+pub fn start_in_new_console(d: &Dispatcher, command_line: &str) -> Launched {
+    let cmd_exe = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or(r"C:\Windows".into()))
+        .join("System32")
+        .join("cmd.exe");
+    let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os()
+        .filter(|(k, _)| !k.to_string_lossy().eq_ignore_ascii_case("FAKE_LOG"))
+        .collect();
+    env.push(("FAKE_LOG".into(), d.root.join("fake.jsonl").into_os_string()));
+    // /s: cmd takes off exactly the outer quotes, whatever is inside.
+    let line = format!("\"{}\" /s /c \"{command_line}\"", cmd_exe.display());
+    Launched { inner: super::console::Console::start_line(&line, &env, &d.root.path) }
+}
+
+/// The same on Linux CI, where nothing calls it: the console tests are
+/// Windows-only.
+#[cfg(not(windows))]
+pub fn start_in_new_console(d: &Dispatcher, command_line: &str) -> Launched {
     let mut cmd = Command::new("cmd");
     cmd.env("FAKE_LOG", d.root.join("fake.jsonl"))
         .current_dir(&d.root.path)
@@ -506,7 +550,7 @@ pub fn start_in_new_console(d: &Dispatcher, command_line: &str) -> Child {
         use std::os::windows::process::CommandExt;
         cmd.raw_arg(format!("/c start \"\" /wait {command_line}"));
     }
-    cmd.spawn().expect("start in a new console")
+    Launched { inner: cmd.spawn().expect("start in a new console") }
 }
 
 // ------------------------------------------------------------------ pipes
@@ -778,7 +822,8 @@ pub fn pid_alive(pid: u32) -> bool {
 /// one console of their own, which is what `imperatorium type-into`
 /// attaches to. Stopped on drop.
 pub struct Tab {
-    launcher: Child,
+    #[allow(dead_code)] // held: dropping it ends the tab's processes
+    launcher: Launched,
     pub host: u32,
     pub shell: u32,
     pub claude: u32,
@@ -819,12 +864,6 @@ impl Tab {
     }
 }
 
-impl Drop for Tab {
-    fn drop(&mut self) {
-        kill_tree(&mut self.launcher);
-        let _ = self.launcher.wait();
-    }
-}
 
 // -------------------------------------------------------------- transcripts
 

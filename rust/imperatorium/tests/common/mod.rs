@@ -453,8 +453,8 @@ pub fn pin_mtimes(root: &Path) {
 // ---------------------------------------------------------- environment
 
 /// The prefixes stripped from every environment a test gives a process: a
-/// real session's variables, herdr's, the API's, Imperatorium's own.
-pub const STRIPPED: &[&str] = &["CLAUDE", "HC_", "ANTHROPIC_", "IMPERATORIUM_", "AI_AGENT"];
+/// real session's variables, the API's, Imperatorium's own.
+pub const STRIPPED: &[&str] = &["CLAUDE", "ANTHROPIC_", "IMPERATORIUM_", "AI_AGENT"];
 
 /// Programs that must never be found on a test's PATH: a missing stand-in
 /// then fails instead of opening a real terminal or session.
@@ -463,15 +463,10 @@ const REAL: &[&str] = &[
     "claude.exe",
     "wt",
     "claude",
-    "hc.exe",
-    "hc",
-    "herdr.exe",
-    "herdr",
-    "herdr-app.exe",
 ];
 
-/// `bin_dir`, then this PATH without any folder holding a real wt, claude
-/// or hc (rust/conformance/common.py stand_in_path, hc added).
+/// `bin_dir`, then this PATH without any folder holding a real wt or claude
+/// (rust/conformance/common.py stand_in_path).
 pub fn stand_in_path(bin_dir: Option<&Path>) -> std::ffi::OsString {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut keep: Vec<PathBuf> = bin_dir.map(|b| vec![b.to_path_buf()]).unwrap_or_default();
@@ -726,8 +721,7 @@ pub fn isolate(cmd: &mut Command, dir: Option<&Path>) {
             "IMPERATORIUM_PARK_ENDPOINT",
             "http://127.0.0.1:9/permission/park",
         )
-        .env("IMPERATORIUM_ENDPOINT", "http://127.0.0.1:9/hook")
-        .env("HC_SESSION", "imptest");
+        .env("IMPERATORIUM_ENDPOINT", "http://127.0.0.1:9/hook");
 }
 
 // ----------------------------------------------------------- dispatcher

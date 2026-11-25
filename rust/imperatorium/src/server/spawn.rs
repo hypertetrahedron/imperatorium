@@ -104,9 +104,6 @@ impl Shared {
             shown["ok"] = json!(true);
             return shown;
         }
-        if where_ == "window" && self.hc_hosting() {
-            return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
-        }
         // A background session with no first message starts idle and waits
         // for one (2026-11-23: `claude --bg` no longer needs a prompt).
         let cut = if cut_needed {
@@ -222,8 +219,10 @@ impl Shared {
             .filter(|(k, _)| ["model", "permission_mode", "agent", "extra"].contains(&k.as_str()))
             .collect();
         // The New session dialog's choices win over the background defaults.
+        // "default" is a model choice meaning none, but a real permission
+        // mode: passed, so it is not the settings' defaultMode (2026-11-24).
         for (k, field) in [("permission_mode", "permission_mode"), ("model", "model")] {
-            if let Some(v) = text(field).filter(|v| v != "default") {
+            if let Some(v) = text(field).filter(|v| k == "permission_mode" || v != "default") {
                 options.insert(k.into(), json!(v));
             }
         }

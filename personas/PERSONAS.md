@@ -55,7 +55,7 @@ reviews, refactors and pipelines. Sources:
 | `sol` | Sol, solo steady | The measured common case: 4 sessions in 4 projects, short exchanges, queue while busy, Stop, /clear, a second project, resume from History | The majority path: small frictions here cost the most in total |
 | `kai` | Kai, keyboard navigator | 6 sessions, one with 400 turns: ctrl+K, j/k, alt+1, Earlier back to the start, ctrl+F find, alt+Up prompt jumps, `n` to a waiting session | Keyboard completeness, and how the window scales with long conversations |
 
-## Set 2 (defined, to run next)
+## Set 2 (scripted, run 2026-11-24)
 
 | Id | Persona | Actions |
 |---|---|---|
@@ -65,7 +65,7 @@ reviews, refactors and pipelines. Sources:
 | `arlo` | Arlo, archaeologist | 500 past sessions in 20 folders: History search, folder filter, sort, time range, open a hit read-only, resume one in a worktree because its folder is taken |
 | `nell` | Nell, newcomer | Empty catalogue first run, Settings tour, add a project root, add a remote machine (Test connection fails, then key login), first New session |
 
-## Set 3 (defined; partly needs hardware or the live desktop)
+## Set 3 (june, max, remy scripted and run 2026-11-24; vera deferred)
 
 | Id | Persona | Actions | Note |
 |---|---|---|---|

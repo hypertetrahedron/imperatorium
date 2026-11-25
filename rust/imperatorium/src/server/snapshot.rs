@@ -61,7 +61,6 @@ impl Shared {
                 "remote",
                 "host",
                 "work",
-                "hc",
                 "reviewed",
                 "tasks",
                 "waiting_tasks",
@@ -456,7 +455,10 @@ impl Shared {
         let bg_idle = row.get("kind").and_then(Value::as_str) == Some("background")
             && !truthy(row.get("pid"))
             && !truthy(row.get("status"));
-        if ended || bg_idle {
+        // Resume only what has no process left: Claude Code calls a job
+        // `done` while its process still runs and takes prompts, and that
+        // one is answered by sending to it, not by resuming (2026-11-24).
+        if (ended && !truthy(row.get("pid"))) || bg_idle {
             row.insert("resumable".into(), json!(true));
         }
         row.insert(
@@ -623,6 +625,7 @@ impl Shared {
         }
         let (mut quiet, mut looked) = (Self::now(), 0.0);
         let mut last: Option<Arc<PublicSnap>> = None;
+        let mut asked = self.pending.version();
         loop {
             let gap = stream_min_gap() - (Self::now() - looked);
             if gap > 0.0 {
@@ -634,6 +637,16 @@ impl Shared {
             let moved = last
                 .as_ref()
                 .is_none_or(|l| !Arc::ptr_eq(l, &snap) && l.same != snap.same);
+            // A permission request or question came or went: the page reads
+            // /api/pending at once (it polled every 3 s).
+            let now_asked = self.pending.version();
+            if now_asked != asked {
+                asked = now_asked;
+                quiet = Self::now();
+                if out.write_all(b"event: pending\ndata: {}\n\n").and_then(|_| out.flush()).is_err() {
+                    return;
+                }
+            }
             let sent = if moved {
                 let r = write!(out, "event: sessions\ndata: {}\n\n", snap.data)
                     .and_then(|_| out.flush());
@@ -798,7 +811,6 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>, past: Option<f64>) -> bool
         "last_failure",
         "last_failure_detail",
         "window_title",
-        "hc",
         // What the last Stop hook said the session still waits on.
         "stop_background_tasks",
         "stop_crons",

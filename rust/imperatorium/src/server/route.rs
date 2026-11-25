@@ -50,7 +50,25 @@ impl Shared {
                     .unwrap_or_default();
                 let ok = store.unqueue(&sid, p.get("id").unwrap_or(&Value::Null));
                 self.invalidate();
+                // As the Python twin answered: the window says why (gone).
                 json!({"ok": ok})
+            }
+            "/api/queue/move" => {
+                let sid = p
+                    .get("session")
+                    .map(crate::pyish::py_str)
+                    .unwrap_or_default();
+                let by = p.get("by").and_then(Value::as_i64).unwrap_or(0);
+                if by == 0 {
+                    return json!({"ok": false, "error": "by is -1 (earlier) or 1 (later)"});
+                }
+                let ok = store.move_queued(&sid, p.get("id").unwrap_or(&Value::Null), by);
+                self.invalidate();
+                if ok {
+                    json!({"ok": true, "queue": store.queued(&sid)})
+                } else {
+                    json!({"ok": false, "error": "that prompt is no longer queued - it was sent or cancelled"})
+                }
             }
             "/api/dismiss" => self.dismiss_session(store, p.get("session_id")),
             "/api/reviewed" => {
@@ -136,6 +154,7 @@ impl Shared {
         let object = payload.as_object();
         const API: &[&str] = &[
             "/api/queue",
+            "/api/queue/move",
             "/api/unqueue",
             "/api/worktree",
             "/api/resume",
@@ -200,6 +219,9 @@ impl Shared {
                     who,
                     p.get("answers"),
                 );
+                if ok {
+                    self.invalidate(); // other windows drop it from their bar now
+                }
                 return (if ok { 200 } else { 409 }, Body::Json(json!({"ok": ok})));
             }
             _ => {}
@@ -275,13 +297,6 @@ impl Shared {
                     Err(e) => json!({"ok": false, "error": e}),
                 }))
             }
-            "/api/dictate" => {
-                if !from_window {
-                    return (403, Body::Json(json!({"ok": false, "error": "dictation opens the microphone: only the Imperatorium window and its herdr mods"})));
-                }
-                // The mods' own microphone (voice.Recorder) is herdr-only.
-                (200, Body::Json(json!({"ok": false, "error": "dictation from the herdr mods is not ported yet"})))
-            }
             "/api/stop" => {
                 // Esc for the session: only from the window, which a page
                 // elsewhere cannot pretend to be.
@@ -336,23 +351,6 @@ impl Shared {
                 }) {
                     Ok((path, how)) => json!({"ok": true, "how": how, "path": path.to_string_lossy()}),
                     Err(e) => json!({"ok": false, "error": e}),
-                }))
-            }
-            "/api/open_window" => {
-                let (route, size) = match p.get("page").and_then(Value::as_str) {
-                    Some("matrix") => ("/matrix", "1100,720"),
-                    Some("window") => ("/", "1280,820"),
-                    _ => return (400, Body::Json(json!({"ok": false, "error": "page is one of matrix, window"}))),
-                };
-                if !from_window {
-                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window and its herdr mods"})));
-                }
-                let url = format!("http://127.0.0.1:{port}{route}");
-                (200, Body::Json(match crate::voice::open_window(&url, size) {
-                    Err(e) => json!({"ok": false, "error": e}),
-                    Ok(used) => json!({"ok": true, "url": url, "browser": used.map(|b| {
-                        b.rsplit(['/', '\\']).next().unwrap_or("").to_string()
-                    })}),
                 }))
             }
             "/api/focus" => {
@@ -511,7 +509,7 @@ impl Shared {
                 }
                 (200, Body::Json(self.save_settings(ch)))
             }
-            "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/dismiss" | "/api/reviewed" | "/api/queue" => {
+            "/api/prefs" | "/api/notify" | "/api/unqueue" | "/api/queue/move" | "/api/dismiss" | "/api/reviewed" | "/api/queue" => {
                 let Some(store) = &self.store else {
                     return (
                         200,
@@ -632,7 +630,7 @@ impl Shared {
                 Body::Json(json!({"decisions": decisions(&self.state_dir(), 60)})),
             ),
             ("GET", "/api/settings") => (200, Body::Json(self.api_settings())),
-            ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue()}))),
+            ("GET", "/api/projects") => (200, Body::Json(json!({"projects": self.catalogue(), "roots": self.roots()}))),
             ("GET", "/api/changes") => (200, Body::Json(self.api_changes(&arg("session")))),
             ("GET", "/api/activity") => (200, Body::Json(self.api_activity(&arg("session")))),
             ("GET", "/api/costs") => {

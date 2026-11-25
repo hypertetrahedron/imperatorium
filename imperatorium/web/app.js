@@ -56,8 +56,10 @@ const nameOf = s => s.display_name || s.name || s.id || "(unnamed)";
 // made from, not the worktree's folder.
 const projectOf = s => (s.project || folder(s.cwd)) + (s.host ? " @ " + s.host : "");
 
+const HERE_GROUP = "this machine";
 function groupOf(s){
   if (prefs.group === "folder") return projectOf(s);
+  if (prefs.group === "host") return s.host || HERE_GROUP;
   if (prefs.group === "state"){
     if (s.attention) return s.attention_kind === "complete" ? "complete" : "needs you";
     const dot = stateOf(s)[0];
@@ -87,7 +89,7 @@ const APP_ICON = `<svg class="app" viewBox="0 0 13 11" aria-label="Claude deskto
 // Marks a session working in a worktree rather than the main checkout.
 const WT_ICON = `<svg class="app" viewBox="0 0 11 13" aria-label="worktree"><title>in a worktree</title><circle cx="3" cy="2.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="3" cy="10.5" r="1.6" fill="none" stroke="currentColor"/><circle cx="8.5" cy="4.5" r="1.6" fill="none" stroke="currentColor"/><path d="M3 4.1v4.8M8.5 6.1c0 2.2-5.5 1.4-5.5 2.8" fill="none" stroke="currentColor"/></svg>`;
 
-// Pure: the prompt cache's countdown for a tile, "-4" minutes until it
+// Pure: the prompt cache's countdown for a tile, "cache 4m" until it
 // expires. A closed tile shows it only in the last CACHE_SOON seconds, when
 // it is worth acting on; `all` (the open tile) shows it whenever it is warm.
 // Nothing once it has expired: the chat's cold-cache button says that.
@@ -104,7 +106,8 @@ function workParts(w, now, all){
   // `fill`: what is left of the cache's lifetime (work.cache_ttl), drawn as
   // a bar draining under the minutes (2026-11-21, from the survey).
   const fill = w.cache_ttl > 0 ? Math.max(0, Math.min(1, left / w.cache_ttl)) : null;
-  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "-" + Math.ceil(left / 60), cls: "cache", fill,
+  // "cache 4m", not a bare "-4" no one could read (persona runs, 2026-11-24).
+  if (left > 0 && (all || left <= CACHE_SOON)) out.push({text: "cache " + Math.ceil(left / 60) + "m", cls: "cache", fill,
     title: `prompt cache expires in ${Math.ceil(left / 60)} min; a prompt after that re-sends the whole context`});
   return out;
 }
@@ -189,14 +192,18 @@ function tile(s, short, depth){
   const title = s.window_title ? `<div class="w" title="window title">${esc(s.window_title)}</div>` : "";
   const doing = s.doing ? `<div class="d${title ? " x" : ""}" title="${esc(s.doing)}">${esc(s.doing)}${
       s.doing_since ? " · " + age(s.doing_since) : ""}</div>` : "";
-  const lines = title + doing || `<div class="w" title="${esc(s.cwd || "")}">${esc(s.cwd || "")}</div>`;
+  const lines = s.unreachable ? unreachableHtml(s, now)
+    : title + doing || `<div class="w" title="${esc(s.cwd || "")}">${esc(s.cwd || "")}</div>`;
   // ✕ closes a session with a process; with none (a finished background job,
   // a crashed session's leftover file) it takes the tile off the list. Any
   // tile, not only archived ones: a finished job that is not archived used to
   // have no way off the list at all.
   // A job still working but not yet matched to its process gets neither.
   // Since 2026-11-23 either way the tile goes; History still resumes it.
-  const x = s.remote || s.provisional || closing.has(key(s)) ? ""
+  // A host's session gets only the dismiss, once nothing of it runs there
+  // (stopped, done or failed, no process): closing one is not supported.
+  const remoteOff = s.remote && !s.pid && ["stopped", "done", "failed"].includes(s.state);
+  const x = (s.remote && !remoteOff) || s.provisional || closing.has(key(s)) ? ""
     : s.pid ? `<span data-close="${esc(key(s))}" title="end this session and remove its tile (it can be resumed from History)">✕</span>`
     : s.state === "working" || RUNNING[s.status] ? ""
     : `<span data-dismiss="${esc(key(s))}" title="remove its tile (it can be resumed from History)">✕</span>`;
@@ -205,11 +212,15 @@ function tile(s, short, depth){
   const spend = open && statusFor === key(s) && statusData ? statusData.spend : null;
   const details = `<div class="m"><span class="det">${tileDetails(s, now, spend).map(p =>
     `<span class="${p.cls || ""}" title="${esc(p.title)}">${esc(p.text)}</span>`).join(" · ")}${
-    s.host ? " · " + esc(s.host) : ""}${prBadge(s.pr)}</span></div>`;
+    prBadge(s.pr)}</span></div>`;
   return `<div class="s${open ? " on" : ""}${mark}${isUnread(s) ? " unread" : ""}${fd ? " fk" : ""}"${
       fd ? ` style="--fd:${fd}"` : ""} data-k="${esc(key(s))}">
     <div class="t1"><span class="dot ${dot}" title="${esc(label)}"></span><span class="n" title="${esc(nameOf(s))}">${
       forkMark(s, sessions)}${s.desktop_app ? APP_ICON : s.ide === "vscode" ? IDE_ICON : ""}${s.worktree ? WT_ICON : ""}${esc(short && s.short_name || nameOf(s))}${
+      // Every remote tile names its machine: the same checkout on five
+      // hosts made five tiles alike (persona runs, 2026-11-24).
+      s.host && prefs.group !== "host" ? `<span class="hb" title="on ${esc(s.host)}">${esc(s.host)}</span>` : ""}${
+      s.elevated ? `<span class="hb adm" title="${esc(ADMIN_TIP)}">admin</span>` : ""}${
       pinned ? `<span class="pin">★</span>` : ""}</span>${
       plain ? "" : `<span class="why" title="${esc(label)}">${esc(label)}</span>`}<span class="sig">${
       tileSignals(s, now, open)}</span>${
@@ -218,6 +229,15 @@ function tile(s, short, depth){
       open && !s.provisional ? `<span class="acts">${acts}</span>` : ""}</div><div class="stl st-${dot}" title="${esc(label)}">${
       esc(label)}</div>${lines}${details}${open && !s.provisional ? `<div class="mcpl"></div><div class="tk"></div>` : ""}
   </div>`;
+}
+
+// Pure: a session whose host stopped answering: why, when it is tried
+// again, and Retry now (which polls every host at once).
+function unreachableHtml(s, now){
+  const next = s.next_try ? Math.max(0, Math.round(s.next_try - now)) : 0;
+  const why = (s.unreachable_error || "").trim();
+  return `<div class="w unr" title="${esc(why)}">${esc(s.host || "its host")} is not answering${
+    next ? " · next try in " + span(next) : " · trying now"}<button class="tiny" data-retry title="poll every remote machine now">Retry now</button></div>`;
 }
 
 // Tiles for one group, with a project's sessions gathered under a node named
@@ -370,7 +390,7 @@ function showSaid(){
 function drawSessions(){
   if (held("#sessions", drawSessions)) return;
   // Whatever wants a human first, then this machine, then idle.
-  const want = s => !s.attention ? 3 : s.attention_kind === "complete" ? 2 : s.attention_kind === "failure" ? 1 : 0;
+  const want = wantRank;
   const quiet = s => ["d-idle", "d-ready", "d-rev", "d-revc"].includes(stateOf(s)[0]) ? 1 : 0;
   sessions.sort((a,b) =>
     want(a) - want(b) ||
@@ -408,6 +428,8 @@ function drawSessions(){
     names.sort((a,b) => (a==="pinned"?-1:STATE_ORDER.indexOf(a)) - (b==="pinned"?-1:STATE_ORDER.indexOf(b)));
   else if (prefs.group === "folder")
     names.sort((a,b) => a==="pinned" ? -1 : b==="pinned" ? 1 : a.localeCompare(b));
+  else if (prefs.group === "host")
+    names.sort((a,b) => a==="pinned" ? -1 : b==="pinned" ? 1 : a===HERE_GROUP ? -1 : b===HERE_GROUP ? 1 : a.localeCompare(b));
 
   const byFolder = g => prefs.group === "folder" && g !== "pinned";
   let html = names.map(g => (!byFolder(g) && (g || names.length > 1) ?
@@ -435,12 +457,17 @@ function drawSessions(){
 // click away in Show Current Prompt.
 function headSub(s, branch){
   const parts = [];
+  if (s.elevated) parts.push(`<span class="hadm" title="${esc(ADMIN_TIP)}">admin</span>`);
   if (branch) parts.push(`<span class="hbr" title="git branch">&#9095; ${esc(branch)}</span>`);
   if (s.worktree) parts.push(`<span class="hwt" title="a worktree, not the main checkout">${WT_ICON} worktree ${esc(s.worktree)}</span>`);
   else if (branch) parts.push(`<span class="hwt main" title="the project's main checkout">main checkout</span>`);
   const rest = s.cwd ? esc(s.cwd) : "";
   return parts.join(" ") + (parts.length && rest ? " <span class=hsep>·</span> " : "") + rest;
 }
+// A session started from an administrator terminal (2026-11-24,
+// imperatorium-c9): Windows keeps the window from typing into it.
+const ADMIN_TIP = "runs as administrator: Imperatorium cannot type into its terminal, " +
+  "so Stop and Close may not reach it - use its own window";
 // Pure: whether the window's Stop applies to row `s`: a session on this
 // machine in the middle of a turn.
 const canStop = s => !!s && !s.remote && (!!RUNNING[s.status] || s.state === "working");
@@ -458,7 +485,12 @@ async function stopTurn(){
   say("stopping…", k);
   let r;
   try { r = await post("/api/stop", {session_id: k}); } catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
-  if (!r.ok){ say(r.error || "could not stop it", k); return true; }
+  if (!r.ok){
+    say(r.error || "could not stop it", k);
+    // Only a background shell is left: its task view is where it ends.
+    if (r.background && r.task && selected === k) openTask(r.task);
+    return true;
+  }
   if (r.via !== "mod"){ say("pressed Esc in its terminal", k); return true; }
   say("asked its mod to stop the turn…", k);
   for (let i = 0; i < 12; i++){
@@ -475,6 +507,19 @@ async function stopTurn(){
   return true;
 }
 
+// Pure: whether Send can send to this session, and why not. A host's
+// session takes prompts like any other once it can be reached (Enter
+// always sent them; the button was greyed for every remote row until
+// 2026-11-24, with no reason given).
+function sendState(s){
+  if (!s) return {off: true, why: "select a session"};
+  if (s.provisional) return {off: true, why: "it is still starting"};
+  if (s.unreachable) return {off: true, why: (s.host || "its host") + " is not answering - Retry now on its tile"};
+  if (s.remote && !s.dispatchable)
+    return {off: true, why: "not reachable yet on " + (s.host || "its host") + " - it registers on its next hook event"};
+  return {off: false, why: ""};
+}
+
 function drawHead(){
   const s = current();
   if (view !== "session") return;
@@ -482,9 +527,11 @@ function drawHead(){
   const sub = s ? headSub(s, statusFor === key(s) && statusData && statusData.stat ? statusData.stat.branch : "") : "";
   if ($("#sub").dataset.sig !== sub){ $("#sub").innerHTML = sub; $("#sub").dataset.sig = sub; }
   $("#sub").title = $("#sub").textContent;
-  const off = !s || !!s.remote || !!s.provisional;
-  $("#send").disabled = off;
-  $("#sendmore").classList.toggle("off", off);
+  const st = sendState(s);
+  $("#send").disabled = st.off;
+  $("#send").title = st.why || "Enter";
+  // New sessions start on this machine: the Send menu stays off for a host's.
+  $("#sendmore").classList.toggle("off", st.off || !!(s && s.remote));
   $("#queue").disabled = !s || !!s.provisional;
   $("#stop").hidden = !canStop(s);
   const acts = [];
@@ -2391,11 +2438,22 @@ function procWanted(){
 }
 
 let remoteAskedAt = 0;
+// Pure: whether the task list is asked for again on this tick: always for a
+// newly opened session or one with something running; else every 4th.
+function procsDue(s, same, shown, tick){
+  if (!same || shown) return true;
+  const t = (s && (s.tasks || {})) || {};
+  const busy = Object.values(t).some(n => n > 0) || (s && (s.background_tasks || s.status === "busy"));
+  return !!busy || tick % 4 === 0;
+}
 async function loadProcs(){
   const want = selected;
   if (!procWanted()){ procTasks = []; procFor = want; drawProcs(); return; }
   const s = current();
   if (s && s.remote && procFor === want && Date.now() - remoteAskedAt < 3000) return;
+  // Nothing running by the row's count: asked every fourth tick, not every
+  // one (it was the window's busiest call: persona runs, 2026-11-24).
+  if (!procsDue(s, procFor === want, procTasks.length, ticks)) return;
   if (s && s.remote) remoteAskedAt = Date.now();
   loadTaskExtra();
   let d;
@@ -2901,10 +2959,21 @@ function syncDraft(){
 }
 // After a send: clear the draft it came from, and the box only if it still
 // shows that session - the person may have moved on while it was in flight.
-function clearPrompt(k){
+// `sent`: the text that was sent. Cleared only while the box still holds
+// it: the answer can come after the person has typed or pasted the next one
+// (a persona run lost a queued prompt that way, 2026-11-24).
+function clearPrompt(k, sent){
   k = k === undefined ? draftFor : k;
+  if (sent !== undefined && promptStill(draftFor === k ? $("#prompt").value : drafts[k], sent) === false) return;
   delete drafts[k]; saveDrafts();
   if (draftFor === k) $("#prompt").value = "";
+}
+// Pure: whether a prompt box still holds what was sent from it (false when
+// something else has been typed since; null when there is nothing in it).
+function promptStill(now, sent){
+  const t = String(now || "").trim();
+  if (!t) return null;
+  return t === String(sent || "").trim();
 }
 
 // -- what changed since you last looked --------------------------------------
@@ -3064,6 +3133,9 @@ function openStream(){
     gotSessions(d.sessions || []);
   });
   es.addEventListener("ping", heard);
+  // A permission request or question came or went: show it now, not on the
+  // next poll (that was 2.4-3.8 s; persona runs, 2026-11-24).
+  es.addEventListener("pending", () => { if (es !== streamES) return; heard(); pendingSig = ""; drawPending(); });
   es.onopen = () => { heard(); checkBoot(reloadForNewDispatcher); };
   es.onerror = () => { if (es === streamES) streamUp = false; };
 }
@@ -3092,10 +3164,15 @@ const typing = e => { const t = e.target;
   return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)); };
 const visibleKeys = () => [...document.querySelectorAll("#sessions .s")].map(el => el.dataset.k);
 
-// Pure: the next session waiting for you after `current`, the longest
-// waiting first, wrapping round.
+// Pure: how urgently a session wants you: 0 blocked (a permission request,
+// a question, input), 1 failed, 2 finished, 3 not at all.
+function wantRank(s){ return !s.attention ? 3 : s.attention_kind === "complete" ? 2 : s.attention_kind === "failure" ? 1 : 0; }
+// Pure: the next session waiting for you after `current`: blocked ones
+// first, then failed, then finished, the longest waiting first in each,
+// wrapping round. (By age alone, 16 sessions took 6-11 presses to reach
+// the one blocked on a permission request: persona runs, 2026-11-24.)
 function nextWaiting(list, current){
-  const w = list.filter(s => s.attention).sort((a, b) =>
+  const w = list.filter(s => s.attention).sort((a, b) => wantRank(a) - wantRank(b) ||
     (a.attention_since || 0) - (b.attention_since || 0) || nameOf(a).localeCompare(nameOf(b)));
   if (!w.length) return null;
   const i = w.findIndex(s => key(s) === current);
@@ -3410,6 +3487,11 @@ async function loadPrefs(){
 // says which host, first.
 let pendingSig = "";
 const hostTag = i => i.host ? `<span class="dqhost" title="a session on ${esc(i.host)}">${esc(i.host)}</span>` : "";
+// Pure: the verdict a key gives the first permission request, if any.
+function decisionKey(k, rowThere){
+  if (!rowThere) return null;
+  return k === "a" ? "allow" : k === "d" ? "deny" : null;
+}
 async function drawPending(){
   let d;
   try { d = await get("/api/pending"); } catch (e) { return; }
@@ -3425,10 +3507,11 @@ async function drawPending(){
   keepQuestions();
   $("#decide").innerHTML = items.map(i => i.questions ? questionHtml(i) : `<div class="dq"><span title="${esc(i.input)}">${
     hostTag(i)}<b>${esc(folder(i.cwd))}</b> wants ${esc(i.tool)}: ${esc(i.input)}${i.reason ? " - " + esc(i.reason) : ""}</span>
-    <button class="sm" data-dv="allow" data-di="${esc(i.id)}">Allow</button>
-    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}">Deny</button>
+    <button class="sm" data-dv="allow" data-di="${esc(i.id)}" title="A">Allow</button>
+    <button class="sm danger" data-dv="deny" data-di="${esc(i.id)}" title="D">Deny</button>
     <button class="sm ghost" data-dv="pass" data-di="${esc(i.id)}" title="answer it in the session's console instead${
-      i.host ? " (on " + esc(i.host) + ")" : ""}">Console</button></div>`).join("");
+      i.host ? " (on " + esc(i.host) + ")" : ""}">Console</button>${
+      i === items.find(x => !x.questions) ? `<span class="qkeys">A allow · D deny</span>` : ""}</div>`).join("");
   document.querySelectorAll("[data-dv]").forEach(b => b.onclick = async () => {
     const card = b.closest(".dqq");
     const body = {id: b.dataset.di, verdict: b.dataset.dv, who: "window"};
@@ -3647,7 +3730,7 @@ function openPopup(which, open){
   else if (which === "project"){ $("#pjrefresh").focus(); loadProject(); }
   else if (which === "hooks") drawHookHelp();
   else if (which === "slash") {}
-  else loadInsights();
+  else { $("#cdays").focus(); loadInsights(); }
 }
 // Kept for its callers: "session" closes the pop-ups and leaves Fleet;
 // "fleet" shows Fleet where the chat goes.
@@ -3693,6 +3776,14 @@ function diffHtml(text){
 async function loadChanges(){
   const s = current();
   if (!s){ $("#changes").innerHTML = `<div class="note">select a session</div>`; return; }
+  // Another session's diff must not stand under this one's title while
+  // this one loads (it did for about a second, and a click on it did
+  // nothing: persona runs, 2026-11-24).
+  if (changesFor !== key(s)){
+    changesFor = key(s); changesView = null; editing = null;
+    $("#changes").innerHTML = `<div class="note">reading ${esc(nameOf(s))}'s changes…</div>`;
+    $("#changes").dataset.sig = "";
+  }
   let d;
   try { d = await get("/api/changes?session=" + encodeURIComponent(key(s))); } catch (e) { return; }
   if (key(s) !== selected || tab !== "changes") return;
@@ -3712,7 +3803,7 @@ async function loadChanges(){
 
 // Line comments on the diff: click a line to comment, then send them all to
 // the session as one prompt. Kept per session in this browser until sent.
-let changesView = null, editing = null;
+let changesView = null, editing = null, changesFor = null;
 let reviews = {};
 try { reviews = JSON.parse(localStorage.getItem("imperatorium.review") || "{}") || {}; } catch (e) { reviews = {}; }
 const saveReviews = () => { try { localStorage.setItem("imperatorium.review", JSON.stringify(reviews)); } catch (e) {} };
@@ -3786,7 +3877,7 @@ async function sendReview(toBox){
   }
   say("sending review…", key(s));
   const r = await post("/api/dispatch", {session_id: key(s), project: s.cwd, prompt: text, confirm: true, mode: "auto"});
-  say(r.ok ? outcome(r) : (r.error || "refused"), key(s));
+  say(r.ok ? outcome(r) + (tab === "log" ? "" : " - the answer shows on the Conversation tab") : (r.error || "refused"), key(s));
   if (r.ok) clearReviews(key(s));
 }
 
@@ -3847,11 +3938,12 @@ async function loadWorktrees(){
         w.ahead || 0} ahead of ${esc(w.base || d.base)}${w.base_recorded ? " (made from it)" : ""}${w.behind ? " · " + w.behind + " behind" : ""}${w.dirty ? " · <b>uncommitted changes</b>" : ""}${
         w.subject ? " · last: " + esc(w.subject) : ""}</div>
       <div class="btns"><button class="sm ghost" data-wd="${esc(w.path)}">Diff</button>${w.agent ? `
-        <button class="sm" data-wa="merge" data-wp="${esc(w.path)}" ${w.ahead && !w.dirty ? "" : "disabled"}>Merge into ${esc(w.base || d.base)}</button>
-        <button class="sm ghost" data-wa="pr" data-wp="${esc(w.path)}" ${w.dirty ? "disabled" : ""}>Push + open PR</button>
-        <button class="sm danger" data-wa="discard" data-wp="${esc(w.path)}">Discard</button>` : ""}</div>
+        <button class="sm" data-wa="merge" data-wp="${esc(w.path)}" ${w.ahead && !changedTracked(w) ? "" : "disabled"}>Merge into ${esc(w.base || d.base)}</button>
+        <button class="sm ghost" data-wa="mergeremove" data-wp="${esc(w.path)}" ${w.ahead && !changedTracked(w) ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
+        <button class="sm ghost" data-wa="pr" data-wp="${esc(w.path)}" ${changedTracked(w) ? "disabled" : ""}>Push + open PR</button>
+        <button class="sm danger" data-wa="discard" data-wp="${esc(w.path)}">Discard</button>` : ""}</div>${worktreeNoteHtml(worktreeNotes[w.path])}
       <div class="wdiff" data-for="${esc(w.path)}"></div></div>`).join("");
-  const sig = JSON.stringify(d.worktrees);
+  const sig = JSON.stringify([d.worktrees, worktreeNotes]);
   if ($("#worktrees").dataset.sig === sig) return;
   $("#worktrees").dataset.sig = sig;
   $("#worktrees").innerHTML = `<div class="kv">worktrees of ${esc(d.main)} (base ${esc(d.base)})</div>${
@@ -3863,7 +3955,8 @@ async function loadWorktrees(){
     box.innerHTML = r.ok ? `<pre class="files">${esc(r.log)}</pre><div class="diff">${diffHtml(r.diff)}${r.truncated ? "\n… (truncated)" : ""}</div>`
       : `<div class="note">${esc(r.error)}</div>`;
   });
-  document.querySelectorAll("[data-wa]").forEach(b => b.onclick = () => finishWorktree(s, b.dataset.wa, b.dataset.wp));
+  const infoOf = p => { const w = d.worktrees.find(x => x.path === p) || {}; return {ahead: w.ahead || 0, dirty: !!w.dirty, base: w.base || d.base}; };
+  document.querySelectorAll("[data-wa]").forEach(b => b.onclick = () => finishWorktree(s, b.dataset.wa, b.dataset.wp, false, infoOf(b.dataset.wp)));
 }
 
 // Who a worktree card says works in it: the live sessions there (a click
@@ -3876,19 +3969,48 @@ function worktreeWho(w){
     : "no session running in it";
 }
 
-async function finishWorktree(s, action, path, force){
-  const say = {merge: "Merge this branch into the main checkout?",
-               pr: "Push this branch to origin and open a pull request?",
-               discard: "Remove this worktree and delete its branch?"}[action];
-  if (!force && !confirm(say)) return;
-  const r = await post("/api/worktree", {project: s.cwd, path, action, force: !!force});
+// Pure: the one question a worktree action asks, saying up front what a
+// discard loses (it asked twice: a confirm, a refusal for unmerged commits,
+// a second confirm - persona runs, 2026-11-24). `info`: {ahead, dirty, base}
+// as the card shows them; `force` is whether the answer covers the loss.
+function worktreeAsk(action, info){
+  const i = info || {}, base = i.base || "its base";
+  const loses = [i.ahead ? plural(i.ahead, "commit") + " not in " + base : "", i.dirty ? "uncommitted changes" : ""].filter(Boolean);
+  if (action === "merge") return {text: "Merge this branch into " + base + "?", force: false};
+  if (action === "mergeremove") return {text: "Merge this branch into " + base + ", then remove the worktree and its branch?", force: false};
+  if (action === "pr") return {text: "Push this branch to origin and open a pull request?", force: false};
+  return {text: "Remove this worktree and delete its branch?" + (loses.length ? " Its " + loses.join(" and ") + " will be lost." : ""),
+          force: loses.length > 0};
+}
+// What each worktree action came to, shown on its card until the next one.
+const worktreeNotes = {};
+// Changes to tracked files block Merge and Push; new untracked files alone
+// do not (they stay where they are), as the base checkout's own check has it.
+const changedTracked = w => !!w.dirty && !w.untracked_only;
+async function finishWorktree(s, action, path, force, info){
+  const ask = worktreeAsk(action, info);
+  if (!force && !confirm(ask.text)) return;
+  const merging = action === "merge" || action === "mergeremove";
+  let r = await post("/api/worktree", {project: s.cwd, path, action: merging ? "merge" : action, force: !!force || ask.force});
   if (!r.ok && r.needs_force){
-    if (confirm(r.error + ". Discard anyway?")) return finishWorktree(s, action, path, true);
+    // Something the card did not know of (it was a few seconds old).
+    if (confirm(r.error + ". Discard anyway?")) return finishWorktree(s, action, path, true, info);
     return;
   }
-  $("#say").textContent = r.ok ? (action === "pr" && r.url ? "opened " + r.url : action + " done: " + (r.branch || ""))
+  let note = r.ok ? (action === "pr" && r.url ? "opened " + r.url : merging ? "merged into " + ((info && info.base) || "its base") + (r.branch ? " (" + r.branch + ")" : "") : "removed")
     : (r.error || "refused");
+  if (r.ok && action === "mergeremove"){
+    const gone = await post("/api/worktree", {project: s.cwd, path, action: "discard", force: false});
+    note += gone.ok ? ", and the worktree removed" : " - the worktree stays: " + (gone.error || "refused");
+  }
+  worktreeNotes[path] = {ok: !!r.ok, text: note};
+  $("#say").textContent = (r.ok ? "" : action + ": ") + note;
   $("#worktrees").dataset.sig = ""; loadWorktrees();
+  return r;
+}
+// Pure: a card's note on what its last action came to.
+function worktreeNoteHtml(n){
+  return n ? `<div class="wres${n.ok ? "" : " bad"}">${esc(n.text)}</div>` : "";
 }
 
 // -- Project Changes (2026-11-17) ---------------------------------------------
@@ -3977,6 +4099,7 @@ function drawProject(){
     const mine = who[i], pr = mine.map(s => s.pr).find(Boolean);
     const files = [...new Set([...(l.committed || []), ...(l.uncommitted || [])])].sort();
     const un = new Set(l.uncommitted || []);
+    const blocked = un.size > 0 && !l.untracked_only;
     const stats = [
       un.size ? `<b>${un.size} not committed</b>` : "nothing uncommitted",
       l.kind === "main" && !l.base ? (l.upstream ? `${l.ahead || 0} ahead, ${l.behind || 0} behind ${esc(l.upstream)}` : "")
@@ -3989,9 +4112,10 @@ function drawProject(){
       ? `<div class="kv">its commits are all in ${held.map(h => esc(lineName(h))).join(", ")}</div>` : "";
     const chips = mine.map(s => `<button class="sm ghost pjs" data-pjs="${esc(key(s))}" title="open this session">${esc(nameOf(s))}</button>`).join("");
     const acts = l.kind === "worktree" && l.agent ? `<div class="btns">
-        <button class="sm" data-pja="merge" data-pjp="${esc(l.path)}" ${l.ahead && !un.size ? "" : "disabled"}>Merge into ${esc(l.base || d.base)}</button>
-        <button class="sm ghost" data-pja="pr" data-pjp="${esc(l.path)}" ${un.size ? "disabled" : ""}>Push + open PR</button>
-        <button class="sm danger" data-pja="discard" data-pjp="${esc(l.path)}">Discard</button></div>` : "";
+        <button class="sm" data-pja="merge" data-pjp="${esc(l.path)}" ${l.ahead && !blocked ? "" : "disabled"}>Merge into ${esc(l.base || d.base)}</button>
+        <button class="sm ghost" data-pja="mergeremove" data-pjp="${esc(l.path)}" ${l.ahead && !blocked ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
+        <button class="sm ghost" data-pja="pr" data-pjp="${esc(l.path)}" ${blocked ? "disabled" : ""}>Push + open PR</button>
+        <button class="sm danger" data-pja="discard" data-pjp="${esc(l.path)}">Discard</button></div>${worktreeNoteHtml(worktreeNotes[l.path])}` : "";
     const list = files.map(f => `<div class="pjf${shared.has(f) ? " shared" : ""}" data-pjf="${esc(f)}" data-pjl="${i}" title="show its diff">${
         un.has(f) ? "<span class=code>~</span>" : "<span class=code>+</span>"}${esc(f)}${shared.has(f) ? " <span class=kv>· also elsewhere</span>" : ""}</div><div class="pjfd" hidden></div>`).join("");
     return `<div class="card pjline${shared.size && files.some(f => shared.has(f)) ? " meets" : ""}">
@@ -4025,8 +4149,12 @@ function drawProject(){
     if (!box.hidden && !box.innerHTML) box.innerHTML = await fileDiff(lines[+el.dataset.pjl], el.dataset.pjf);
   });
   pane.querySelectorAll("[data-pja]").forEach(b => b.onclick = async () => {
-    await finishWorktree({cwd: d.main}, b.dataset.pja, b.dataset.pjp);
+    const l = lines.find(x => x.path === b.dataset.pjp) || {};
+    await finishWorktree({cwd: d.main}, b.dataset.pja, b.dataset.pjp, false,
+      {ahead: l.ahead || 0, dirty: !!(l.uncommitted || []).length, base: l.base || d.base});
     loadProject();
+    // Focus back inside the pop-up, so Esc still closes it.
+    $("#pjrefresh").focus();
   });
 }
 
@@ -4047,12 +4175,21 @@ async function fileDiff(l, file){
 // or for a background one `claude stop`, which its supervisor honours (a
 // killed one it starts again) - and takes the tile off the list either way.
 // The chat says what is happening while the dispatcher works on it.
+// Pure: the question before closing `s`, or null when nothing is lost.
+function closeAsk(s){
+  if (!(s.status === "busy" || s.state === "working" || RUNNING[s.status])) return null;
+  return (s.kind === "background" ? "Stop the background session " : "Close ") + nameOf(s) +
+    "? It is working right now - its turn will be interrupted. The conversation can be resumed from History.";
+}
 async function closeSession(k){
   const s = sessions.find(x => key(x) === k);
   const bg = !!s && s.kind === "background";
-  if (!s || closing.has(k) || !confirm((bg ? "Stop the background session " : "Close ") + nameOf(s) +
-      (bg ? "" : " and its window") + "? Its tile is removed; the conversation can be resumed from History." +
-      (s.status === "busy" || s.state === "working" ? "\n\nIt is working right now - its turn will be interrupted." : ""))) return;
+  if (!s || closing.has(k)) return;
+  // Asked only when it would cut work short: an idle session's conversation
+  // resumes from History, and four steps per close was the cost of asking
+  // every time (persona runs, 2026-11-24).
+  const ask = closeAsk(s);
+  if (ask && !confirm(ask)) return;
   const n = addNote(k, bg ? "Stopping this background session…" : "Closing this session and its terminal tab…");
   closing.add(k);
   say("closing " + nameOf(s) + "…", k);
@@ -4439,7 +4576,7 @@ async function spawnFrom(kind, where, o = {}){
     say(r.error || "refused", k);
     return r;
   }
-  if (fromBox && text) clearPrompt(k);
+  if (fromBox && text) clearPrompt(k, text);
   if (r.session_id && (r.where === "window" || kind === "resume")) follow(r.session_id);
   if (p){
     p.match = {id: r.session_id || null, bg: r.bg_id || null};
@@ -4511,7 +4648,7 @@ async function queue(){
   const text = $("#prompt").value.trim();
   if (!s || !text) return;
   const r = await post("/api/queue", {session_id: key(s), prompt: text});
-  if (r.ok){ clearPrompt(key(s)); say(r.waiting ?
+  if (r.ok){ clearPrompt(key(s), text); say(r.waiting ?
       "queued - delivered when its current turn ends (" + r.waiting + " waiting)" : "delivered now - it was idle", key(s)); }
   else say(r.error || "refused", key(s));
   queuedSig = "";
@@ -4526,10 +4663,27 @@ async function drawQueued(s){
   const sig = JSON.stringify(items);
   if (sig === queuedSig) return;
   queuedSig = sig;
-  $("#queued").innerHTML = items.map(i => `<div class="qi${i.error ? " err" : ""}"><span title="${esc(i.prompt)}">queued: ${
-    esc(i.prompt)}${i.error ? " - last try: " + esc(i.error) : ""}</span><button class="tiny" data-uq="${esc(i.id)}">cancel</button></div>`).join("");
-  document.querySelectorAll("[data-uq]").forEach(b => b.onclick = async () => {
-    await post("/api/unqueue", {session: pkey(s), id: b.dataset.uq}); queuedSig = ""; });
+  $("#queued").innerHTML = queuedHtml(items);
+  // Each change redraws at once: a second click must not land on a row
+  // the first one already removed (it was refused, unseen, 2026-11-24).
+  const act = async (path, body) => {
+    $("#queued").querySelectorAll("button").forEach(b => b.disabled = true);
+    const r = await post(path, Object.assign({session: pkey(s)}, body)).catch(() => ({ok: false, error: "the dispatcher did not answer"}));
+    if (!r.ok) say(r.error || "that prompt is no longer queued - it was sent or cancelled", key(s));
+    queuedSig = "";
+    await drawQueued(current());
+  };
+  document.querySelectorAll("[data-uq]").forEach(b => b.onclick = () => act("/api/unqueue", {id: b.dataset.uq}));
+  document.querySelectorAll("[data-qmv]").forEach(b => b.onclick = () => act("/api/queue/move", {id: b.dataset.qmv, by: +b.dataset.by}));
+}
+// Pure: the Queue List, in the order the prompts will be sent; each can
+// move earlier or later, or be cancelled.
+function queuedHtml(items){
+  return items.map((i, n) => `<div class="qi${i.error ? " err" : ""}"><span title="${esc(i.prompt)}">${n + 1}. ${
+    esc(i.prompt)}${i.error ? " - last try: " + esc(i.error) : ""}</span>${items.length > 1 ?
+    `<button class="tiny ghost" data-qmv="${esc(i.id)}" data-by="-1" title="send it earlier"${n ? "" : " disabled"}>&#9650;</button>` +
+    `<button class="tiny ghost" data-qmv="${esc(i.id)}" data-by="1" title="send it later"${n < items.length - 1 ? "" : " disabled"}>&#9660;</button>` : ""
+    }<button class="tiny" data-uq="${esc(i.id)}">cancel</button></div>`).join("");
 }
 
 // -- history search --------------------------------------------------------
@@ -4594,18 +4748,52 @@ async function search(){
         `<button class="sm" data-rs="${esc(r.session_id)}" data-w="window">Resume</button>
          <button class="sm ghost" data-rs="${esc(r.session_id)}" data-w="background">Resume in bg</button>`}
         <button class="sm ghost" data-rs="${esc(r.session_id)}" data-w="window" data-fork="1">Fork</button>
-        <button class="sm ghost" data-cp="claude --resume ${esc(r.session_id)}">Copy cmd</button></div>
+        <button class="sm ghost" data-cp="claude --resume ${esc(r.session_id)}">Copy cmd</button>${
+        r.live ? "" : `<button class="sm ghost" data-hread="${esc(r.session_id)}" title="read it here, without resuming it">Read</button>`}</div>
+      <div class="hprev" hidden></div>
     </div>`).join("") || `<div class="note">${chosen || $("#hdays").value ? "nothing found with these filters" : "nothing found"}</div>`) +
     (d.complete ? "" : `<div class="note">still indexing older sessions - search again for complete results</div>`);
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
     openPopup("history", false); pick(b.dataset.open); });
   document.querySelectorAll("[data-rs]").forEach(b => b.onclick = async () => {
     const r = await spawnFrom(b.dataset.fork ? "fork" : "resume", b.dataset.w, {session_id: b.dataset.rs, prompt: ""});
-    if (r && (r.ok || r.error)) b.parentNode.insertAdjacentHTML("beforeend",
-      `<small>${esc(r.ok ? spawnOutcome(r) : r.error)}</small>`);
+    // Started: History gets out of the way of the session it opened (it
+    // stayed over it: persona runs, 2026-11-24). Refused: it says why here.
+    if (r && r.ok){ openPopup("history", false); say(spawnOutcome(r)); }
+    else if (r && r.error) b.parentNode.insertAdjacentHTML("beforeend", `<small>${esc(r.error)}</small>`);
+  });
+  document.querySelectorAll("[data-hread]").forEach(b => b.onclick = async () => {
+    const box = b.closest(".hit").querySelector(".hprev");
+    if (!box.hidden){ box.hidden = true; b.textContent = "Read"; return; }
+    box.hidden = false; b.textContent = "Hide";
+    box.innerHTML = `<div class="note">reading…</div>`;
+    let d;
+    try { d = await get("/api/conversation?session=" + encodeURIComponent(b.dataset.hread) + "&limit=80"); }
+    catch (e) { d = {error: "the dispatcher did not answer"}; }
+    box.innerHTML = d.items ? previewHtml(d.items) : `<div class="note">${esc(d.error || "it could not be read")}</div>`;
   });
   document.querySelectorAll("[data-cp]").forEach(b => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.cp); b.textContent = "copied"; } catch (e) { b.textContent = b.dataset.cp; } });
+}
+
+// Pure: a past conversation, read-only, for History's preview: what you
+// asked and what Claude said, tool calls counted, the latest last. (A past
+// session could not be looked at without resuming it.)
+function previewHtml(items){
+  const out = [];
+  let tools = 0;
+  const flush = () => { if (tools){ out.push(`<div class="pv tools">${plural(tools, "tool call")}</div>`); tools = 0; } };
+  for (const it of items || []){
+    const blocks = it.blocks || [];
+    const text = blocks.filter(b => b.kind === "text").map(b => b.text || "").join("\n").trim();
+    tools += blocks.filter(b => b.kind === "tool").length;
+    if (!text || (it.speaker !== "you" && it.speaker !== "claude")) continue;
+    flush();
+    out.push(`<div class="pv ${it.speaker === "you" ? "you" : "cl"}"><b>${it.speaker === "you" ? "you" : "Claude"}</b> ${
+      esc(text.length > 600 ? text.slice(0, 600) + "…" : text)}</div>`);
+  }
+  flush();
+  return out.join("") || `<div class="note">nothing said in it</div>`;
 }
 
 // -- insights: cost and failures --------------------------------------
@@ -5079,11 +5267,11 @@ async function send(mode){
   if (p && /^\/[^\s/]/.test(text)){
     // A slash command: its output, or the picker or view the window shows.
     $("#slashlist").hidden = true;
-    if (slashSettled(s, p, r) || r.ok) clearPrompt(key(s));
+    if (slashSettled(s, p, r) || r.ok) clearPrompt(key(s), text);
     return;
   }
   if (p) settleSend(key(s), p, r, r.action === "typed" ? "typed at its prompt" : "sent");
-  if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
+  if (r.ok){ clearPrompt(key(s), text); say(outcome(r), key(s)); }
   else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
 }
@@ -5103,7 +5291,7 @@ async function sendTyped(){
   catch (e) { r = {ok: false, error: "the dispatcher did not answer"}; }
   busy = false;
   settleSend(key(s), p, r, "typed at its prompt");
-  if (r.ok){ clearPrompt(key(s)); say(outcome(r), key(s)); }
+  if (r.ok){ clearPrompt(key(s), text); say(outcome(r), key(s)); }
   else say(r.error || "refused", key(s));
   lastSig = ""; loadLog(true);
 }
@@ -5229,7 +5417,7 @@ async function dictate(){
 // a new terminal tab (/api/new) and is selected here once it starts; one on
 // a remote host has no terminal here, so it starts as a background session
 // there (/api/dispatch), in the mode Settings gives background sessions.
-let projects = [], psel = 0;
+let projects = [], projectRoots = null, psel = 0;
 const MODE_KEY = "imperatorium.newMode", MODEL_KEY = "imperatorium.newModel", BG_KEY = "imperatorium.newBackground";
 
 // The New Session dialog's model and effort, from Claude Code's own list;
@@ -5268,8 +5456,7 @@ function drawProjects(){
   $("#projects").innerHTML = hit.map((p,i) =>
     `<div class="p${i===psel?" on":""}" role=option aria-selected="${i===psel}" data-pi="${i}">${esc(p.name)}${
       p.host ? ` <span class="badge">${esc(p.host)}</span>` : ""}
-      <small>${esc(p.path)}</small></div>`).join("") ||
-    `<div class="note">no match</div>`;
+      <small>${esc(p.path)}</small></div>`).join("") || noProjectsHtml($("#find").value, projectRoots);
   const on = $("#projects").querySelector(".p.on");
   if (on) on.scrollIntoView({block: "nearest"});
   const p = hit[psel];
@@ -5278,7 +5465,28 @@ function drawProjects(){
     ? "on " + p.host + ": starts as a background session there, in the mode Settings gives background sessions"
     : "";
   $("#nmode").disabled = $("#nmodel").disabled = $("#neffort").disabled = $("#nbg").disabled = !!(p && p.host);
+  drawTaskBox(p);
   return hit;
+}
+// The task box shows for a session that starts in the background (ticked,
+// or on a host, where every session does): the dialog used to take the
+// prompt box as the task, so opening it first started the job idle
+// (persona runs, 2026-11-24). It starts with what the prompt box holds.
+function drawTaskBox(p){
+  $("#ntask").hidden = !taskBoxShown($("#nbg").checked, !!(p && p.host));
+}
+// Pure: whether New session asks for a task.
+function taskBoxShown(bg, onHost){ return !!(bg || onHost); }
+// Pure: the task a new background session gets: the task box, else nothing.
+function newTask(box){ return String(box || "").trim(); }
+// Pure: what the project list says when it lists nothing. With no
+// project folders set it says where to add one (Settings > Projects): a
+// first run used to list the folders around the config folder instead.
+function noProjectsHtml(typed, roots){
+  if (String(typed || "").trim() || !roots || roots.length)
+    return `<div class="note">no match</div>`;
+  return `<div class="note">No project folders yet: tell Imperatorium where your code lives, and each folder in it is a project.
+    <button class="sm" data-setroots>Add a project folder in Settings</button></div>`;
 }
 async function startProject(p){
   if (!p) return;
@@ -5286,23 +5494,23 @@ async function startProject(p){
   try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
   if (p.host){
     // No terminal here for a remote host: a background session over there.
-    const text = $("#prompt").value.trim();
+    const text = newTask($("#ntask").value);
     $("#say").textContent = "starting " + p.name + " on " + p.host + "…";
     const r = await post("/api/dispatch", {project: p.name, path: p.path, host: p.host,
       prompt: text || "Ready when you are.", confirm: true, mode: "background"});
     $("#say").textContent = r.ok ? outcome(r) : (r.error || "refused");
-    if (r.ok){ if (text) clearPrompt(); openNew(false); }
+    if (r.ok){ if (text) clearPrompt(undefined, text); openNew(false); }
     return;
   }
   const model = $("#nmodel").value, effort = $("#neffort").value;
   try { localStorage.setItem(MODEL_KEY, JSON.stringify([model, effort])); } catch (e) {}
   // In the background it needs a task: the prompt box, else a greeting.
-  const bg = $("#nbg").checked, text = $("#prompt").value.trim();
+  const bg = $("#nbg").checked, text = bg ? newTask($("#ntask").value) : "";
   try { localStorage.setItem(BG_KEY, bg ? "1" : ""); } catch (e) {}
   openNew(false);
   const r = await spawnFrom("new", bg ? "background" : "window", {session_id: null, cwd: p.path,
     prompt: bg ? text : "", permission_mode: mode, model, effort});
-  if (r && r.ok && bg && text) clearPrompt();
+  if (r && r.ok && bg && text) clearPrompt(undefined, text);
 }
 async function openNew(show){
   const open = show === undefined ? $("#newbox").hidden : show;
@@ -5312,9 +5520,10 @@ async function openNew(show){
   try { $("#nmode").value = localStorage.getItem(MODE_KEY) || "default"; } catch (e) {}
   if (!$("#nmode").value) $("#nmode").value = "default";
   try { $("#nbg").checked = localStorage.getItem(BG_KEY) === "1"; } catch (e) {}
+  $("#ntask").value = $("#prompt").value.trim();
   $("#find").value = ""; psel = 0; drawProjects(); $("#find").focus();
   fillModelPicks();
-  try { projects = (await get("/api/projects")).projects || []; } catch (e) {}
+  try { const d = await get("/api/projects"); projects = d.projects || []; projectRoots = d.roots || null; } catch (e) {}
   if (!$("#newbox").hidden) drawProjects();
 }
 
@@ -5606,12 +5815,53 @@ $("#matrixbtn").onclick = toggleMatrix;
 
 // -- settings ----------------------------------------------------------------
 // Its own window, like the Chat Matrix; a second click brings it forward.
-$("#setbtn").onclick = () => {
-  const w = window.open("/settings", "imperatorium-settings", "popup,width=1080,height=820");
+$("#setbtn").onclick = () => openSettingsAt("");
+// The Settings window, at a section's anchor when one is named.
+function openSettingsAt(section){
+  const w = window.open("/settings" + (section ? "#" + section : ""), "imperatorium-settings", "popup,width=1080,height=820");
   if (!w) $("#say").textContent = "the browser blocked the Settings window - allow pop-ups for this page";
   else w.focus();
-};
+}
 whileVisible(1000, showMatrixButton);
+
+// -- remote machines that stop answering (2026-11-24) -------------------------
+// Their sessions stay on the list, marked; the Host Line under the filter
+// names each machine that is not answering, with Retry now - which was only
+// in the Settings window, and a host that came back stayed hidden for a
+// minute or more (persona runs).
+async function retryHosts(){
+  say("asking every remote machine again…");
+  const r = await post("/api/remote/refresh", {}).catch(() => ({ok: false}));
+  if (!r.ok) return say("the dispatcher did not answer");
+  setTimeout(() => { loadHosts(); lastSig = ""; }, 1500);
+}
+// Pure: the Host Line for /api/hosts' answer: the machines that failed
+// their last poll, how long ago they last answered and when they are tried
+// again; "" when every one answers.
+function hostLineHtml(d, now){
+  const st = (d && d.status) || {};
+  const down = Object.entries(st).filter(([, r]) => r && r.fails > 0);
+  if (!down.length) return "";
+  const one = ([name, r]) => {
+    const since = r.polled_at ? " (last answered " + age(r.polled_at) + " ago)" : " (has not answered yet)";
+    const next = r.next_attempt ? Math.max(0, Math.round(r.next_attempt - now)) : 0;
+    return `<span title="${esc(r.error || "")}"><b>${esc(name)}</b> is not answering${esc(since)}${next ? " · next try in " + span(next) : ""}</span>`;
+  };
+  return down.map(one).join("") + `<button class="tiny" data-retry>Retry now</button>`;
+}
+let hostsAt = 0;
+async function loadHosts(){
+  let d;
+  try { d = await get("/api/hosts"); } catch (e) { return; }
+  hostsAt = Date.now();
+  const html = hostLineHtml(d, Date.now() / 1000);
+  const el = $("#hostline");
+  if (el.dataset.sig !== html){ el.innerHTML = html; el.dataset.sig = html; }
+  el.hidden = !html;
+}
+$("#hostline").addEventListener("click", e => { if (e.target.closest("[data-retry]")) retryHosts(); });
+whileVisible(15000, () => { if (sessions.some(s => s.remote) || $("#hostline").innerHTML) loadHosts(); });
+loadHosts();
 // The update badge (gap J3): while the native binary's last check saw a
 // newer release. A click opens Settings at its Updates section, which shows
 // what is new and installs it. The Python dispatcher answers 404: no badge.
@@ -5632,15 +5882,19 @@ setInterval(showUpdate, 10 * 60 * 1000);
 
 $("#new").onclick = () => openNew(true);
 $("#find").addEventListener("input", () => { psel = 0; drawProjects(); });
+$("#nbg").addEventListener("change", () => { drawProjects(); if ($("#nbg").checked) $("#ntask").focus(); });
 $("#newbox").addEventListener("keydown", e => {
   if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); openNew(false); return; }
   if (e.target.id === "nmode" || e.target.tagName === "BUTTON") return;
+  // The task box is for writing: Enter there starts only with ctrl.
+  if (e.target.id === "ntask" && !(e.key === "Enter" && (e.ctrlKey || e.metaKey))) return;
   const hit = projectHits(projects, $("#find").value);
   if (e.key === "ArrowDown"){ e.preventDefault(); psel = Math.min(psel+1, hit.length-1); drawProjects(); }
   else if (e.key === "ArrowUp"){ e.preventDefault(); psel = Math.max(psel-1, 0); drawProjects(); }
   else if (e.key === "Enter"){ e.preventDefault(); startProject(hit[psel]); }
 });
 $("#projects").addEventListener("click", e => {
+  if (e.target.closest("[data-setroots]")){ openSettingsAt("projects"); return; }
   const el = e.target.closest("[data-pi]");
   if (!el) return;
   psel = +el.dataset.pi; drawProjects();
@@ -5882,6 +6136,22 @@ for (const [which, sel] of Object.entries(POPUPS)){
     if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); openPopup(which, false); }
   });
 }
+// Esc closes the open pop-up wherever focus is: each pop-up's own handler
+// needs focus inside it, and Insights took none, nor Project changes after
+// a merge (persona runs, 2026-11-24). An editor inside one that uses Esc
+// itself (a comment box, the slash list) stops it first.
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  const which = openPopupName();
+  if (!which) return;
+  // Only the pop-up: not also a turn stopped by Esc in the prompt box.
+  e.preventDefault(); e.stopImmediatePropagation();
+  openPopup(which, false);
+});
+function openPopupName(){
+  const open = Object.entries(POPUPS).find(([, sel]) => !$(sel).hidden);
+  return open ? open[0] : null;
+}
 let hqTimer;
 $("#hq").addEventListener("input", () => { clearTimeout(hqTimer); hqTimer = setTimeout(search, 350); });
 ["#hfolder", "#hsort", "#hdays"].forEach(sel => $(sel).addEventListener("change", search));
@@ -5889,7 +6159,10 @@ $("#histbias").addEventListener("click", e => {
   if (!e.target.closest("#hall")) return;
   $("#hfolder").value = ""; $("#histbias").hidden = true; search();
 });
-$("#days").onchange = loadInsights;
+// One range for both cards: picking it on either sets the other (they had
+// different choices, and 90 days of failures could not be asked for:
+// persona runs, 2026-11-24).
+$("#days").onchange = () => { $("#cdays").value = $("#days").value; loadInsights(); };
 $("#pjpick").onchange = () => { projFor = $("#pjpick").value; loadProject(); };
 $("#pjrefresh").onclick = () => loadProject();
 // A new dispatcher came up: load its page, on the same session. The prompt
@@ -5987,6 +6260,7 @@ $("#sessions").addEventListener("click", e => {
   if ((el = t.closest("[data-arch]"))) return savePrefs({archived: toggleIn("archived", el.dataset.arch)});
   if ((el = t.closest("[data-close]"))) return closeSession(el.dataset.close);
   if ((el = t.closest("[data-dismiss]"))) return dismissSession(el.dataset.dismiss);
+  if (t.closest("[data-retry]")) return retryHosts();
   if ((el = t.closest(".badge.pr"))){ if (el.dataset.url) window.open(el.dataset.url, "_blank"); return; }
   if (t.closest("#archfold")){ showArchived = !showArchived; drawSessions(); return; }
   if ((el = t.closest("[data-fam]"))) return famClicked(el.dataset.fam);
@@ -6024,6 +6298,10 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (e.ctrlKey || e.altKey || e.metaKey) return;
+  // A / D answer the first permission request in the Decision Bar, as the
+  // number keys answer a question card (Allow and Deny needed the mouse).
+  const verdict = decisionKey(k, !!$("#decide .dq [data-dv]"));
+  if (verdict){ e.preventDefault(); $(`#decide .dq [data-dv="${verdict}"]`).click(); return; }
   if (k === "j"){ e.preventDefault(); stepSession(1); }
   else if (k === "k"){ e.preventDefault(); stepSession(-1); }
   else if (k === "n"){ e.preventDefault(); goWaiting(); }
@@ -6055,7 +6333,7 @@ $("#findpop").addEventListener("keydown", e => {
 });
 $("#cfprev").onclick = () => goFind(-1);
 $("#cfnext").onclick = () => goFind(1);
-$("#cdays").onchange = loadCosts;
+$("#cdays").onchange = () => { $("#days").value = $("#cdays").value; loadInsights(); };
 
 loadPrefs().then(tick);
 openStream();

@@ -494,7 +494,7 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | GET | `/api/stream` | server-sent events: the merged registry whenever it changes |
 | POST | `/api/mod/beat` | the mod's beat: state, usage, prompt acknowledgements; answers the prompts to submit and the status line (mod token) |
 | POST | `/api/mod/check` | the permission policy's verdict on one tool call (mod token) |
-| GET | `/api/projects` | the project catalogue |
+| GET | `/api/projects` | the project catalogue, and `roots` (the project folders set; none: only the folders sessions ran in are listed) |
 | GET | `/api/events` | recent attention events |
 | GET | `/api/decisions` | recent auto-approval verdicts |
 | GET | `/api/hosts` | configured hosts and their reachability |
@@ -526,6 +526,7 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | POST | `/api/dismiss` | `{session_id}` - take a local session with no process off the list until it starts again |
 | POST | `/api/reviewed` | `{session_id}` - you have looked at a session waiting for you: it stops being flagged until it next needs you |
 | GET/POST | `/api/queue`, `/api/unqueue` | prompts held until a session's turn ends |
+| POST | `/api/queue/move` | `{session, id, by: -1\|1}` - send a queued prompt earlier or later |
 | GET | `/matrix` | the Chat Matrix window |
 | GET | `/settings` | the Settings window |
 | GET | `/api/quick` | the quick-phrase shortcut and phrases, for the prompt box |
@@ -544,7 +545,9 @@ imperatorium send -p "gem trip" --dry-run "fix it"   # what would it match
 | POST | `/api/ask` | `{question}` - only from the window: a tool-less `claude -p` answers from the fleet snapshot |
 
 `mode` is `auto` (inject if a session is live, else launch), `inject`, `launch`,
-`background`, or `dry-run`.
+`background`, or `dry-run`; any other mode is refused. With `session_id`,
+`dry-run` says what a send to that session would do (`would`, `reachable`).
+A session whose remote machine is not answering is refused with why.
 
 `background` runs `claude --bg` instead of opening a window - work you want
 done rather than a window you want to sit in. It runs in a worktree made
@@ -639,6 +642,19 @@ turn as Esc at its terminal does: through the mod (0.3.0 and later) with
 `$.turn.abort`, the beat's reply carrying the request and the next beat
 saying what came of it; for a session without one, Esc is pressed in its
 console, never twice within 3 s (Esc Esc there opens the rewind menu).
+When the turn is already over and what still runs is a background shell it
+started (Claude Code says `shell`, the mod says no turn), Stop says so and
+opens that shell's task view, where Stop on the task or ending its process
+finishes it.
+
+A session started from an administrator terminal is marked **admin** on
+its tile and in its header. Windows does not let a dispatcher that is not
+elevated type into its console, so Close's typed `/exit` does not reach it
+and Close ends its processes instead, one by one with TerminateProcess
+(`taskkill /T` left one running), leaving its terminal tab open. Keys that
+never arrived are not waited on. If even that fails, Close says to
+type `/exit` in its own window or run `taskkill` from an administrator
+prompt.
 
 From 0.4.0 the beat's reply can also carry **ops**:
 - a slash command from the window, run once with `$.command.run`;
@@ -940,11 +956,10 @@ mod/imperatorium/           the Claude Code mod
 install.ps1 install.sh install.cmd   from nothing: download the binary, run `install`
 ONBOARDING.md               the step-by-step walkthrough
 config.example.json policy.example.json   what config.json and policy.json start from
-herdr/                      see the `herdr` branch
 ```
 
 The goldens in `rust/imperatorium/tests/golden` are the specification: see
-the `README.md` there. herdr hosting lives on the separate `herdr` branch.
+the `README.md` there.
 
 Runtime state lives in `%LOCALAPPDATA%\imperatorium\state.json` on Windows
 (`$XDG_STATE_HOME/imperatorium`, or `~/.local/state/imperatorium`, elsewhere):
@@ -1046,10 +1061,15 @@ same class of mistake as firing at the wrong repository.
 
 Each host is polled on a thread of its own every 20 seconds, never on the
 request path, so a host on a slow link or timing out delays only its own
-sessions. A host that fails is parked with a growing backoff and its real
+sessions. A host that fails is tried again at the poll interval three
+times, then parked with a growing backoff (up to 15 minutes) and its real
 reason, so a machine that is asleep costs nothing and never hides a working
-one. Settings > Remote machines shows how each host's last poll went and has
-**Refresh now**, which polls every host at once, a parked one too. Each host
+one. Its sessions stay on the list for 30 minutes from its last answer,
+marked as not answering, with the error and the next try; a prompt to one
+is refused with why. The Host Line under the session filter names each
+machine that is not answering, and it and each such tile have **Retry
+now**. Settings > Remote machines shows how each host's last poll went and
+has **Refresh now**, which polls every host at once, a parked one too. Each host
 has a **Test** button (what `remote check` prints for it), and **Add a
 machine** does `remote add` from the window: test the connection first, then
 Add, which shows each step as it goes and then offers to restart the

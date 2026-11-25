@@ -173,7 +173,7 @@ export class Driver {
     if (find) this.op("M"); // scanning the list for it
     await this.click(this.tile(sid));
     await this.waitFor("its tile is open and its chat loaded", { fn: sid => !!document.querySelector(`#sessions .s.on[data-k="${sid}"]`) &&
-      !/loading/i.test(document.querySelector("#log")?.innerText.slice(0, 40) || ""), arg: sid }, { timeout: 8000 });
+      (document.querySelector("#log")?.offsetParent === null || !/loading/i.test(document.querySelector("#log")?.innerText.slice(0, 40) || "")), arg: sid }, { timeout: 8000 });
   }
 
   /** Types a prompt and sends it to the selected session; measures each stage of the round trip. */

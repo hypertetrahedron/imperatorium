@@ -92,7 +92,7 @@ export default {
       const t0 = Date.now();
       const before = await d.page.locator("#worktrees .card").count();
       await d.click('#worktrees [data-wa="merge"]:not([disabled])', { decide: true });
-      await d.waitFor("the result shows anywhere", { fn: () => /merge (done|failed)|conflict|refused/i.test((document.querySelector("#say")?.innerText || "") + document.querySelector("#worktrees").innerText), arg: null }, { timeout: 20000 });
+      await d.waitFor("the result shows anywhere", { fn: () => /merge (done|failed)|merged into|conflict|refused/i.test((document.querySelector("#say")?.innerText || "") + document.querySelector("#worktrees").innerText), arg: null }, { timeout: 20000 });
       d.observe("mergeMs", Date.now() - t0);
       d.observe("resultWhere", await d.page.evaluate(() => /merge/i.test(document.querySelector("#worktrees").innerText.replace(/Merge into/g, "")) ? "worktrees panel" : "say line by the Send button"));
       d.observe("cardsAfter", await d.page.locator("#worktrees .card").count());

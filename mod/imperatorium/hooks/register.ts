@@ -31,7 +31,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 type Engine = EngineInterface
 
-const MOD_VERSION = '0.4.0'
+const MOD_VERSION = '0.5.0'
 const BEAT_MS = 2000
 // How often the session's command list is sent again: a dispatcher that
 // restarted has forgotten it, and plugins come and go.
@@ -149,10 +149,12 @@ async function post($: Engine, path: string, body: unknown): Promise<unknown> {
   }
 }
 
-function show($: Engine, text: string | undefined) {
-  if (text === shown) return
+// What the dispatcher last said about this session, for /imperatorium only.
+// Nothing goes in the terminal's status line: the window is where people
+// look (2026-11-24, the user's call). A module hot-reloaded over one that
+// did write there clears it once (see session.start).
+function show(_$: Engine, text: string | undefined) {
   shown = text
-  $.ui.status(text)
 }
 
 async function beat($: Engine) {
@@ -386,6 +388,7 @@ export const register: Register = (on, options) => {
     surfaces = await $.session.surfaces()
     version = (await $.session.version()).version
     await measure($)
+    $.ui.status(undefined)
     await $.command.register({
       name: 'imperatorium',
       description: 'Show what the Imperatorium dispatcher knows about this session',

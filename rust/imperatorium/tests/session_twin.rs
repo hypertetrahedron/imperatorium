@@ -133,6 +133,9 @@ fn session_twin_answers_as_python_did() {
                    "speak": {"enabled": false}},
         "background": {"model": "sonnet", "permission_mode": "plan"},
         "chat": {"send_as_typed": true},
+        // The Python twin's default root, the folder its home sat in; an
+        // empty `roots` lists no folders since 2026-11-24.
+        "roots": [twin.path.to_string_lossy()],
     });
     let d = Dispatcher::start(Options {
         config: Some(config),
@@ -144,6 +147,8 @@ fn session_twin_answers_as_python_did() {
             ("CLAUDE_CODE_ENTRYPOINT".into(), "cli".into()),
             ("CLAUDE_PID".into(), "1".into()),
             ("IMPERATORIUM_TEST_TIME_SCALE".into(), SCALE.to_string()),
+            // The stubborn stand-in ignores /exit: 8 s of nothing (2026-11-24).
+            ("IMPERATORIUM_TEST_CLOSE_WAIT".into(), "2".to_string()),
             (
                 "IMPERATORIUM_TEST_DEEPLINK_LOG".into(),
                 links.to_string_lossy().into_owned(),

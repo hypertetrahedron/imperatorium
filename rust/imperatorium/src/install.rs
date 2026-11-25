@@ -100,7 +100,6 @@ fn entry(matcher: Option<&str>, sub: &str, is_async: bool, native: &str, home: &
     hook.insert("command".into(), json!(native));
     hook.insert("args".into(), Value::Array(args));
     hook.insert("timeout".into(), json!(if is_async { 5 } else { permission_timeout(home) }));
-    hook.insert("statusMessage".into(), json!(MARK));
     if is_async {
         hook.insert("async".into(), json!(true));
     }
@@ -112,8 +111,11 @@ fn entry(matcher: Option<&str>, sub: &str, is_async: bool, native: &str, home: &
     Value::Object(block)
 }
 
-/// install.is_ours: stamped by us (now or under the old name), or running
-/// one of our hook scripts.
+/// install.is_ours: running this binary's `hook` or `permission`, stamped
+/// by an older install (its "imperatorium" or "ccontrol" status label), or
+/// running one of the Python hook scripts. The hooks carry no status label
+/// since 2026-11-24 (the user's call: it showed in the terminal while the
+/// hook ran and said nothing the window does not).
 fn is_ours(block: &Value) -> bool {
     block
         .get("hooks")
@@ -125,6 +127,9 @@ fn is_ours(block: &Value) -> bool {
             if mark.is_some_and(|m| m == MARK || LEGACY_MARKS.contains(&m)) {
                 return true;
             }
+            if runs_our_binary(h) {
+                return true;
+            }
             let script = |a: &str| {
                 let a = a.to_lowercase();
                 a.contains("cc_hook.py") || a.contains("cc_permission.py")
@@ -133,6 +138,15 @@ fn is_ours(block: &Value) -> bool {
             h.get("command").and_then(Value::as_str).is_some_and(script)
                 || h.get("args").and_then(Value::as_array).into_iter().flatten().any(|a| script(a.as_str().unwrap_or("")))
         })
+}
+
+/// `imperatorium hook` or `imperatorium permission ...`: the binary by its
+/// file name, wherever it is installed.
+fn runs_our_binary(h: &Value) -> bool {
+    let command = h.get("command").and_then(Value::as_str).unwrap_or("").trim_matches('"');
+    let name = command.rsplit(['/', '\\']).next().unwrap_or("").to_lowercase();
+    let first = h.get("args").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str);
+    (name == MARK || name == format!("{MARK}.exe")) && matches!(first, Some("hook" | "permission"))
 }
 
 /// One of ours that still runs a Python hook script (the Python install's).

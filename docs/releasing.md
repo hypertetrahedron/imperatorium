@@ -26,7 +26,7 @@ Trunk-based development: one long-lived branch, short-lived branches into it.
 | `main` | forever | The trunk. Always builds, always passes `check`. Previews are tagged from here. | Pull requests only |
 | `feat/…`, `fix/…`, `refactor/…`, `docs/…` | days | One change each. Branch from `main`, merge back to `main`. | Anyone |
 | `release/X.Y` | while X.Y is supported | Patch releases for a minor version after `main` has moved on. Created **only when needed** (see §5). | Cherry-picks from `main` |
-| `exp/…` | as long as needed | Long-running experiments that may never merge (today: `herdr`, `mods`). Never released from. | The experiment's owner |
+| `exp/…` | as long as needed | Long-running experiments that may never merge (none today). Never released from. | The experiment's owner |
 
 Rules:
 
@@ -61,8 +61,7 @@ was `rust`, 203 commits ahead and containing `main`.
 3. Deleted, local and on origin: `python-out/*`, `refactor/*`,
    `rename-imperatorium`, and `mods` (its one unmerged commit was already on
    `main` as 1290730, and touched only the deleted Python).
-4. `herdr` is left exactly as it is until the native port is declared a
-   success; then it becomes `exp/herdr`.
+4. The herdr integration was dropped (2026-11-24, the user's decision).
 5. Rulesets for `main` and for `v*` tags (§3).
 6. The README on `main` is now the native one.
 

@@ -18,9 +18,6 @@ vendor/
 # Windows Explorer's thumbnail cache.
 Thumbs.db
 
-# written by `herdr-app check` into a mod folder
-herdr/mods/*/gpui-kit.d.ts
-herdr/mods/*/jsconfig.json
 /dist/
 
 # Build and test leftovers

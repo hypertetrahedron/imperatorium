@@ -405,6 +405,27 @@ impl Store {
         })
     }
 
+    /// Moves one queued prompt `by` places (-1 earlier, 1 later), clamped to
+    /// the ends; whether it was there. The order is the order they are sent in.
+    pub fn move_queued(&self, sid: &str, item_id: &Value, by: i64) -> bool {
+        self.with(|data| {
+            let queue = Self::table(data, "queue");
+            let Some(Value::Array(q)) = queue.get_mut(sid) else {
+                return (false, false);
+            };
+            let Some(at) = q.iter().position(|i| i.get("id") == Some(item_id)) else {
+                return (false, false);
+            };
+            let to = (at as i64 + by).clamp(0, q.len() as i64 - 1) as usize;
+            if to == at {
+                return (true, false);
+            }
+            let item = q.remove(at);
+            q.insert(to, item);
+            (true, true)
+        })
+    }
+
     pub fn undismiss(&self, key: &str) {
         self.with(|data| {
             let gone = Self::table(data, "dismissed")
@@ -643,6 +664,26 @@ mod features_tests {
         assert!(s.unqueue("s1", &a["id"]));
         assert_eq!(prompts(&s.queued("s1")), ["y"]);
         assert!(!s.unqueue("s1", &json!("no-such-id")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_queued_prompt_moves_earlier_or_later_and_stops_at_the_ends() {
+        let (s, dir) = open("move");
+        let a = s.enqueue("s1", "a", false);
+        s.enqueue("s1", "b", false);
+        let c = s.enqueue("s1", "c", false);
+        assert!(s.move_queued("s1", &c["id"], -1));
+        assert_eq!(prompts(&s.queued("s1")), ["a", "c", "b"]);
+        assert!(s.move_queued("s1", &c["id"], -1));
+        assert_eq!(prompts(&s.queued("s1")), ["c", "a", "b"]);
+        // Already first: nothing moves, and it is still there.
+        assert!(s.move_queued("s1", &c["id"], -1));
+        assert_eq!(prompts(&s.queued("s1")), ["c", "a", "b"]);
+        assert!(s.move_queued("s1", &a["id"], 5));
+        assert_eq!(prompts(&s.queued("s1")), ["c", "b", "a"]);
+        assert!(!s.move_queued("s1", &json!("gone"), 1));
+        assert!(!s.move_queued("nobody", &a["id"], 1));
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -57,6 +57,8 @@ fn file(name: &str, default: &str) -> String {
     std::fs::read_to_string(here().join(name)).unwrap_or_else(|_| default.to_string())
 }
 
+const CATALOG: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"init","response":{"models":[{"value":"default","displayName":"Default (recommended)","description":"Opus 5.5","supportsEffort":true,"supportedEffortLevels":["low","medium","high","xhigh","max"]},{"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus","description":"Opus 5.5 for complex work","supportsEffort":true,"supportedEffortLevels":["low","medium","high","xhigh","max"]},{"value":"sonnet","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet","description":"Sonnet 5.5 for daily tasks","supportsEffort":true,"supportedEffortLevels":["low","medium","high"]},{"value":"haiku","resolvedModel":"claude-haiku-5-5","displayName":"Haiku","description":"Haiku 5.5 for quick answers","supportsEffort":false}],"commands":[{"name":"clear","description":"Clear conversation history"},{"name":"model","description":"Set the AI model"},{"name":"effort","description":"Set reasoning effort"},{"name":"config","description":"Open config"},{"name":"resume","description":"Resume a conversation"},{"name":"compact","description":"Compact the conversation"},{"name":"cost","description":"Show the session's cost"},{"name":"review","description":"Review a pull request"}],"output_style":"default","available_output_styles":["default","Explanatory","Learning"]}}}"#;
+
 fn hold() -> ! {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
@@ -97,6 +99,11 @@ fn main() {
             log(&prog, args, "");
             let mut stdin = String::new();
             let _ = std::io::stdin().read_to_string(&mut stdin);
+            if args.iter().any(|a| a == "--input-format") {
+                // The catalog probe (claude_catalog::probe): an initialize answer.
+                println!("{}", file("catalog.out", CATALOG));
+                return;
+            }
             println!("{}", file("print.out", "(simulated answer) Everything is on track."));
             return;
         }
@@ -122,6 +129,11 @@ fn ssh(args: &[String]) -> i32 {
     if tunnel {
         log("ssh", args, ",\"tunnel\":true");
         hold();
+    }
+    if here().join(format!("auth-{host}")).exists() {
+        log("ssh", args, ",\"auth\":true");
+        eprintln!("{host}: Permission denied (publickey,password).");
+        return 255;
     }
     if here().join(format!("down-{host}")).exists() {
         log("ssh", args, ",\"refused\":true");
@@ -155,7 +167,7 @@ fn ssh(args: &[String]) -> i32 {
     } else if cmd.contains("uname -m") {
         print!("{}", file("probe.out", ""));
     } else if cmd.contains("--bg") {
-        println!("Background session started: r{:07x}", now_ms() as u64 & 0xfffffff);
+        println!("Background session started: {:08x}", now_ms() as u64 & 0xffffffff);
     }
     0
 }

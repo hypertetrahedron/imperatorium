@@ -434,8 +434,17 @@ fn measure_worktree(
     subjects: &std::collections::HashMap<String, String>,
 ) -> Measured {
     let mut got = Vec::new();
-    let dirty = !crate::pyish::strip(&git(path, &["status", "--porcelain"], true)?).is_empty();
-    got.push(("dirty", json!(dirty)));
+    let status = git(path, &["status", "--porcelain"], true)?;
+    let lines = splitlines(&status);
+    let changed: Vec<&str> = lines.iter().copied().filter(|l| !crate::pyish::strip(l).is_empty()).collect();
+    got.push(("dirty", json!(!changed.is_empty())));
+    // Only new, untracked files: a merge or a push carries commits and
+    // leaves them be, as the base checkout's own check does (2026-11-24: a
+    // `__pycache__/` blocked Merge). Discard still counts them - it deletes
+    // them. Said only when true, so other answers keep their shape.
+    if !changed.is_empty() && changed.iter().all(|l| l.starts_with("??")) {
+        got.push(("untracked_only", json!(true)));
+    }
     if let (Some(b), Some(br)) = (base, branch) {
         let t = git(project, &["rev-list", "--left-right", "--count", &format!("{b}...{br}")], true)?;
         let mut n = crate::pyish::strip(&t).split_whitespace().map(|x| {
@@ -981,6 +990,8 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
         return json!({"ok": false, "error": "that worktree has no branch (detached HEAD)"});
     };
     let dirty = crate::pyish::truthy(wt.get("dirty"));
+    // What blocks a merge or a push: changes to tracked files only.
+    let tracked_dirty = dirty && !crate::pyish::truthy(wt.get("untracked_only"));
     let ahead = wt.get("ahead").and_then(Value::as_i64).unwrap_or(0);
     let wt_path = wt
         .get("path")
@@ -991,7 +1002,7 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
     let result: Result<Value, String> = (|| {
         match action {
             "merge" => {
-                if dirty {
+                if tracked_dirty {
                     return Ok(
                         json!({"ok": false, "error": "the worktree has uncommitted changes"}),
                     );
@@ -1039,7 +1050,7 @@ pub fn finish(project: &str, path: &str, action: &str, force: bool) -> Value {
                 }
             }
             "pr" => {
-                if dirty {
+                if tracked_dirty {
                     return Ok(
                         json!({"ok": false, "error": "the worktree has uncommitted changes"}),
                     );
@@ -1299,6 +1310,28 @@ mod features_tests {
         assert_eq!(out["ok"], false);
         assert!(out["error"].as_str().unwrap().contains("refused"), "{out}");
         assert_eq!(after, before);
+    }
+
+    #[test]
+    fn features_untracked_files_alone_do_not_block_a_merge() {
+        // 2026-11-24: a `__pycache__/` left behind blocked Merge, while the
+        // base checkout's own check has always ignored untracked files.
+        let r = Repo::new("untracked");
+        let wt = r.agent_worktree("u", "ufeat", true);
+        write(&Path::new(&wt).join("scratch.txt"), "not tracked\n");
+        let got = worktrees(&r.dir);
+        let w = got["worktrees"].as_array().unwrap().iter().find(|w| w["branch"] == "ufeat").unwrap().clone();
+        assert_eq!(w["dirty"], true);
+        assert_eq!(w["untracked_only"], true);
+        let out = finish(&r.dir, &wt, "merge", false);
+        assert_eq!(out["ok"], true, "{out}");
+        // A tracked change still blocks it, and Discard still counts both.
+        write(&Path::new(&wt).join("f.txt"), "one\nchanged\n");
+        let got = worktrees(&r.dir);
+        let w = got["worktrees"].as_array().unwrap().iter().find(|w| w["branch"] == "ufeat").unwrap().clone();
+        assert!(w.get("untracked_only").is_none());
+        let out = finish(&r.dir, &wt, "pr", false);
+        assert!(out["error"].as_str().unwrap_or("").contains("uncommitted"), "{out}");
     }
 
     /// `main` with a long-lived `feat` in a sibling worktree, ahead of it.

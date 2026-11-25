@@ -52,6 +52,18 @@ fn alive(pid: u32) -> bool {
     crate::procs::process_table().iter().any(|p| p.0 == pid)
 }
 
+/// How long a session is given to end after /exit (or SIGTERM) before it
+/// is ended by force: 8 s. IMPERATORIUM_TEST_CLOSE_WAIT shortens it for the
+/// session twin, whose stubborn stand-in otherwise costs the run 8 s
+/// (2026-11-24); the time scale slows a twin down, so it cannot be used.
+fn exit_wait() -> f64 {
+    std::env::var("IMPERATORIUM_TEST_CLOSE_WAIT")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|w| w.is_finite() && *w > 0.0)
+        .unwrap_or(8.0)
+}
+
 fn wait_gone(pid: u32, wait: f64) -> bool {
     let end = Instant::now() + Duration::from_secs_f64(wait);
     while Instant::now() < end {
@@ -111,8 +123,35 @@ pub fn type_keys(pid: u32, chunks: &[&str]) -> bool {
     }
 }
 
+/// End `pid` and everything beneath it. On Windows each process is ended
+/// with TerminateProcess, children before their parents: `taskkill /T /F`
+/// left a session that runs as administrator running (2026-11-24,
+/// imperatorium-c9), though PROCESS_TERMINATE alone is granted on one.
+/// taskkill is still tried if that fails.
 fn kill(pid: u32) {
+    #[cfg(windows)]
+    {
+        let below = crate::procs::descendants(pid, &crate::procs::process_table());
+        for p in below.iter().rev() {
+            let _ = crate::procs::kill(*p);
+        }
+        if crate::procs::kill(pid).is_ok() {
+            return;
+        }
+    }
     crate::proc::kill_pid_tree(pid);
+}
+
+/// Why a close failed, and what the person can do instead.
+pub fn would_not_exit(pid: u32, admin: bool) -> String {
+    if admin {
+        format!(
+            "it runs as administrator and Imperatorium does not, so Windows would not let Imperatorium end it (pid {pid}). \
+             Type /exit in its own window, or run `taskkill /PID {pid} /T /F` from an administrator prompt."
+        )
+    } else {
+        format!("it would not exit (pid {pid})")
+    }
 }
 
 /// closing.close: {ok, how: exit | killed | gone, tab_closed}.
@@ -123,11 +162,13 @@ pub fn close(pid: &Value) -> Value {
     if !alive(pid) {
         return json!({"ok": true, "how": "gone", "tab_closed": false});
     }
+    let admin = crate::procs::above_us(pid);
     #[cfg(windows)]
     {
         let shell = tab_shell(pid, &crate::procs::process_table());
-        type_keys(pid, &[CTRL_C, "/exit", ENTER]);
-        if wait_gone(pid, 8.0) {
+        // Keys that never reached it are not waited on: an administrator's
+        // console refuses ours.
+        if type_keys(pid, &[CTRL_C, "/exit", ENTER]) && wait_gone(pid, exit_wait()) {
             let mut closed = true;
             if let Some(s) = shell.filter(|s| alive(*s)) {
                 closed = type_keys(s, &["exit", ENTER]) && wait_gone(s, 3.0);
@@ -140,15 +181,19 @@ pub fn close(pid: &Value) -> Value {
         unsafe {
             libc::kill(pid as i32, libc::SIGTERM);
         }
-        if wait_gone(pid, 8.0) {
+        if wait_gone(pid, exit_wait()) {
             return json!({"ok": true, "how": "exit", "tab_closed": false});
         }
     }
     kill(pid);
     if wait_gone(pid, 3.0) {
-        return json!({"ok": true, "how": "killed", "tab_closed": false});
+        let mut out = json!({"ok": true, "how": "killed", "tab_closed": false});
+        if admin {
+            out["note"] = json!("it ran as administrator, so its terminal could not be typed into: its window is still open");
+        }
+        return out;
     }
-    json!({"ok": false, "error": format!("it would not exit (pid {pid})")})
+    json!({"ok": false, "elevated": admin, "error": would_not_exit(pid, admin)})
 }
 
 /// `imperatorium type-into PID CHUNK...`: attach to `pid`'s console and type
@@ -246,6 +291,43 @@ pub fn type_into_main(_args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Close's last resort ends the whole tree, the session's children too,
+    /// without taskkill.
+    #[cfg(windows)]
+    #[test]
+    fn kill_ends_the_process_and_everything_beneath_it() {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/c", "ping -n 60 127.0.0.1 >nul"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        crate::proc::no_window(&mut cmd);
+        let mut root = cmd.spawn().expect("cmd starts");
+        let pid = root.id();
+        let end = Instant::now() + Duration::from_secs(10);
+        let ping = loop {
+            let t = crate::procs::process_table();
+            if let Some(p) = crate::procs::descendants(pid, &t).into_iter().find(|p| t.iter().any(|r| r.0 == *p && r.2 == "ping")) {
+                break p;
+            }
+            assert!(Instant::now() < end, "ping never started under cmd");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        kill(pid);
+        let _ = root.wait();
+        assert!(wait_gone(ping, 3.0), "the child outlived the kill");
+        assert!(wait_gone(pid, 3.0));
+    }
+
+    #[test]
+    fn a_refused_close_of_an_administrator_session_says_why() {
+        assert_eq!(would_not_exit(7, false), "it would not exit (pid 7)");
+        let admin = would_not_exit(7, true);
+        assert!(admin.starts_with("it runs as administrator"), "{admin}");
+        assert!(admin.contains("/exit in its own window"), "{admin}");
+        assert!(admin.contains("taskkill /PID 7 /T /F"), "{admin}");
+    }
 
     #[test]
     fn esc_is_never_pressed_twice_in_a_row() {

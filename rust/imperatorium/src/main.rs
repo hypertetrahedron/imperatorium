@@ -255,6 +255,11 @@ fn sessions_batch() -> i32 {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let home = home_arg(&args);
+    // `COMMAND --help` (or -h) is that command's help, never the command
+    // itself: `serve --help` used to start a dispatcher (2026-11-24).
+    if let Some(name) = args.first().filter(|_| args[1..].iter().any(|a| a == "--help" || a == "-h")) {
+        std::process::exit(cli::main("help", std::slice::from_ref(name), None));
+    }
     let code = match args.first().map(String::as_str) {
         None => cli::main("help", &[], None),
         // `sessions chain|info|...` read transcripts (phase 2); a bare

@@ -78,7 +78,9 @@ describe("ClosingSessions", () => {
     assertIn("removeTile(k, \"removed \"", between(SCRIPT, "async function dismissSession(", "const CLOSED_HOLD"));
     // While it closes the tile says so and offers no second ✕.
     assertIn(': closing.has(key(s)) ? ["d-busy", "closing…"] : stateOf(s);', SCRIPT);
-    assertIn("const x = s.remote || s.provisional || closing.has(key(s)) ? \"\"", SCRIPT);
+    assertIn("const x = (s.remote && !remoteOff) || s.provisional || closing.has(key(s)) ? \"\"", SCRIPT);
+    // A host's session gets a dismiss only once nothing of it runs there (2026-11-24).
+    assertIn('const remoteOff = s.remote && !s.pid && ["stopped", "done", "failed"].includes(s.state);', SCRIPT);
   });
 
   it("a note is drawn at the end of the chat, escaped", () => {

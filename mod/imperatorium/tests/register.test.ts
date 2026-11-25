@@ -79,7 +79,8 @@ test('a prompt from the window goes in as the person; others go in framed', asyn
     { text: 'run the tests', asUser: true },
     { text: '[from impctl] tidy up' },
   ])
-  expect(w.status).toContain('Imperatorium · 2 waiting on you: api, web')
+  // The terminal's status line is left alone (2026-11-24): only cleared.
+  expect(w.status.every(s => s === undefined)).toBe(true)
 
   // The next beat says both were accepted, then started.
   await clock.advance(2000)

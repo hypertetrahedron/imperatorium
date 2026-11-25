@@ -111,6 +111,18 @@ fn even_a_failure_flag_goes_once_the_job_is_done() {
 }
 
 #[test]
+fn a_job_never_given_a_prompt_is_ready_not_waiting() {
+    // 2026-11-24: `claude --bg` with no task is named after its short id
+    // and gets idle_prompt a minute in; nobody has asked it anything yet.
+    let rig = Rig::with_agents();
+    let short = &SID[..8];
+    rig.agents(json!([job(&rig, SID, 0.01, json!({"state": "blocked", "status": "idle", "name": short}))]));
+    rig.hook("Notification", SID, json!({"notification_type": "idle_prompt"}));
+    let r = rig.row(SID);
+    assert!(r["attention"] != json!(true), "{r}");
+}
+
+#[test]
 fn a_blocked_job_still_asks() {
     let rig = Rig::with_agents();
     rig.agents(json!([job(&rig, SID, 17.0 * 24.0, json!({"state": "blocked"}))]));

@@ -6,8 +6,8 @@
    "label": "Project folders",
    "type": "paths",
    "default": [],
-   "applies": "dispatcher",
-   "help": "Folders whose subfolders are your projects, one per line. Empty: the folder this checkout sits in."
+   "applies": "live",
+   "help": "Folders whose subfolders are your projects, one per line. New session lists them; empty, it lists only the folders sessions have run in."
   },
   {
    "key": "chat.send_as_typed",
@@ -93,28 +93,6 @@
    ],
    "applies": "live",
    "help": "One per line, in the order the list shows them. The chosen one is put into the prompt box at the cursor."
-  },
-  {
-   "key": "terminal.host",
-   "section": "terminals",
-   "label": "Start sessions in",
-   "type": "choice",
-   "choices": [
-    "terminal",
-    "hc"
-   ],
-   "default": "terminal",
-   "applies": "live",
-   "help": "Where New, Fork and Resume start `claude`. terminal: a Windows Terminal tab. hc: a herdr-core terminal, shown in herdr-app (one space per project), which keeps running when its window closes and is resumed after a reboot."
-  },
-  {
-   "key": "terminal.hc_session",
-   "section": "terminals",
-   "label": "herdr-core session",
-   "type": "name",
-   "default": "",
-   "applies": "live",
-   "help": "Which herdr-core to use (HC_SESSION). Blank: the default one, which herdr-app shows."
   },
   {
    "key": "background.permission_mode",
@@ -759,10 +737,6 @@
    "Dictation"
   ],
   [
-   "terminals",
-   "Terminals"
-  ],
-  [
    "remote",
    "Remote machines"
   ],
@@ -833,7 +807,12 @@
   {
    "where": "Window",
    "keys": "N, Alt+N",
-   "what": "next session waiting for you"
+   "what": "next session waiting for you: blocked ones first, then failed, then finished"
+  },
+  {
+   "where": "Window",
+   "keys": "A / D",
+   "what": "allow / deny the first permission request (not while typing)"
   },
   {
    "where": "Window",
@@ -853,7 +832,7 @@
   {
    "where": "Window",
    "keys": "Esc",
-   "what": "close an open menu"
+   "what": "close an open menu or pop-up"
   },
   {
    "where": "Conversation",
