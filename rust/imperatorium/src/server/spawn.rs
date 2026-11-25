@@ -219,8 +219,10 @@ impl Shared {
             .filter(|(k, _)| ["model", "permission_mode", "agent", "extra"].contains(&k.as_str()))
             .collect();
         // The New session dialog's choices win over the background defaults.
+        // "default" is a model choice meaning none, but a real permission
+        // mode: passed, so it is not the settings' defaultMode (2026-11-24).
         for (k, field) in [("permission_mode", "permission_mode"), ("model", "model")] {
-            if let Some(v) = text(field).filter(|v| v != "default") {
+            if let Some(v) = text(field).filter(|v| k == "permission_mode" || v != "default") {
                 options.insert(k.into(), json!(v));
             }
         }

@@ -218,11 +218,15 @@ pub fn resume(
 /// dialog offers these.
 pub const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
 
-/// Pure: a fresh session's command line, starting in `permission_mode`
-/// (none or "default": Claude Code's own default). Anything else is refused.
+/// Pure: a fresh session's command line, starting in `permission_mode`.
+/// None leaves the person's own default (their settings' defaultMode);
+/// "default" is passed as it is, so a session started in Default asks
+/// before edits and commands even where the settings default is another
+/// mode (2026-11-24: "Default" started sessions in bypassPermissions).
+/// Anything else is refused.
 pub fn new_command(session_id: &str, permission_mode: Option<&str>) -> Result<Vec<String>, String> {
     let mut cmd: Vec<String> = vec!["claude".into(), "--session-id".into(), session_id.into()];
-    match permission_mode.filter(|m| !m.is_empty() && *m != "default") {
+    match permission_mode.filter(|m| !m.is_empty()) {
         None => {}
         Some(m) if PERMISSION_MODES.contains(&m) => cmd.extend(["--permission-mode".into(), m.to_string()]),
         Some(m) => return Err(format!("unknown permission mode: {m}")),
@@ -291,7 +295,8 @@ mod tests {
     #[test]
     fn a_new_session_starts_in_the_mode_asked_for() {
         assert_eq!(new_command("s1", None).unwrap(), ["claude", "--session-id", "s1"]);
-        assert_eq!(new_command("s1", Some("default")).unwrap(), ["claude", "--session-id", "s1"]);
+        assert_eq!(new_command("s1", Some("default")).unwrap(),
+                   ["claude", "--session-id", "s1", "--permission-mode", "default"]);
         assert_eq!(new_command("s1", Some("plan")).unwrap(),
                    ["claude", "--session-id", "s1", "--permission-mode", "plan"]);
         assert_eq!(new_command("s1", Some("bypassPermissions")).unwrap()[4], "bypassPermissions");

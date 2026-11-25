@@ -40,6 +40,21 @@ pub fn console_env(
 impl Console {
     /// `exe args...`, hidden, in a new console, with exactly `env`.
     pub fn start(exe: &Path, args: &[&str], env: &[(OsString, OsString)], cwd: &Path) -> Console {
+        let mut line = format!("\"{}\"", exe.display());
+        for a in args {
+            assert!(!a.contains([' ', '"']), "a plain argument: {a}");
+            line.push(' ');
+            line.push_str(a);
+        }
+        Self::start_line(&line, env, cwd)
+    }
+
+    /// A whole command line, hidden, in a new console, with exactly `env`.
+    /// Hidden matters: a visible new console is handed to Windows Terminal
+    /// when it is the default terminal, and a tab whose process the test
+    /// then kills stays open with an error (2026-11-24: two such tabs left
+    /// behind by `cmd /c start`).
+    pub fn start_line(command_line: &str, env: &[(OsString, OsString)], cwd: &Path) -> Console {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::{
@@ -49,15 +64,7 @@ impl Console {
         use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
         let wide = |s: &std::ffi::OsStr| s.encode_wide().collect::<Vec<u16>>();
-        let mut line: Vec<u16> = Vec::new();
-        line.push('"' as u16);
-        line.extend(wide(exe.as_os_str()));
-        line.push('"' as u16);
-        for a in args {
-            assert!(!a.contains([' ', '"']), "a plain argument: {a}");
-            line.push(' ' as u16);
-            line.extend(a.encode_utf16());
-        }
+        let mut line: Vec<u16> = command_line.encode_utf16().collect();
         line.push(0);
         // The block: KEY=VALUE\0 ... \0, sorted as Windows expects.
         let mut pairs: Vec<&(OsString, OsString)> = env.iter().collect();
@@ -94,7 +101,7 @@ impl Console {
         assert!(
             ok != 0,
             "cannot start {}: {}",
-            exe.display(),
+            command_line,
             std::io::Error::last_os_error()
         );
         unsafe { CloseHandle(pi.hThread) };
