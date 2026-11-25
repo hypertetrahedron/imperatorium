@@ -297,13 +297,6 @@ impl Shared {
                     Err(e) => json!({"ok": false, "error": e}),
                 }))
             }
-            "/api/dictate" => {
-                if !from_window {
-                    return (403, Body::Json(json!({"ok": false, "error": "dictation opens the microphone: only the Imperatorium window and its herdr mods"})));
-                }
-                // The mods' own microphone (voice.Recorder) is herdr-only.
-                (200, Body::Json(json!({"ok": false, "error": "dictation from the herdr mods is not ported yet"})))
-            }
             "/api/stop" => {
                 // Esc for the session: only from the window, which a page
                 // elsewhere cannot pretend to be.
@@ -358,23 +351,6 @@ impl Shared {
                 }) {
                     Ok((path, how)) => json!({"ok": true, "how": how, "path": path.to_string_lossy()}),
                     Err(e) => json!({"ok": false, "error": e}),
-                }))
-            }
-            "/api/open_window" => {
-                let (route, size) = match p.get("page").and_then(Value::as_str) {
-                    Some("matrix") => ("/matrix", "1100,720"),
-                    Some("window") => ("/", "1280,820"),
-                    _ => return (400, Body::Json(json!({"ok": false, "error": "page is one of matrix, window"}))),
-                };
-                if !from_window {
-                    return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window and its herdr mods"})));
-                }
-                let url = format!("http://127.0.0.1:{port}{route}");
-                (200, Body::Json(match crate::voice::open_window(&url, size) {
-                    Err(e) => json!({"ok": false, "error": e}),
-                    Ok(used) => json!({"ok": true, "url": url, "browser": used.map(|b| {
-                        b.rsplit(['/', '\\']).next().unwrap_or("").to_string()
-                    })}),
                 }))
             }
             "/api/focus" => {

@@ -104,9 +104,6 @@ impl Shared {
             shown["ok"] = json!(true);
             return shown;
         }
-        if where_ == "window" && self.hc_hosting() {
-            return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
-        }
         // A background session with no first message starts idle and waits
         // for one (2026-11-23: `claude --bg` no longer needs a prompt).
         let cut = if cut_needed {

@@ -321,7 +321,22 @@ mod reviewed_tests {
     }
 }
 
+/// A background job nobody has given a prompt yet (`claude --bg` with no
+/// task): Claude Code reports it `blocked` and names it after its own short
+/// id until a first prompt names it. Ready, not waiting on you (2026-11-24).
+pub fn never_prompted(row: &Row) -> bool {
+    let sid = s(row, "sessionId").unwrap_or("");
+    let short = &sid[..8.min(sid.len())];
+    let name = s(row, "name").unwrap_or("");
+    s(row, "kind") == Some("background")
+        && !truthy(row.get("last_stop_at"))
+        && (name.is_empty() || Some(name) == s(row, "id") || name == short)
+}
+
 pub fn needs_attention(row: &Row) -> bool {
+    if never_prompted(row) {
+        return false;
+    }
     s(row, "status").is_some_and(|x| ATTENTION_STATUSES.contains(&x))
         || s(row, "state").is_some_and(|x| ATTENTION_STATES.contains(&x))
         || truthy(row.get("waitingFor"))
@@ -538,6 +553,9 @@ pub fn merge(
         let d = truthy(row.get("socket")) && truthy(row.get("token"));
         row.insert("dispatchable".into(), json!(d));
         row.insert("attention".into(), json!(needs_attention(row)));
+        if never_prompted(row) {
+            row.insert("never_prompted".into(), json!(true));
+        }
         let (project, worktree) = place(row.get("cwd"));
         row.insert("project".into(), project);
         row.insert("worktree".into(), worktree);

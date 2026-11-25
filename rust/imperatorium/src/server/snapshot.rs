@@ -61,7 +61,6 @@ impl Shared {
                 "remote",
                 "host",
                 "work",
-                "hc",
                 "reviewed",
                 "tasks",
                 "waiting_tasks",
@@ -456,7 +455,10 @@ impl Shared {
         let bg_idle = row.get("kind").and_then(Value::as_str) == Some("background")
             && !truthy(row.get("pid"))
             && !truthy(row.get("status"));
-        if ended || bg_idle {
+        // Resume only what has no process left: Claude Code calls a job
+        // `done` while its process still runs and takes prompts, and that
+        // one is answered by sending to it, not by resuming (2026-11-24).
+        if (ended && !truthy(row.get("pid"))) || bg_idle {
             row.insert("resumable".into(), json!(true));
         }
         row.insert(
@@ -809,7 +811,6 @@ fn overlay(row: &mut Row, extra: &Map<String, Value>, past: Option<f64>) -> bool
         "last_failure",
         "last_failure_detail",
         "window_title",
-        "hc",
         // What the last Stop hook said the session still waits on.
         "stop_background_tasks",
         "stop_crons",

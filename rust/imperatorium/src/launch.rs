@@ -1,7 +1,6 @@
 //! Starting sessions, from the launch half of `imperatorium/history.py`:
 //! resume or fork in a new Windows Terminal tab or in the background, and a
-//! fresh session in a new tab. (A herdr-core terminal in place of the tab
-//! comes with herdr-core hosting.)
+//! fresh session in a new tab.
 
 use std::process::{Command, Stdio};
 

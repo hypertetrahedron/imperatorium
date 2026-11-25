@@ -146,7 +146,7 @@ The dispatcher, endpoint by endpoint. `imperatorium serve [--port 8811]
 [--home DIR]` runs beside the Python dispatcher as a **shadow**: it reads
 config.json, state.json and the transcripts, writes nothing, and
 `rust/conformance/shadow.py` sends both the same GETs and compares the JSON.
-The HTTP API stays exactly as it is, so the window, the herdr mods, the
+The HTTP API stays exactly as it is, so the window, the
 Stream Deck and impctl need no change at the cutover.
 
 Step 1 is the read-only endpoints. Done so far:
@@ -319,9 +319,8 @@ can reach a real one:
   focus from whoever is at the machine - the first press of Focus on a
   binary build is its test.
 
-Not ported yet: herdr-core hosting (hc terminals: refused as not ported),
-the herdr mods' `/api/dictate` (it records from the dispatcher's own mic),
-remote hosts.
+Not ported yet: remote hosts. (herdr-core hosting and the herdr mods'
+`/api/dictate` were dropped with the herdr integration on 2026-11-24.)
 
 ### Step 3: the cutover (2026-11-13)
 

@@ -123,6 +123,16 @@ describe("NewSession", () => {
   });
 });
 
+describe("NeverPrompted", () => {
+  it("a background job with no first message yet reads ready, not blocked", () => {
+    const got = run(["span"], cat(
+      "[stateOf({kind: 'background', state: 'blocked', status: 'idle', never_prompted: true}),",
+      " stateOf({kind: 'background', state: 'blocked', status: 'idle'})]"));
+    assert.deepEqual(got[0], ["d-ready", "ready"]);
+    assert.deepEqual(got[1], ["d-done", "blocked"]);
+  });
+});
+
 describe("RemoteMachines", () => {
   it("a session whose machine stops answering says so, with Retry now", () => {
     const [state, html] = run(["span", "unreachableHtml"], cat(

@@ -956,11 +956,10 @@ mod/imperatorium/           the Claude Code mod
 install.ps1 install.sh install.cmd   from nothing: download the binary, run `install`
 ONBOARDING.md               the step-by-step walkthrough
 config.example.json policy.example.json   what config.json and policy.json start from
-herdr/                      see the `herdr` branch
 ```
 
 The goldens in `rust/imperatorium/tests/golden` are the specification: see
-the `README.md` there. herdr hosting lives on the separate `herdr` branch.
+the `README.md` there.
 
 Runtime state lives in `%LOCALAPPDATA%\imperatorium\state.json` on Windows
 (`$XDG_STATE_HOME/imperatorium`, or `~/.local/state/imperatorium`, elsewhere):

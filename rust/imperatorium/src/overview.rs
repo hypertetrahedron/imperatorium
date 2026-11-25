@@ -89,6 +89,11 @@ fn checkout_line(wt: &Map<String, Value>, main: bool, main_path: &str, base: Opt
             .as_array()
             .map(|f| f.iter().filter_map(|x| x["path"].as_str().map(str::to_string)).collect())
             .unwrap_or_default();
+        // Only untracked files: Merge and Push leave them be (as the
+        // Worktrees tab's `untracked_only`); said only when true.
+        if status["files"].as_array().is_some_and(|f| !f.is_empty() && f.iter().all(|x| x["untracked"] == json!(true))) {
+            line.insert("untracked_only".into(), json!(true));
+        }
         let dirty: Vec<String> = dirty
             .into_iter()
             .filter(|f| {

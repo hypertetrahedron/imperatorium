@@ -61,9 +61,6 @@ impl Shared {
                 return json!({"ok": false, "error": "that session is still running - focus it, or fork it to branch off"});
             }
         }
-        if where_ == "window" && self.hc_hosting() {
-            return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
-        }
         let options = self
             .config()
             .get("background")
@@ -117,11 +114,6 @@ impl Shared {
         got
     }
 
-    /// Whether window sessions start in a herdr-core terminal (terminal.host).
-    pub(super) fn hc_hosting(&self) -> bool {
-        settings::value(&self.config(), "terminal.host").as_str() == Some("hc")
-    }
-
     /// Control.new_session: a fresh session in the same project, in a new
     /// tab; with `close`, the old one ends once the new one is launched.
     pub(super) fn new_session(
@@ -147,9 +139,6 @@ impl Shared {
                     .map(crate::pyish::py_str)
             })
         });
-        if self.hc_hosting() {
-            return json!({"ok": false, "error": "herdr-core hosting is not ported yet"});
-        }
         let sid = uuid4();
         let mut got = match crate::launch::new_session(cwd.as_deref(), &sid, start.permission_mode, start.model, start.effort) {
             Ok(g) => g,
@@ -212,18 +201,9 @@ impl Shared {
         }
     }
 
-    /// Control._close_row. (A herdr-core terminal is closed through hc,
-    /// which comes with herdr-core hosting.)
+    /// Control._close_row.
     fn close_row(&self, store: &crate::store::Store, row: &Row) -> Value {
-        let hosted = row
-            .get("hc")
-            .and_then(|h| h.get("address"))
-            .is_some_and(|a| truthy(Some(a)));
-        let got = if hosted {
-            json!({"ok": false, "error": "closing a herdr-core terminal is not ported yet"})
-        } else {
-            crate::closing::close(row.get("pid").unwrap_or(&Value::Null))
-        };
+        let got = crate::closing::close(row.get("pid").unwrap_or(&Value::Null));
         let summary = got
             .get("how")
             .filter(|v| truthy(Some(v)))
@@ -374,7 +354,7 @@ impl Shared {
         let item = store.enqueue(&key, prompt, as_user);
         self.invalidate();
         if row.get("status").and_then(Value::as_str) == Some("idle")
-            && !truthy(row.get("attention"))
+            && !holds_queue(&row)
             && truthy(row.get("dispatchable"))
         {
             self.drain(store, &key);
@@ -438,7 +418,7 @@ impl Shared {
         for key in keys {
             let Some(row) = rows.get(&key) else { continue };
             if row.get("status").and_then(Value::as_str) == Some("idle")
-                && !truthy(row.get("attention"))
+                && !holds_queue(row)
                 && truthy(row.get("dispatchable"))
             {
                 if let Some(id) = self.drain(store, &key) {
@@ -1187,17 +1167,8 @@ impl Shared {
         self.row(&id).unwrap_or_else(|| row.clone())
     }
 
-    /// Control._type_into: one line and Enter at the row's prompt. (A
-    /// herdr-core terminal is typed into through hc, which comes with
-    /// herdr-core hosting.)
+    /// Control._type_into: one line and Enter at the row's prompt.
     fn type_into(&self, row: &Row, text: &str) -> bool {
-        let hosted = row
-            .get("hc")
-            .and_then(|h| h.get("address"))
-            .is_some_and(|a| truthy(Some(a)));
-        if hosted && !truthy(row.get("remote")) {
-            return false;
-        }
         crate::slash::type_command(row.get("pid").unwrap_or(&Value::Null), text)
     }
 
@@ -1299,9 +1270,6 @@ impl Shared {
         let Some(pid) = row.get("pid").and_then(Value::as_u64) else {
             return json!({"ok": false, "error": "it has no terminal here to press Esc in"});
         };
-        if row.get("hc").and_then(|h| h.get("address")).is_some_and(|a| truthy(Some(a))) {
-            return json!({"ok": false, "error": "stopping a herdr-core session is not supported yet"});
-        }
         match crate::closing::press_escape(pid as u32) {
             Ok(()) => {
                 store.add_event_json(event("console"));
@@ -1329,8 +1297,15 @@ impl Shared {
         let Some(row) = (if id.is_empty() { None } else { self.row(&id) }) else {
             return json!({"ok": false, "error": "no such session"});
         };
-        if truthy(row.get("remote")) {
-            return json!({"ok": false, "error": format!("dismissing a session on {} is not supported yet",
+        let remote = truthy(row.get("remote"));
+        // A host's session leaves the list only once nothing of it runs
+        // there: stopped, done or failed, with no process (2026-11-24: a
+        // stopped job on a host could not be taken off the list at all).
+        if remote
+            && (truthy(row.get("pid"))
+                || !matches!(row.get("state").and_then(Value::as_str), Some("stopped" | "done" | "failed")))
+        {
+            return json!({"ok": false, "error": format!("that session is still running on {} - stop it there first",
                 crate::pyish::py_str(row.get("host").unwrap_or(&Value::Null)))});
         }
         if truthy(row.get("pid")) {
@@ -1345,7 +1320,7 @@ impl Shared {
         // it) would come back: stop it first. One already stopped or done
         // needs nothing, and a failed stop does not keep it on the list.
         if let Some(id) = bg_id(&row).filter(|_| {
-            !matches!(row.get("state").and_then(Value::as_str), Some("stopped" | "done"))
+            !remote && !matches!(row.get("state").and_then(Value::as_str), Some("stopped" | "done"))
         }) {
             let _ = run_claude_stop(&id);
         }
@@ -1465,6 +1440,20 @@ impl Shared {
 const NOT_RUNNING: &str = "that session is not running here, so there is nothing to close";
 
 /// The short id `claude stop` takes, for a `claude --bg` session's row.
+/// Whether what a session waits on you for holds its queued prompts. A
+/// finished turn does not: the prompt was queued to run once the turn
+/// ended, and it has (2026-11-24: a confirmed Fleet prompt sat behind a
+/// "complete" session for good). A failed turn, a permission request or a
+/// question still holds them.
+pub(super) fn holds_queue(row: &Row) -> bool {
+    if !truthy(row.get("attention")) {
+        return false;
+    }
+    let kind = row.get("attention_kind").and_then(Value::as_str);
+    let note = row.get("last_notification").and_then(Value::as_str);
+    !(kind == Some("complete") || (kind == Some("notification") && note == Some("idle_prompt")))
+}
+
 fn bg_id(row: &Row) -> Option<String> {
     if row.get("kind").and_then(Value::as_str) != Some("background") {
         return None;
@@ -1551,6 +1540,19 @@ mod background_only_tests {
 
     fn row(v: Value) -> Row {
         v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_finished_turn_lets_queued_prompts_through() {
+        assert!(!holds_queue(&row(json!({"attention": false}))));
+        assert!(!holds_queue(&row(json!({"attention": true, "attention_kind": "complete"}))));
+        assert!(!holds_queue(&row(json!({"attention": true, "attention_kind": "notification",
+                                          "last_notification": "idle_prompt"}))));
+        assert!(holds_queue(&row(json!({"attention": true, "attention_kind": "failure"}))));
+        assert!(holds_queue(&row(json!({"attention": true, "attention_kind": "notification",
+                                         "last_notification": "permission_prompt"}))));
+        assert!(holds_queue(&row(json!({"attention": true, "attention_kind": "notification",
+                                         "last_notification": "elicitation_dialog"}))));
     }
 
     #[test]

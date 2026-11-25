@@ -51,7 +51,7 @@ fn the_stand_in_path_finds_only_the_fakes() {
     let path = stand_in_path(Some(&d.bin_dir));
     let dirs: Vec<_> = std::env::split_paths(&path).collect();
     assert_eq!(dirs[0], d.bin_dir);
-    for name in ["claude.exe", "wt.exe", "hc.exe"] {
+    for name in ["claude.exe", "wt.exe"] {
         let found: Vec<_> = dirs.iter().filter(|p| p.join(name).is_file()).collect();
         assert!(
             found.len() <= 1 && found.iter().all(|p| **p == d.bin_dir),

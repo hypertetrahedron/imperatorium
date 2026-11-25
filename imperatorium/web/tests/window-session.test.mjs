@@ -191,7 +191,7 @@ describe("SessionTree", () => {
   });
 
   it("tile x closes a running local session rather than archiving", () => {
-    for (const needle of ['data-close="${esc(key(s))}"', 's.remote || s.provisional || closing.has(key(s)) ? ""',
+    for (const needle of ['data-close="${esc(key(s))}"', '(s.remote && !remoteOff) || s.provisional || closing.has(key(s)) ? ""',
                           ': s.pid ? `<span data-close=',
                           'post("/api/close"', "closeSession(el.dataset.close)",
                           "famClicked(el.dataset.fam)"]) {

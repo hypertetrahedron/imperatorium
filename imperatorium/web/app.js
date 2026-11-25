@@ -200,7 +200,10 @@ function tile(s, short, depth){
   // have no way off the list at all.
   // A job still working but not yet matched to its process gets neither.
   // Since 2026-11-23 either way the tile goes; History still resumes it.
-  const x = s.remote || s.provisional || closing.has(key(s)) ? ""
+  // A host's session gets only the dismiss, once nothing of it runs there
+  // (stopped, done or failed, no process): closing one is not supported.
+  const remoteOff = s.remote && !s.pid && ["stopped", "done", "failed"].includes(s.state);
+  const x = (s.remote && !remoteOff) || s.provisional || closing.has(key(s)) ? ""
     : s.pid ? `<span data-close="${esc(key(s))}" title="end this session and remove its tile (it can be resumed from History)">✕</span>`
     : s.state === "working" || RUNNING[s.status] ? ""
     : `<span data-dismiss="${esc(key(s))}" title="remove its tile (it can be resumed from History)">✕</span>`;
@@ -3935,9 +3938,9 @@ async function loadWorktrees(){
         w.ahead || 0} ahead of ${esc(w.base || d.base)}${w.base_recorded ? " (made from it)" : ""}${w.behind ? " · " + w.behind + " behind" : ""}${w.dirty ? " · <b>uncommitted changes</b>" : ""}${
         w.subject ? " · last: " + esc(w.subject) : ""}</div>
       <div class="btns"><button class="sm ghost" data-wd="${esc(w.path)}">Diff</button>${w.agent ? `
-        <button class="sm" data-wa="merge" data-wp="${esc(w.path)}" ${w.ahead && !w.dirty ? "" : "disabled"}>Merge into ${esc(w.base || d.base)}</button>
-        <button class="sm ghost" data-wa="mergeremove" data-wp="${esc(w.path)}" ${w.ahead && !w.dirty ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
-        <button class="sm ghost" data-wa="pr" data-wp="${esc(w.path)}" ${w.dirty ? "disabled" : ""}>Push + open PR</button>
+        <button class="sm" data-wa="merge" data-wp="${esc(w.path)}" ${w.ahead && !changedTracked(w) ? "" : "disabled"}>Merge into ${esc(w.base || d.base)}</button>
+        <button class="sm ghost" data-wa="mergeremove" data-wp="${esc(w.path)}" ${w.ahead && !changedTracked(w) ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
+        <button class="sm ghost" data-wa="pr" data-wp="${esc(w.path)}" ${changedTracked(w) ? "disabled" : ""}>Push + open PR</button>
         <button class="sm danger" data-wa="discard" data-wp="${esc(w.path)}">Discard</button>` : ""}</div>${worktreeNoteHtml(worktreeNotes[w.path])}
       <div class="wdiff" data-for="${esc(w.path)}"></div></div>`).join("");
   const sig = JSON.stringify([d.worktrees, worktreeNotes]);
@@ -3981,6 +3984,9 @@ function worktreeAsk(action, info){
 }
 // What each worktree action came to, shown on its card until the next one.
 const worktreeNotes = {};
+// Changes to tracked files block Merge and Push; new untracked files alone
+// do not (they stay where they are), as the base checkout's own check has it.
+const changedTracked = w => !!w.dirty && !w.untracked_only;
 async function finishWorktree(s, action, path, force, info){
   const ask = worktreeAsk(action, info);
   if (!force && !confirm(ask.text)) return;
@@ -4093,6 +4099,7 @@ function drawProject(){
     const mine = who[i], pr = mine.map(s => s.pr).find(Boolean);
     const files = [...new Set([...(l.committed || []), ...(l.uncommitted || [])])].sort();
     const un = new Set(l.uncommitted || []);
+    const blocked = un.size > 0 && !l.untracked_only;
     const stats = [
       un.size ? `<b>${un.size} not committed</b>` : "nothing uncommitted",
       l.kind === "main" && !l.base ? (l.upstream ? `${l.ahead || 0} ahead, ${l.behind || 0} behind ${esc(l.upstream)}` : "")
@@ -4105,9 +4112,9 @@ function drawProject(){
       ? `<div class="kv">its commits are all in ${held.map(h => esc(lineName(h))).join(", ")}</div>` : "";
     const chips = mine.map(s => `<button class="sm ghost pjs" data-pjs="${esc(key(s))}" title="open this session">${esc(nameOf(s))}</button>`).join("");
     const acts = l.kind === "worktree" && l.agent ? `<div class="btns">
-        <button class="sm" data-pja="merge" data-pjp="${esc(l.path)}" ${l.ahead && !un.size ? "" : "disabled"}>Merge into ${esc(l.base || d.base)}</button>
-        <button class="sm ghost" data-pja="mergeremove" data-pjp="${esc(l.path)}" ${l.ahead && !un.size ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
-        <button class="sm ghost" data-pja="pr" data-pjp="${esc(l.path)}" ${un.size ? "disabled" : ""}>Push + open PR</button>
+        <button class="sm" data-pja="merge" data-pjp="${esc(l.path)}" ${l.ahead && !blocked ? "" : "disabled"}>Merge into ${esc(l.base || d.base)}</button>
+        <button class="sm ghost" data-pja="mergeremove" data-pjp="${esc(l.path)}" ${l.ahead && !blocked ? "" : "disabled"} title="merge, then remove the worktree and its branch">Merge + remove</button>
+        <button class="sm ghost" data-pja="pr" data-pjp="${esc(l.path)}" ${blocked ? "disabled" : ""}>Push + open PR</button>
         <button class="sm danger" data-pja="discard" data-pjp="${esc(l.path)}">Discard</button></div>${worktreeNoteHtml(worktreeNotes[l.path])}` : "";
     const list = files.map(f => `<div class="pjf${shared.has(f) ? " shared" : ""}" data-pjf="${esc(f)}" data-pjl="${i}" title="show its diff">${
         un.has(f) ? "<span class=code>~</span>" : "<span class=code>+</span>"}${esc(f)}${shared.has(f) ? " <span class=kv>· also elsewhere</span>" : ""}</div><div class="pjfd" hidden></div>`).join("");

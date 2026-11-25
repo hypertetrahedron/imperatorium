@@ -47,6 +47,16 @@ pub fn temp_roots() -> Vec<PathBuf> {
         if !roots.contains(&p) {
             roots.push(p);
         }
+        // On Linux and macOS it is per user: /tmp/claude-<uid> (2026-11-24:
+        // a host's background shell showed "no output yet" for good).
+        #[cfg(unix)]
+        {
+            let uid = unsafe { libc::getuid() };
+            let p = Path::new(&base).join(format!("claude-{uid}"));
+            if !roots.contains(&p) {
+                roots.push(p);
+            }
+        }
     }
     roots
 }

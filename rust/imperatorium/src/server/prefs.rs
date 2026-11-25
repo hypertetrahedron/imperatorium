@@ -55,8 +55,6 @@ impl Shared {
             "chat.send_as_typed",
             "chat.cold_cache_tokens",
             "chat.conversation_cache_mb",
-            "terminal.host",
-            "terminal.hc_session",
             "chat.matrix_status",
             "quick.key",
             "quick.phrases",

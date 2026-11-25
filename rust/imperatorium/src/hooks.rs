@@ -19,7 +19,7 @@ use crate::http::{env_timeout, post_json};
 use crate::paths::{self, env_nonempty};
 use crate::policy::{self, ASK};
 use crate::pyish::{
-    json_dumps, loads_or_empty, or, py_float, py_number, py_round, py_str, take, truthy,
+    json_dumps, loads_or_empty, or, py_float, py_str, take, truthy,
 };
 
 const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8792/hook";
@@ -123,8 +123,6 @@ pub fn hook_main() -> i32 {
         ("messaging_socket", "CLAUDE_CODE_MESSAGING_SOCKET"),
         ("messaging_token", "CLAUDE_CODE_MESSAGING_TOKEN"),
         ("bridge_session_id", "CLAUDE_CODE_BRIDGE_SESSION_ID"),
-        ("hc_terminal", "HC_TERMINAL_ID"),
-        ("hc_session", "HC_SESSION"),
         ("claude_pid", "CLAUDE_PID"),
     ] {
         payload.insert(key.into(), env_value(var));
@@ -171,55 +169,6 @@ pub fn provider(get: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
     None
 }
 
-fn provider_label(p: &str) -> Option<&'static str> {
-    Some(match p {
-        "bedrock" => "Bedrock",
-        "vertex" => "Vertex",
-        "foundry" => "Foundry",
-        "api" => "API",
-        "gateway" => "gateway",
-        _ => return None,
-    })
-}
-
-/// `(d.get(k) or {}).get(sub)`; Err where Python's `.get` would raise.
-fn sub_get<'a>(parent: Option<&'a Value>, key: &str) -> Result<Option<&'a Value>, ()> {
-    match parent {
-        p if !truthy(p) => Ok(None),
-        Some(Value::Object(o)) => Ok(o.get(key)),
-        _ => Err(()),
-    }
-}
-
-/// The text to show; Err where Python's `line()` raises (nothing printed).
-pub fn statusline_line(payload: &Map<String, Value>) -> Result<String, ()> {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(model) = sub_get(payload.get("model"), "display_name")?.filter(|m| truthy(Some(m)))
-    {
-        parts.push(py_str(model));
-    }
-    if let Some(ctx) = py_number(sub_get(payload.get("context_window"), "used_percentage")?) {
-        parts.push(format!("ctx {}%", py_round(ctx)));
-    }
-    let limits = payload.get("rate_limits");
-    for (key, label) in [("five_hour", "5h"), ("seven_day", "7d")] {
-        let window = sub_get(limits, key)?;
-        if let Some(used) = py_number(sub_get(window, "used_percentage")?) {
-            parts.push(format!("{label} {}%", py_round(used)));
-        }
-    }
-    if !truthy(limits) {
-        if let Some(label) = payload
-            .get("imperatorium_provider")
-            .and_then(Value::as_str)
-            .and_then(provider_label)
-        {
-            parts.push(label.into());
-        }
-    }
-    Ok(parts.join(" · "))
-}
-
 pub fn statusline_main() -> i32 {
     let raw = read_stdin().unwrap_or_default();
     let mut payload = match loads_or_empty(&raw) {
@@ -243,11 +192,8 @@ pub fn statusline_main() -> i32 {
             env_timeout("IMPERATORIUM_STATUSLINE_TIMEOUT", 0.5),
         );
     }
-    if let Ok(out) = statusline_line(&payload) {
-        let mut stdout = std::io::stdout();
-        let _ = stdout.write_all(out.as_bytes());
-        let _ = stdout.flush();
-    }
+    // Nothing is printed: the terminal's status line stays empty, and the
+    // window shows what it would have said (2026-11-24, the user's call).
     0
 }
 
@@ -525,27 +471,6 @@ mod tests {
     }
 
     #[test]
-    fn statusline_text() {
-        let line = statusline_line(&obj(json!({
-            "model": {"display_name": "Opus 5.5"}, "context_window": {"used_percentage": 22.5},
-            "rate_limits": {"five_hour": {"used_percentage": 41.4}, "seven_day": {"used_percentage": 12}}})));
-        assert_eq!(line.unwrap(), "Opus 5.5 · ctx 22% · 5h 41% · 7d 12%");
-        assert_eq!(statusline_line(&Map::new()).unwrap(), "");
-        assert_eq!(
-            statusline_line(&obj(json!({"context_window": {"used_percentage": "n/a"}}))).unwrap(),
-            ""
-        );
-        assert_eq!(
-            statusline_line(&obj(
-                json!({"imperatorium_provider": "api", "model": {"display_name": "Opus"}})
-            ))
-            .unwrap(),
-            "Opus · API"
-        );
-        assert!(statusline_line(&obj(json!({"model": "Opus"}))).is_err());
-    }
-
-    #[test]
     fn providers() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |n: &str| {
@@ -590,20 +515,6 @@ mod features_tests {
         assert_eq!(
             provider(env(&[("CLAUDE_CODE_USE_FOUNDRY", "1"), ("CLAUDE_CODE_USE_BEDROCK", "1")])),
             Some("bedrock")
-        );
-    }
-
-    #[test]
-    fn features_the_line_names_the_provider_only_without_windows() {
-        let line = |v: Value| statusline_line(v.as_object().unwrap()).unwrap();
-        assert_eq!(
-            line(json!({"model": {"display_name": "Opus"}, "imperatorium_provider": "bedrock"})),
-            "Opus · Bedrock"
-        );
-        assert_eq!(
-            line(json!({"imperatorium_provider": "api",
-                        "rate_limits": {"five_hour": {"used_percentage": 5}}})),
-            "5h 5%"
         );
     }
 }

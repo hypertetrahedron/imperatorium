@@ -13,8 +13,8 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(HERE, "..", "..");
-const STRIPPED = ["CLAUDE", "HC_", "ANTHROPIC_", "IMPERATORIUM_", "AI_AGENT"];
-const REAL = ["wt.exe", "claude.exe", "wt", "claude", "hc.exe", "hc", "herdr.exe", "herdr", "herdr-app.exe",
+const STRIPPED = ["CLAUDE", "ANTHROPIC_", "IMPERATORIUM_", "AI_AGENT"];
+const REAL = ["wt.exe", "claude.exe", "wt", "claude",
   "wt.cmd", "claude.cmd", "claude.bat"];
 const NOWHERE = "http://127.0.0.1:9";
 

@@ -52,6 +52,18 @@ fn alive(pid: u32) -> bool {
     crate::procs::process_table().iter().any(|p| p.0 == pid)
 }
 
+/// How long a session is given to end after /exit (or SIGTERM) before it
+/// is ended by force: 8 s. IMPERATORIUM_TEST_CLOSE_WAIT shortens it for the
+/// session twin, whose stubborn stand-in otherwise costs the run 8 s
+/// (2026-11-24); the time scale slows a twin down, so it cannot be used.
+fn exit_wait() -> f64 {
+    std::env::var("IMPERATORIUM_TEST_CLOSE_WAIT")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|w| w.is_finite() && *w > 0.0)
+        .unwrap_or(8.0)
+}
+
 fn wait_gone(pid: u32, wait: f64) -> bool {
     let end = Instant::now() + Duration::from_secs_f64(wait);
     while Instant::now() < end {
@@ -156,7 +168,7 @@ pub fn close(pid: &Value) -> Value {
         let shell = tab_shell(pid, &crate::procs::process_table());
         // Keys that never reached it are not waited on: an administrator's
         // console refuses ours.
-        if type_keys(pid, &[CTRL_C, "/exit", ENTER]) && wait_gone(pid, 8.0) {
+        if type_keys(pid, &[CTRL_C, "/exit", ENTER]) && wait_gone(pid, exit_wait()) {
             let mut closed = true;
             if let Some(s) = shell.filter(|s| alive(*s)) {
                 closed = type_keys(s, &["exit", ENTER]) && wait_gone(s, 3.0);
@@ -169,7 +181,7 @@ pub fn close(pid: &Value) -> Value {
         unsafe {
             libc::kill(pid as i32, libc::SIGTERM);
         }
-        if wait_gone(pid, 8.0) {
+        if wait_gone(pid, exit_wait()) {
             return json!({"ok": true, "how": "exit", "tab_closed": false});
         }
     }

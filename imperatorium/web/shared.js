@@ -401,6 +401,9 @@ function stateOf(s){
   if (s.reviewed) return [s.attention_kind === "complete" ? "d-revc" : "d-rev", "reviewed"];
   // `done` is a background job that ran to completion: nothing to wait for.
   if (s.state === "done") return ["d-done", "finished"];
+  // A background job nobody has given a prompt yet: Claude Code calls it
+  // "blocked", but it is only waiting for a first message (2026-11-24).
+  if (s.never_prompted && s.status === "idle") return ["d-ready", "ready"];
   if (s.state && s.state !== "working") return ["d-done", s.state];
   if (RUNNING[s.status] || s.state === "working")
     return ["d-busy", RUNNING[s.status] || "working"];
