@@ -1,6 +1,6 @@
 //! settings.json as `imperatorium install-hooks` writes it, against what
-//! `hooks/install.py --native` wrote from the same starting file
-//! (rust/conformance/install_compare.py): install, re-install and
+//! `hooks/install.py --native` wrote from the same starting file (recorded at
+//! the git tag `last-python` by rust/conformance/install_compare.py): install, re-install and
 //! uninstall, with and without the extras, line endings aside. All in a
 //! temporary folder; ~/.claude is never touched.
 #![cfg(windows)]

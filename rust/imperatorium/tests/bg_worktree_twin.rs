@@ -1,4 +1,5 @@
-//! bg_worktree_twin.py replayed: background dispatch into a worktree made
+//! Replays bg_worktree_twin (answers frozen at `last-python`, see
+//! golden/README.md): background dispatch into a worktree made
 //! from the chosen session's branch. fakecli stands in for claude.exe (it
 //! logs `claude --bg` and where it ran, and starts nothing). Compared with
 //! tests/golden/bg_worktree_twin/steps.jsonl: every answer (paths neutral),

@@ -71,8 +71,20 @@ pub fn summarise(raw: &Value) -> Value {
 /// prs.lookup: Ok(the PR for cwd's branch, or None); Err only when gh is
 /// missing - a failure worth showing, and the end of polling.
 fn lookup(cwd: &str) -> Result<Option<Value>, String> {
-    let mut c = Command::new("gh");
-    c.args(["pr", "view", "--json", FIELDS]).current_dir(cwd);
+    // gh itself, not a shim that starts it, and with the repository and
+    // branch named so gh runs no git to find them: each would be a console
+    // program started by a console program (see changes::git_command). Where
+    // they cannot be read from the repository's files, gh finds them as it
+    // always did, with the real git ahead of Git for Windows' wrapper.
+    let mut c = Command::new(crate::launch::which_real("gh").unwrap_or_else(|| "gh".into()));
+    c.arg("pr").arg("view");
+    match crate::changes::github_target(cwd) {
+        Some((repo, branch)) => {
+            c.arg(branch).arg("--repo").arg(repo);
+        }
+        None => crate::changes::prefer_real_git(&mut c),
+    }
+    c.args(["--json", FIELDS]).current_dir(cwd);
     let o = match crate::proc::run_timeout(&mut c, Duration::from_secs(20)) {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("gh is not installed".into()),

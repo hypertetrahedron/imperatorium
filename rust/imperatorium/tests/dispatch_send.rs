@@ -5,7 +5,7 @@
 //! Safety: nothing here may open a real window, so no test lets a dispatch
 //! reach the deep-link launch (`auto` with nothing live, `launch`); those
 //! Python tests are ported as far as the refusal or the choice before it
-//! (see docs/python-test-coverage/test_dispatcher.md). Sessions that are
+//! (see docs/archive/python-test-coverage/test_dispatcher.md). Sessions that are
 //! typed into are fakecli consoles; `claude` and `wt` are fakecli too.
 #![cfg(windows)]
 mod common;

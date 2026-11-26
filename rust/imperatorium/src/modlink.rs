@@ -19,6 +19,20 @@ use serde_json::{json, Map, Value};
 use crate::pyish::{py_str, take, truthy};
 
 pub const TOKEN_FILE: &str = "mod-token";
+/// Beside the token: where this dispatcher listens (`http://127.0.0.1:8792`),
+/// so the mod need not assume the default port.
+pub const ENDPOINT_FILE: &str = "mod-endpoint";
+
+/// The URL the mod reaches a dispatcher bound to `host:port` at.
+pub fn endpoint_url(host: &str, port: u16) -> String {
+    let at = match host {
+        "" | "0.0.0.0" => "127.0.0.1".to_string(),
+        "::" => "[::1]".to_string(),
+        h if h.contains(':') && !h.starts_with('[') => format!("[{h}]"),
+        h => h.to_string(),
+    };
+    format!("http://{at}:{port}")
+}
 /// A mod silent this long is gone; its prompts go the old way.
 pub const LIVE_FOR: f64 = 8.0;
 /// A prompt handed out and never accepted is offered again after this.

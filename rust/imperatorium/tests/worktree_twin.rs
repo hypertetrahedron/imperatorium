@@ -1,4 +1,5 @@
-//! worktree_twin.py replayed: merge / PR / discard of background-session
+//! Replays worktree_twin (answers frozen at `last-python`, see
+//! golden/README.md): merge / PR / discard of background-session
 //! worktrees in a throwaway project (local bare origin, gh unauthenticated),
 //! every answer, what is left in the repository, what reached the origin and
 //! the events recorded, against tests/golden/worktree_twin/steps.jsonl.

@@ -764,6 +764,10 @@ pub fn main(args: &[String], home: Option<&str>) -> i32 {
     let home = a.opt("home").or(home);
     let action = a.pos.first().map(String::as_str).unwrap_or("check");
     let host = a.pos.get(1).map(String::as_str);
+    if let Some(Err(e)) = host.filter(|_| action != "remove").map(check_host_name) {
+        say(format!("imperatorium remote: {e}"));
+        return 2;
+    }
     match action {
         "check" => {
             let cfg = load_config(home).ok().flatten().unwrap_or(json!({}));

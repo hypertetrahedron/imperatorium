@@ -1,5 +1,5 @@
-//! The hook processes as Claude Code sees them (rust/conformance/
-//! hooks_blackbox.py): each recorded case runs `imperatorium hook|statusline|
+//! The hook processes as Claude Code sees them (cases recorded at the git tag
+//! `last-python` by rust/conformance/hooks_blackbox.py): each recorded case runs `imperatorium hook|statusline|
 //! permission` with the same stdin, environment and policy against a fake
 //! dispatcher answering /permission/park as recorded, and must match what
 //! the Python hooks did byte for byte: exit code, stdout, every request

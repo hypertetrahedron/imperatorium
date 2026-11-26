@@ -235,10 +235,7 @@ fn the_windows_own_page_may_save_and_a_foreign_one_may_not() {
 #[test]
 fn a_remote_hosts_tunnel_cannot_reach_it() {
     // The tunnel's listener on this machine, on a port of our own choosing.
-    let local = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
+    let local = free_port();
     assert!(![8792, 8793, 8794].contains(&local));
     let c = json!({"notify": {"ntfy": {"delay": 60}},
                    "remote": {"enabled": true,

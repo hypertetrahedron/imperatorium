@@ -1,4 +1,5 @@
-//! settings_twin.py replayed: every POST /api/settings the script made, the
+//! Replays settings_twin (answers frozen at `last-python`, see
+//! golden/README.md): every POST /api/settings the recording made, the
 //! config.json and config.json.bak it left (byte for byte), and the GETs
 //! that show what a save applies, each as Python answered
 //! (golden/settings_twin/steps.jsonl).

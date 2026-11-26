@@ -365,15 +365,26 @@ impl Shared {
 
     /// Control.drain: deliver the oldest queued prompt for `key`; its id.
     pub(super) fn drain(&self, store: &crate::store::Store, key: &str) -> Option<Value> {
+        self.drain_row(store, key, None)
+    }
+
+    /// [`drain`](Self::drain) with the session's row when the caller has just
+    /// read it (the sweep: one snapshot for every queued session, not one
+    /// rebuild - a `claude agents` - each).
+    fn drain_row(&self, store: &crate::store::Store, key: &str, row: Option<&Row>) -> Option<Value> {
         if store.queued(key).is_empty() {
             return None;
         }
-        self.invalidate();
-        let row = self
-            .sessions(2.0)
-            .iter()
-            .find(|r| r.get("key").and_then(Value::as_str) == Some(key))
-            .cloned()?;
+        let row = match row {
+            Some(r) => r.clone(),
+            None => {
+                self.invalidate();
+                self.sessions(2.0)
+                    .iter()
+                    .find(|r| r.get("key").and_then(Value::as_str) == Some(key))
+                    .cloned()?
+            }
+        };
         if !truthy(row.get("dispatchable")) {
             return None; // the sweep retries once it registers
         }
@@ -421,7 +432,7 @@ impl Shared {
                 && !holds_queue(row)
                 && truthy(row.get("dispatchable"))
             {
-                if let Some(id) = self.drain(store, &key) {
+                if let Some(id) = self.drain_row(store, &key, Some(row)) {
                     out.push(id);
                 }
             }

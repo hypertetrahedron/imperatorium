@@ -1,29 +1,28 @@
-# Goldens: the Python reference's answers
+# Goldens: the Python reference's answers, frozen
 
-Everything here was recorded from the Python implementation (the reference
-the binary was ported from) by the conformance scripts in `rust/conformance/`
-run with `--record DIR`. The Rust integration tests in `rust/imperatorium/tests/`
-replay the same inputs against the binary and compare.
+Everything here was recorded from the Python implementation Imperatorium was
+ported from, at the git tag `last-python` (the last commit that has the Python;
+it was deleted on 2026-11-15). The recording scripts lived in
+`rust/conformance/` at that tag and ran with `--record DIR`; that directory no
+longer exists, and nothing in the repository can record these files again. The
+script names below (`twin.py`, `golden.py`, ...) are the scripts at that tag.
 
-Python is gone from the repository (2026-11-15); the last commit that has it
-is tagged `last-python`. These files are now the spec: change one only on
-purpose, with the reason in the commit. The script names below (`twin.py`,
-`golden.py`, ...) are the scripts at that tag.
+The Rust integration tests in `rust/imperatorium/tests/` replay the recorded
+inputs against the binary (`imperatorium`, started by `tests/common/mod.rs` on
+a free port, never 8792 or the other fixed ports) and compare with the recorded
+answers. These files are now the spec for the behaviour they cover.
 
-## Recording (at the `last-python` tag only)
+## Changing a golden
 
-To record again, check out `last-python` in a separate worktree, with its
-venv (`requirements.txt`). Hold the conformance lock (one part at a time; the
-twins use fixed ports 8812-8820), build fakecli first
-(`cargo build --release -p fakecli`), then:
+A golden is never regenerated. When behaviour is meant to change, edit the
+golden by hand in the same commit as the code change, so the diff shows both
+and the reviewer sees the old answer and the new one side by side. Record why
+in "Edits since the recording" or "Changed on purpose" below. When a test fails
+and nobody meant to change behaviour, the code is wrong, not the golden.
 
-```
-python rust/conformance/<part>.py --record rust/imperatorium/tests/golden/<part>
-```
+A golden holds placeholders (see below), never this machine's paths.
 
-(`run_policy_tests.py` records into `policy_tests/`.) Record twice into two
-folders and `diff -r` them: every part here came out byte-identical across
-two captures (2026-11-14).
+## Edits since the recording
 
 Edited since: `settings_twin/steps.jsonl`'s settings help and restart texts
 (2026-11-15) name `imperatorium` subcommands in place of the deleted Python
@@ -60,7 +59,7 @@ random part), `<pid>`, `<sid>`, `<side>` (py/rs), `<twin-home>`, `<feat>`,
 
 ## Ported (tests that run in `cargo test`)
 
-| Golden | Script | Test | What is compared |
+| Golden | Recorded by (script at `last-python`) | Test | What is compared |
 |---|---|---|---|
 | `policy_tests/calls.jsonl` | run_policy_tests.py | policy_tests.rs | every `policy.decide` call test_policy.py made, its exact (verdict, reason, tier) |
 | `differential/` | differential.py | differential.rs | 86,197 generated cases, rebuilt from `spec.json` in `cases()` order (checked against `samples.json`); answers as indexes into `answers.json` (`index.txt`: 2*answer + 1 if explained); LOOSER or unexplained differences fail |
@@ -92,15 +91,15 @@ the harness (`Dispatcher::start`, port 0), sets up what the script set up
 request and compares with `want` as the script compared (its normaliser:
 `masked`, `scrub`, `neutral`, `same_text`). `config.json` beside a twin's
 steps is the config the twin's home got (`twin-<side>`: use any topic; the
-ntfy server `http://127.0.0.1:8819/` is the script's fake: use your own
-FakeServer's port).
+recorded ntfy server `http://127.0.0.1:8819/` was the script's fake: the
+replays swap in their own fake server's port, as `settings_twin.rs` does).
 
-`tests/harness.rs` already replays twin.py's `hook` steps (32 answers).
+`twin.rs` replays these `hook` steps (32 answers) and the rest of `twin/steps.jsonl`.
 
-Two rules for every replay (from `rust`, after python-out/runtime):
+Two rules for every replay:
 
 - **Time:** start the binary with `IMPERATORIUM_TEST_TIME_SCALE` (e.g.
-  `0.05`; see `timing.rs` on `rust`). It scales the queue sweep, the idle
+  `0.05`; see `src/timing.rs`). It scales the queue sweep, the idle
   timer, the notify delay, park/question holds, stream and matrix intervals,
   update checks and remote polls, so inbox_twin's 15 s sweep, notify_twin's
   60 s idle check and the parks' waits take a fraction of their recorded
@@ -240,7 +239,7 @@ fakecli copied to ssh.exe (remote_cli_twin.py's sh-running ssh is its
 The synthetic corpus covers what the readers handle; the full check runs on
 a frozen copy of this machine's transcripts, outside the repository. Its
 goldens were recorded once, at `last-python`; a new machine can't record
-them without that tag's Python:
+them without that tag's Python (run from a checkout of the tag):
 
 ```
 copy  ~/.claude/projects  ->  %LOCALAPPDATA%\imperatorium\conformance-corpus\projects

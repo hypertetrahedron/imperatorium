@@ -103,8 +103,12 @@ function whileVisible(ms, fn, now){
   if (!document.hidden) { start(); if (now) fn(); }
 }
 
+// Quotes too: ~90 places put esc() inside a quoted attribute (title="...",
+// data-k="..."), and a session's text (a Bash command in the tile's doing
+// line) must not be able to close one and add its own (2026-11-25).
 const esc = s => String(s == null ? "" : s)
-  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+  .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 
 // A key event as a combination like "ctrl+space": modifiers in the order
 // settings.normal_key writes them, then the physical key's name, so a
@@ -432,7 +436,7 @@ function cells(line){
 // them is read as emphasis; underscores only count at word edges, so
 // snake_case names and paths come through untouched. Only http(s) links are
 // made clickable - a session's output is not trusted to pick a scheme.
-const attr = s => esc(s).replace(/"/g, "&quot;");
+const attr = esc; // esc() escapes quotes itself since 2026-11-25
 const link = (href, text) => `<a href="${attr(href)}" target="_blank" rel="noopener">${text}</a>`;
 
 // -- highlighting -------------------------------------------------------------

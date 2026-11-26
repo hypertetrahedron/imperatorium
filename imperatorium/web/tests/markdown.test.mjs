@@ -2,7 +2,7 @@
 // Ported from test_ui.py: TableTests, MarkdownTests, Highlighting.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { runRenderer as run, render, cat, assertIn, assertNotIn } from "./load.mjs";
+import { runRenderer as run, render, cat, j, assertIn, assertNotIn } from "./load.mjs";
 
 const UNESCAPE = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
 const unescapeHtml = (s) =>
@@ -149,7 +149,7 @@ describe("Highlighting", () => {
     const html = render('```python\ndef f(x):\n    return "hi"  # done\n```');
     assertIn('<span class="tk-kw">def</span> <span class="tk-fn">f</span>(x):', html);
     assertIn('<span class="ig">    </span><span class="tk-kw">return</span>', html);
-    assertIn('<span class="tk-str">"hi"</span>', html);
+    assertIn('<span class="tk-str">&quot;hi&quot;</span>', html);
     assertIn('<span class="tk-com"># done</span>', html);
   });
 
@@ -246,7 +246,7 @@ describe("Highlighting", () => {
     assert.equal(strip(got[3]), 'Bash cd x && git log --oneline "a b"');
     assertIn('<span class="tc">git</span>', got[3]);
     assertIn('<span class="tf">--oneline</span>', got[3]);
-    assertIn('<span class="tq">"a b"</span>', got[3]);
+    assertIn('<span class="tq">&quot;a b&quot;</span>', got[3]);
   });
 
   it("results", () => {
@@ -256,5 +256,15 @@ describe("Highlighting", () => {
     assertIn('<span class="sg-err">Error</span>', got[0]);
     assertIn("cut short", got[0]);
     assertIn('class="res err"', got[1]);
+  });
+});
+
+// 2026-11-25: esc() is safe inside a quoted attribute; a tile's doing line
+// (a Bash command) once could close title="..." and add an event handler.
+describe("AttributeEscaping", () => {
+  it("quotes cannot leave an attribute", () => {
+    const out = run(j(`x" onmouseover="alert(1)' y`).replace(/^/, "esc(") + ")");
+    assert.ok(!out.includes('"') && !out.includes("'"), out);
+    assert.equal(out, "x&quot; onmouseover=&quot;alert(1)&#39; y");
   });
 });

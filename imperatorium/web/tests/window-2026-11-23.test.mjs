@@ -56,7 +56,7 @@ describe("RemoteMachines", () => {
     assertNotIn("data-keyfor", down);
     assertIn("Made a key for this computer", made);
     assertIn("me@pi&#39;s password", made.replace(/'/g, "&#39;"));
-    assertIn('<pre class="rcmd">type "k" | ssh me@pi "cat &gt;&gt; x"</pre>', made);
+    assertIn('<pre class="rcmd">type &quot;k&quot; | ssh me@pi &quot;cat &gt;&gt; x&quot;</pre>', made);
     assertIn("data-copy", made);
     assertNotIn("Made a key", had);
     assertIn("ssh-keygen failed", failed);

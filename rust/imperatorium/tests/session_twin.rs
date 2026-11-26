@@ -1,4 +1,5 @@
-//! session_twin.py's recorded steps against the binary: resume, fork, new
+//! Replays session_twin's recorded steps (answers frozen at `last-python`, see
+//! golden/README.md) against the binary: resume, fork, new
 //! and close, Send As Typed and the queue's refusals, dispatch and focus,
 //! with fakecli standing in for claude.exe and wt.exe and five hidden
 //! fakecli consoles as the running sessions (see tests/golden/README.md,

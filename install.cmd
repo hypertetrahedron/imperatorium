@@ -23,6 +23,22 @@ if /i "%IMPERATORIUM_CHANNEL%"=="preview" (
   set "IMPERATORIUM_BASE=https://github.com/hypertetrahedron/imperatorium/releases/latest/download"
 )
 :have_base
+rem install.ps1 is fetched and run from here, so the same rule as in it: https,
+rem or http on this machine. (Checked before anything is downloaded.)
+set "IMPERATORIUM_OK="
+if /i "%IMPERATORIUM_BASE:~0,8%"=="https://" set "IMPERATORIUM_OK=1"
+rem With the port's colon or the path's slash, so http://127.0.0.1.example.com
+rem is not taken for this machine.
+if /i "%IMPERATORIUM_BASE:~0,17%"=="http://127.0.0.1:" set "IMPERATORIUM_OK=1"
+if /i "%IMPERATORIUM_BASE:~0,17%"=="http://127.0.0.1/" set "IMPERATORIUM_OK=1"
+if /i "%IMPERATORIUM_BASE:~0,17%"=="http://localhost:" set "IMPERATORIUM_OK=1"
+if /i "%IMPERATORIUM_BASE:~0,17%"=="http://localhost/" set "IMPERATORIUM_OK=1"
+if /i "%IMPERATORIUM_BASE:~0,13%"=="http://[::1]:" set "IMPERATORIUM_OK=1"
+if /i "%IMPERATORIUM_BASE:~0,13%"=="http://[::1]/" set "IMPERATORIUM_OK=1"
+if not defined IMPERATORIUM_OK (
+  echo imperatorium: IMPERATORIUM_RELEASES must be an https:// address ^(or http:// on this machine^), not "%IMPERATORIUM_BASE%". Nothing was downloaded.
+  exit /b 1
+)
 set "IMPERATORIUM_PS1=%TEMP%\imperatorium-install-%RANDOM%.ps1"
 curl.exe -fsSL -o "%IMPERATORIUM_PS1%" "%IMPERATORIUM_BASE%/install.ps1" || exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File "%IMPERATORIUM_PS1%" -From "%IMPERATORIUM_BASE%" %*

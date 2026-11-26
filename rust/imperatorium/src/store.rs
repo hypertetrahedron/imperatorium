@@ -23,6 +23,12 @@ fn now() -> f64 {
 pub struct Store {
     pub path: PathBuf,
     data: Mutex<Map<String, Value>>,
+    /// The file is written outside `data`'s lock (a write can take most of
+    /// a second while a reader holds the file and the rename is retried):
+    /// each change is serialised under it with the next number, and the
+    /// writer skips a copy older than the one already on disk.
+    written: Mutex<u64>,
+    seq: std::sync::atomic::AtomicU64,
 }
 
 fn empty() -> Map<String, Value> {
@@ -73,6 +79,8 @@ impl Store {
         Ok(Store {
             path: path.to_path_buf(),
             data: Mutex::new(data),
+            written: Mutex::new(0),
+            seq: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -82,28 +90,40 @@ impl Store {
     }
 
     /// Store._flush_locked: an atomic replace (`paths::write_atomic`); written
-    /// in place rather than lose the state.
-    fn flush(&self, data: &Map<String, Value>) {
+    /// in place rather than lose the state. `text` is copy number `seq`;
+    /// nothing is written once a later copy is on disk (it has this change).
+    fn flush(&self, seq: u64, text: &[u8]) {
+        let mut written = self.written.lk();
+        if *written >= seq {
+            return;
+        }
         let dir = self
             .path
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let _ = std::fs::create_dir_all(&dir);
-        let Ok(text) = serde_json::to_vec_pretty(data) else {
-            return;
-        };
-        if crate::paths::write_atomic(&self.path, &text).is_ok() {
-            return;
+        if crate::paths::write_atomic(&self.path, text).is_err() {
+            let _ = std::fs::write(&self.path, text);
         }
-        let _ = std::fs::write(&self.path, &text);
+        *written = seq;
     }
 
+    /// Runs `f` on the state; when it says it changed something, the file
+    /// is written before this returns (by this call, or by a later change's
+    /// that already holds this one), but outside the state's lock.
     fn with<R>(&self, f: impl FnOnce(&mut Map<String, Value>) -> (R, bool)) -> R {
-        let mut data = self.data.lk();
-        let (r, dirty) = f(&mut data);
-        if dirty {
-            self.flush(&data);
+        let (r, copy) = {
+            let mut data = self.data.lk();
+            let (r, dirty) = f(&mut data);
+            let copy = dirty
+                .then(|| serde_json::to_vec_pretty(&*data).ok())
+                .flatten()
+                .map(|text| (self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1, text));
+            (r, copy)
+        };
+        if let Some((seq, text)) = copy {
+            self.flush(seq, &text);
         }
         r
     }

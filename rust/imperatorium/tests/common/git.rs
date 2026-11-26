@@ -1,6 +1,6 @@
 //! Git helpers for the worktree twins: a fixed author and date, a `git`
 //! that fails loudly, and the throwaway repositories the twins' scripts
-//! built (rust/conformance/worktree_twin.py and bg_worktree_twin.py).
+//! built (worktree_twin.py and bg_worktree_twin.py at `last-python`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

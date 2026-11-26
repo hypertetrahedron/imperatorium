@@ -1,4 +1,5 @@
-//! inbox_twin.py replayed: prompt delivery with no real session anywhere.
+//! Replays inbox_twin (answers frozen at `last-python`, see golden/README.md):
+//! prompt delivery with no real session anywhere.
 //! The made-up session records (golden/inbox_twin/records.json) point at
 //! named pipes this test serves; each queued prompt, hook, parked permission
 //! request, mod beat and check is sent in the recorded order and what the

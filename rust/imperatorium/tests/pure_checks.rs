@@ -1,6 +1,6 @@
 //! The pure checks, each a `*-check` subcommand fed the cases Python
-//! answered (goldens recorded by the matching rust/conformance script with
-//! --record):
+//! answered (goldens recorded at the git tag `last-python` by the matching
+//! rust/conformance script with --record):
 //!
 //!   settings_compare  settings.check over every field and awkward values
 //!   slash_compare     slash.parse / refusal / clean_typed / typed_refusal
