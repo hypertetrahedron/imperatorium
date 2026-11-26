@@ -342,16 +342,35 @@ pub fn main(args: &[String]) -> i32 {
     let mut pinned: Option<String> = None;
     let mut roll = false;
     let mut it = args.iter();
+    // A flag it does not know, or one missing its value, is an error: a
+    // trailing `--from` once fell back to GitHub's channel without a word.
     while let Some(a) = it.next() {
-        match a.as_str() {
-            "--check" => check = true,
-            "--channel" => channel = it.next().cloned().unwrap_or(channel),
-            "--from" => from = it.next().cloned(),
-            "--task-prefix" => prefix = it.next().cloned().unwrap_or(prefix),
-            "--force" => force = true,
-            "--version" => pinned = it.next().map(|v| v.trim().trim_start_matches('v').to_string()),
-            "--rollback" => roll = true,
-            _ => {}
+        let mut value = |name: &str| match it.next() {
+            Some(v) if !v.starts_with("--") => Ok(v.clone()),
+            _ => Err(format!("update: {name} needs a value")),
+        };
+        let got = match a.as_str() {
+            "--check" => {
+                check = true;
+                Ok(())
+            }
+            "--channel" => value("--channel").map(|v| channel = v),
+            "--from" => value("--from").map(|v| from = Some(v)),
+            "--task-prefix" => value("--task-prefix").map(|v| prefix = v),
+            "--force" => {
+                force = true;
+                Ok(())
+            }
+            "--version" => value("--version").map(|v| pinned = Some(v.trim().trim_start_matches('v').to_string())),
+            "--rollback" => {
+                roll = true;
+                Ok(())
+            }
+            other => Err(format!("update: unknown option {other:?} (see `imperatorium help`)")),
+        };
+        if let Err(e) = got {
+            eprintln!("{e}");
+            return 2;
         }
     }
     if roll {
@@ -411,6 +430,38 @@ pub fn main(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // Everything this release replaces is fetched and checked before any of
+    // it is swapped in: a voice or host build that fails its SHA-256 (or
+    // cannot be fetched) leaves the whole install as it was, not a new
+    // dispatcher beside an old worker.
+    let vname = if cfg!(windows) { "imperatorium-voice.exe" } else { "imperatorium-voice" };
+    let voice = exe.with_file_name(vname);
+    let mut extra: Vec<(PathBuf, Vec<u8>, &str)> = Vec::new();
+    if voice.is_file() {
+        match fetch(&base, &m, &format!("voice-{triple}")) {
+            Ok(Some(b)) => extra.push((voice.clone(), b, "SHA-256 checked")),
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("update: voice worker: {e} - nothing installed");
+                return 1;
+            }
+        }
+    }
+    // The hosts' builds, so the dispatcher pushes the matching version.
+    let targets: PathBuf = exe.parent().map(|d| d.join("targets")).unwrap_or_default();
+    for host_triple in ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] {
+        if host_triple == triple || !targets.join(host_triple).exists() && !cfg!(windows) {
+            continue;
+        }
+        match fetch(&base, &m, host_triple) {
+            Ok(Some(b)) => extra.push((targets.join(host_triple).join("imperatorium"), b, "for remote hosts")),
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("update: {host_triple}: {e} - nothing installed");
+                return 1;
+            }
+        }
+    }
     // The binary being replaced is kept for `--rollback` (a running exe can
     // be copied, just not overwritten).
     if exe.is_file() {
@@ -424,34 +475,10 @@ pub fn main(args: &[String]) -> i32 {
     }
     prune_old(&exe);
     println!("   {} ({} bytes, SHA-256 checked)", exe.display(), body.len());
-    // The voice worker, when one is installed beside us.
-    let vname = if cfg!(windows) { "imperatorium-voice.exe" } else { "imperatorium-voice" };
-    let voice = exe.with_file_name(vname);
-    if voice.is_file() {
-        match fetch(&base, &m, &format!("voice-{triple}")) {
-            Ok(Some(b)) => match write_beside_and_swap(&b, &voice) {
-                Ok(()) => println!("   {} (SHA-256 checked)", voice.display()),
-                Err(e) => eprintln!("   voice worker: {e}"),
-            },
-            Ok(None) => {}
-            Err(e) => eprintln!("   voice worker: {e}"),
-        }
-    }
-    // The hosts' builds, so the dispatcher pushes the matching version.
-    let targets: PathBuf = exe.parent().map(|d| d.join("targets")).unwrap_or_default();
-    for host_triple in ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"] {
-        if host_triple == triple || !targets.join(host_triple).exists() && !cfg!(windows) {
-            continue;
-        }
-        match fetch(&base, &m, host_triple) {
-            Ok(Some(b)) => {
-                let dst = targets.join(host_triple).join("imperatorium");
-                if write_beside_and_swap(&b, &dst).is_ok() {
-                    println!("   {} (for remote hosts)", dst.display());
-                }
-            }
-            Ok(None) => {}
-            Err(e) => eprintln!("   {host_triple}: {e}"),
+    for (dst, b, note) in &extra {
+        match write_beside_and_swap(b, dst) {
+            Ok(()) => println!("   {} ({note})", dst.display()),
+            Err(e) => eprintln!("   {}: {e}", dst.display()),
         }
     }
     restart_services(&prefix);
@@ -462,6 +489,16 @@ pub fn main(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Refused before anything is fetched: no network in this test.
+    #[test]
+    fn unknown_options_and_missing_values_are_errors() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(main(&args(&["--bogus"])), 2);
+        assert_eq!(main(&args(&["--check", "--from"])), 2);
+        assert_eq!(main(&args(&["--from", "--check"])), 2);
+        assert_eq!(main(&args(&["--version"])), 2);
+    }
 
     #[test]
     fn versions_order() {

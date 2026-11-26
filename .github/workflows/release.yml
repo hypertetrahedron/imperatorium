@@ -22,6 +22,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.100.0"   # as check.yml
+  # The Authenticode subject of our certificate (rust/release/sign.ps1 and
+  # docs/releasing.md name it too): the signing check and the smoke test
+  # compare against this one value.
+  SIGNER: "CN=Lester Wilhelm, O=Lester Wilhelm, L=Sandy Springs, S=ga, C=US"
 
 jobs:
   # Is this tag a real release? Format, branch, and version all have to agree
@@ -66,6 +70,8 @@ jobs:
   check:
     needs: validate
     uses: ./.github/workflows/check.yml
+    with:
+      release: true   # skips the audit and coverage reports, which must not hold back a hotfix
 
   # Builds, then Authenticode-signs both exes with Azure Artifact Signing
   # (docs/releasing.md, "Code signing"). Azure trusts this job through OIDC
@@ -80,8 +86,6 @@ jobs:
     permissions:
       contents: read
       id-token: write       # azure/login (OIDC)
-    env:
-      SIGNER: "CN=Lester Wilhelm, O=Lester Wilhelm, L=Sandy Springs, S=ga, C=US"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust ${{ env.RUST_TOOLCHAIN }}
@@ -233,6 +237,9 @@ jobs:
     needs: [validate, windows, linux, macos]
     if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
+    # The environment holds IMPERATORIUM_SIGNING_KEY (as a secret of the
+    # environment, not the repository), so only a v* tag run can read it.
+    environment: release
     permissions:
       contents: read
       id-token: write       # attest-build-provenance
@@ -310,7 +317,19 @@ jobs:
           printf '#!/bin/sh\necho "2.1.326 (Claude Code)"\n' > "$RUNNER_TEMP/standin/claude"
           chmod +x "$RUNNER_TEMP/standin/claude"
           export PATH="$RUNNER_TEMP/standin:$PATH"
-          (cd dist && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
+          # A flat static server in node (on the runner, no Python): the
+          # release folder has no subfolders, so only the last path segment counts.
+          cat > "$RUNNER_TEMP/serve.js" <<'EOF'
+          const http = require('http'), fs = require('fs'), path = require('path');
+          const [root, port] = process.argv.slice(2);
+          http.createServer((req, res) => {
+            const name = path.basename(decodeURIComponent(req.url.split('?')[0]));
+            fs.readFile(path.join(root, name), (err, data) => {
+              if (err) { res.writeHead(404); res.end(); } else { res.writeHead(200); res.end(data); }
+            });
+          }).listen(Number(port), '127.0.0.1');
+          EOF
+          node "$RUNNER_TEMP/serve.js" dist "$port" >/dev/null 2>&1 &
           server=$!
           for _ in $(seq 1 50); do
             curl -fs "http://127.0.0.1:$port/manifest.json" >/dev/null && break
@@ -338,7 +357,6 @@ jobs:
         shell: pwsh
         env:
           SIGNING: ${{ vars.AZURE_CLIENT_ID }}
-          SIGNER: "CN=Lester Wilhelm, O=Lester Wilhelm, L=Sandy Springs, S=ga, C=US"
         run: |
           $ErrorActionPreference = 'Stop'
           $port = 18765
@@ -351,7 +369,19 @@ jobs:
           New-Item -ItemType Directory -Force $standin | Out-Null
           Set-Content -Path (Join-Path $standin 'claude.cmd') -Value '@echo 2.1.326 (Claude Code)' -Encoding ascii
           $env:PATH = "$standin;$env:PATH"
-          $server = Start-Process python -ArgumentList '-m', 'http.server', "$port", '--bind', '127.0.0.1', '--directory', 'dist' -PassThru -WindowStyle Hidden
+          # The same flat node static server as smoke-linux (no Python).
+          $serve = Join-Path $env:RUNNER_TEMP 'serve.js'
+          Set-Content -Path $serve -Encoding ascii -Value @'
+          const http = require('http'), fs = require('fs'), path = require('path');
+          const [root, port] = process.argv.slice(2);
+          http.createServer((req, res) => {
+            const name = path.basename(decodeURIComponent(req.url.split('?')[0]));
+            fs.readFile(path.join(root, name), (err, data) => {
+              if (err) { res.writeHead(404); res.end(); } else { res.writeHead(200); res.end(data); }
+            });
+          }).listen(Number(port), '127.0.0.1');
+          '@
+          $server = Start-Process node -ArgumentList $serve, 'dist', "$port" -PassThru -WindowStyle Hidden
           try {
             $up = $false
             foreach ($i in 1..50) {

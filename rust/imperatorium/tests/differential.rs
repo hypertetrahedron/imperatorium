@@ -1,5 +1,7 @@
-//! Python policy vs the binary on the 86k-case generated corpus
-//! (rust/conformance/differential.py). The golden (differential/) holds the
+//! The binary's policy on the 86k-case generated corpus, against the answers
+//! the Python policy gave (recorded at the git tag `last-python`, where
+//! rust/conformance/differential.py generated them). The golden
+//! (differential/) holds the
 //! lists the cases are crossed from (spec.json), Python's distinct answers
 //! (answers.json) and one index per case (index.txt: twice the answer's
 //! index, plus one when the documented, stricter choices in policy.rs
@@ -33,6 +35,20 @@ fn drive_relative_elsewhere(request: &Value) -> bool {
                 && drive(s) != here
         })
     })
+}
+
+/// A shell command the 2026-11-25 rules ask about where Python allowed it, or
+/// ask about for another reason: a lone `&` or a `\r` between commands, a
+/// `NAME=value` prefix outside the benign list, PowerShell's `(...)`/`{...}`.
+fn stricter_since_2026_11_25(request: &Value, answer: &Value) -> bool {
+    let command = request["tool_input"]["command"].as_str().unwrap_or("");
+    let lone_amp = command
+        .char_indices()
+        .any(|(i, c)| c == '&' && !command[..i].ends_with('&') && !command[i + 1..].starts_with('&'));
+    matches!(
+        answer[1].as_str(),
+        Some("sets an environment variable for the command" | "runs an expression or script block")
+    ) || (answer[0] == "ask" && (lone_amp || command.contains('\r')))
 }
 
 fn arr(v: &Value) -> &Vec<Value> {
@@ -153,7 +169,9 @@ fn generated_corpus_decides_as_python_does() {
         } else {
             "STRICTER"
         };
-        let explained = explained || (kind == "STRICTER" && drive_relative_elsewhere(request));
+        let explained = explained
+            || (kind == "STRICTER" && drive_relative_elsewhere(request))
+            || (kind != "LOOSER" && stricter_since_2026_11_25(request, rs));
         if kind != "LOOSER" && !explained {
             kind = if kind == "REASON" {
                 "UNEXPLAINED REASON"

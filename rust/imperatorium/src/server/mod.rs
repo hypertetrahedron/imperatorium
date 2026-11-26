@@ -117,7 +117,8 @@ pub struct Shared {
     history: history::Index,
     /// config.json as this process applies it: what was there at start, with
     /// the settings a save applies at once (Control._apply_settings).
-    config_live: std::sync::RwLock<Value>,
+    /// Shared, not copied, by each reader (`config()`); a save replaces it.
+    config_live: std::sync::RwLock<Arc<Value>>,
     /// Processes a saved setting waits on (Control._restart_needed).
     restart_needed: Mutex<std::collections::BTreeSet<String>>,
     settings_lock: Mutex<()>,
@@ -266,7 +267,7 @@ impl Shared {
             },
             home: home.map(str::to_string),
             history: history::Index::new(),
-            config_live: std::sync::RwLock::new(load_config(home)),
+            config_live: std::sync::RwLock::new(Arc::new(load_config(home))),
             restart_needed: Default::default(),
             settings_lock: Default::default(),
             add_job: Default::default(),
@@ -443,6 +444,14 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
     let addr = format!("{host}:{port}");
     let shared = Arc::new(Shared::new(home, state, live));
     let _ = shared.me.set(Arc::downgrade(&shared));
+    // Where the mod finds us, beside the token it reads (a test copy's in
+    // its own folder, as its token is).
+    if let (Some(store), Some(_)) = (&shared.store, &shared.modlink) {
+        if let Some(dir) = store.path.parent() {
+            let url = crate::modlink::endpoint_url(host, port) + "\n";
+            let _ = paths::write_atomic(&dir.join(crate::modlink::ENDPOINT_FILE), url.as_bytes());
+        }
+    }
     if shared.store.is_some() {
         // Only once the port is ours, as in Python: a second dispatcher that
         // failed to bind never runs a second set of gh calls or a model.
@@ -456,9 +465,18 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
         std::thread::spawn(move || {
             // Control.warm_spend: read the transcripts once at start.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let now = Shared::now();
-                let limits = warm.usage.summary(now)["limits"].clone();
-                warm.spend(now, 120.0, &limits);
+                // 120 s at most, a quarter second at a time: the ledger's
+                // lock is let go between slices, so the window's spend,
+                // usage and matrix are not held up behind the first read.
+                let started = std::time::Instant::now();
+                while started.elapsed().as_secs_f64() < 120.0 {
+                    let now = Shared::now();
+                    let limits = warm.usage.summary(now)["limits"].clone();
+                    if warm.spend(now, 0.25, &limits)["complete"] == json!(true) {
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
             }));
         });
         if crate::account_spend::wanted() {
@@ -477,7 +495,7 @@ pub fn serve(host: &str, port: u16, home: Option<&str>, state: Option<&str>, liv
             });
         }
         let me = Arc::downgrade(&shared);
-        shared.updates.start(move || me.upgrade().map(|s| s.config()));
+        shared.updates.start(move || me.upgrade().map(|s| (*s.config()).clone()));
         let sweeper = Arc::clone(&shared);
         std::thread::spawn(move || {
             // A sweep that panics is tried again next time; each distinct

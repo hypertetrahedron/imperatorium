@@ -27,6 +27,13 @@ main() {
     version="${IMPERATORIUM_VERSION:-}"
     if [ -n "${IMPERATORIUM_RELEASES:-}" ]; then
         base="${IMPERATORIUM_RELEASES%/}"
+        # The binary is run after a checksum that comes from the same place, so
+        # a base that can be altered in transit would hand over the machine:
+        # https, or http on this machine (the local server of CI's smoke tests).
+        case "$base" in
+            https://* | http://127.0.0.1 | http://127.0.0.1[:/]* | http://localhost | http://localhost[:/]* | "http://[::1]" | "http://[::1]"[:/]*) ;;
+            *) echo "imperatorium: IMPERATORIUM_RELEASES must be an https:// address (or http:// on this machine), not '$base'. Nothing was downloaded." >&2; exit 1 ;;
+        esac
     elif [ -n "$version" ]; then
         base="$repo/download/v${version#v}"
     elif [ "$channel" = "preview" ]; then

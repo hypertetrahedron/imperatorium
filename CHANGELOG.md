@@ -101,6 +101,25 @@ The first release of the native build: 0.4.0.
 
 ### Fixed
 
+- Auto-approval no longer lets a chained command through as read-only. A lone
+  `&` and a carriage return now separate commands as `;` does, a leading
+  `NAME=value` other than a short list of harmless variables (`CI`,
+  `NO_COLOR`, `LANG`, ...) is asked about (`GIT_EXTERNAL_DIFF=x git diff` runs
+  `x`), and PowerShell's `(...)` and `{...}` are asked about.
+- Text from a session (a Bash command in a tile, a tool's output) can no
+  longer close an HTML attribute in the window, and the window's pages carry a
+  Content-Security-Policy that runs only the dispatcher's own scripts.
+- `imperatorium install-hooks` replaces `settings.json` atomically, and a
+  `settings.json` that is valid JSON but not an object is refused rather than
+  overwritten. Only the five newest `settings.json` backups are kept.
+- A remote host whose ssh destination or container name starts with `-` (an
+  option to ssh or docker) is left out, wherever the configuration came from.
+- The pull-request badge no longer runs git through Git for Windows' wrapper,
+  or gh through a scoop shim; the Changes tab runs one git a refresh instead of
+  six, and none while the window is hidden.
+- `imperatorium update` fetches and checks every file it replaces before it
+  replaces any, and refuses an option it does not know (a trailing `--from`
+  once fell back to the default channel).
 - A finished session that Claude Code compacted while idle no longer turns
   from "complete" to "ready" with a "new" badge. The compaction makes the
   session busy for a moment with no prompt and no turn. That used to clear its
@@ -113,6 +132,8 @@ The first release of the native build: 0.4.0.
 
 ### Breaking
 
+- `imperatorium serve` needs `--live` or `--state FILE`; the read-only shadow
+  it started without them is gone.
 - The Python implementation is gone from this line (the last version with it is
   the tag `last-python`). Install the native binary with the install script.
 

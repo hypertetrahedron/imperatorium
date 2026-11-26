@@ -124,6 +124,21 @@ impl Shared {
         Some(history::plain_text(&conversation::merge_turns(raw)))
     }
 
+    /// The merged conversation, from the cache when it holds this
+    /// transcript as it is, else read and not remembered: for a sweep over
+    /// many sessions (Insights' tool failures) that must not push out the
+    /// ones the window is showing.
+    pub(super) fn merged_uncached(&self, sid: &str) -> Result<Vec<Value>, String> {
+        let stamp = self.stamp(sid);
+        if let Some(st) = &stamp {
+            let hit = self.convs.lk().get(sid).filter(|c| &c.stamp == st).cloned();
+            if let Some(c) = hit {
+                return Ok(c.merged.clone());
+            }
+        }
+        Ok(conversation::merge_turns(Self::read_items(sid)?))
+    }
+
     pub(super) fn api_conversation(&self, q: &HashMap<String, String>) -> (u16, Body) {
         let session = q.get("session").cloned().unwrap_or_default();
         if session.is_empty() {
@@ -370,7 +385,16 @@ pub(super) struct Cached {
 
 /// convcache.signature: sha1 of json.dumps(items, sort_keys=True), 16 hex.
 pub fn signature(items: &[Value]) -> String {
-    let text = json_dumps_sorted(&Value::Array(items.to_vec()));
+    // The list written item by item, as json.dumps writes one ("[a, b]"):
+    // the same bytes as dumping a copy of it, without the copy.
+    let mut text = String::from("[");
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&json_dumps_sorted(item));
+    }
+    text.push(']');
     let digest = Sha1::digest(text.as_bytes());
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }

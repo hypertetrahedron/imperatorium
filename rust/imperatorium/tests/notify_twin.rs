@@ -1,4 +1,5 @@
-//! notify_twin.py replayed: the hooks and /api/notify calls the script made,
+//! Replays notify_twin (answers frozen at `last-python`, see golden/README.md):
+//! the hooks and /api/notify calls the recording made,
 //! the pushes the binary sends to a fake ntfy server (title, priority, tags,
 //! token, message), the counters, and the events it keeps, each as Python
 //! produced them (golden/notify_twin/steps.jsonl).

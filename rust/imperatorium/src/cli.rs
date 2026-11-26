@@ -887,7 +887,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("Service", "stop", "[all|dispatcher|streamdeck|hotkey] [--task-prefix P]", "Stop it; it stays down until `start` (a Windows task is disabled so its heartbeat does not revive it)"),
     ("Service", "restart", "[all|dispatcher|streamdeck|hotkey] [--task-prefix P]", "Stop then start; waits for the dispatcher to answer"),
     ("Service", "run", "[--host H] [--port N]", "Run the dispatcher in this terminal, for debugging (stop the service first)"),
-    ("Service", "serve", "[--port N] [--host H] [--home DIR] [--state FILE] [--live]", "The dispatcher and window (what the service runs); without --live a shadow with its own state"),
+    ("Service", "serve", "[--port N] [--host H] [--home DIR] [--state FILE] [--live]", "The dispatcher and window (what the service runs); --state FILE for a separate copy with its own state"),
     ("Service", "service", "install|uninstall|restart|status [--streamdeck] [--no-hotkey] [--dry-run] [-y]", "Register or remove the start-at-logon service"),
     ("Setup", "install", "[--yes] [--dry-run] [--home DIR] [--root DIR]... [--no-service] [...]", "Install on this machine: binary, config, Claude Code hooks, service"),
     ("Setup", "uninstall", "[--yes] [--dry-run] [--purge]", "Remove hooks, mod and service (config and state are kept; --purge removes them too)"),

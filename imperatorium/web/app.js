@@ -3461,19 +3461,29 @@ async function tick(){
     if (!streamUp) gotSessions((await get("/api/sessions")).sessions || []);
     // A session that never started is given up on even with no news.
     else if (provisional.some(p => p.until && Date.now() > p.until)) gotSessions(sessions.filter(x => !x.provisional));
-    else drawSessions();  // ages on the tiles keep counting between pushes
-    if (ticks % 3 === 0) drawMeter();
-    if (ticks % 2 === 0) drawPending();
-    if (ticks % 2 === 1) loadFleet();
-    if (ticks % 20 === 0) loadPrefs();
-    if (ticks % 7 === 0) checkBoot(reloadForNewDispatcher);
-    loadStatus(false);
-    await refreshTab(false);
+    else if (!document.hidden) drawSessions();  // ages on the tiles keep counting between pushes
+    // Hidden, the window keeps only its session list: the meter, approvals,
+    // fleet, status panel and open tab (a git or transcript read each, the
+    // Changes tab five git a time) wait until it is looked at again.
+    if (!document.hidden) {
+      if (ticks % 3 === 0) drawMeter();
+      if (ticks % 2 === 0) drawPending();
+      if (ticks % 2 === 1) loadFleet();
+      if (ticks % 20 === 0) loadPrefs();
+      if (ticks % 7 === 0) checkBoot(reloadForNewDispatcher);
+      loadStatus(false);
+      await refreshTab(false);
+    }
     noteDown(false);
   } catch (e) { /* dispatcher restarting; the page keeps what it has */ if (e && e.down) noteDown(true); }
   ticks++;
   setTimeout(tick, 1500);
 }
+// Shown again: catch up at once rather than at the next tick.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  try { drawSessions(); drawPending(); loadStatus(true); refreshTab(true); } catch (e) {}
+});
 
 async function loadPrefs(){
   try { const r = await get("/api/prefs"); Object.assign(prefs, r.prefs || {}); } catch (e) {}

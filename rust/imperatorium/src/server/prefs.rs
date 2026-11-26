@@ -3,9 +3,9 @@
 use super::*;
 
 impl Shared {
-    /// The config as applied now.
-    pub(super) fn config(&self) -> Value {
-        self.config_live.rd().clone()
+    /// The config as applied now: a reference, never a copy of the whole.
+    pub(super) fn config(&self) -> Arc<Value> {
+        Arc::clone(&self.config_live.rd())
     }
 
     /// Control.save_settings: check every change, write config.json once,
@@ -63,7 +63,8 @@ impl Shared {
             "worktrees.confirm",
             "roots",
         ];
-        let mut cfg = self.config_live.wr();
+        let mut live = self.config_live.wr();
+        let cfg = Arc::make_mut(&mut live);
         let mut copy = |key: &str| {
             let parts: Vec<&str> = key.split('.').collect();
             let Some((last, path)) = parts.split_last() else {
@@ -110,7 +111,7 @@ impl Shared {
         }
         // The notifier always takes its channels from the new file.
         copy("notify");
-        drop(cfg);
+        drop(live);
         let flips: Map<String, Value> = changes
             .iter()
             .filter(|(k, _)| *k == "notify.ntfy.enabled" || *k == "notify.speak.enabled")

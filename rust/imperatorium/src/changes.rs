@@ -29,29 +29,47 @@ pub(crate) const MAX_DIFF: usize = 400 * 1024;
 /// real git run with what the wrapper would have given it: its `bin` and
 /// `usr\bin` ahead on PATH (for sh, ssh, credential helpers), MSYSTEM and
 /// PLINK_PROTOCOL. The same leak is why [`current_branch`] reads HEAD
-/// rather than run git on every poll.
+/// rather than run git on every poll, and why [`prefer_real_git`] is given
+/// to programs that run git themselves (gh).
 fn git_command() -> Command {
-    let found = crate::launch::which("git").map(std::path::PathBuf::from);
-    match found.as_deref().and_then(real_git) {
+    match found_real_git() {
         Some(real) => {
             let mut c = Command::new(&real.exe);
-            let mut path = std::ffi::OsString::from(real.bin.as_os_str());
-            path.push(";");
-            path.push(real.usr_bin.as_os_str());
-            if let Some(p) = std::env::var_os("PATH") {
-                path.push(";");
-                path.push(p);
-            }
-            c.env("PATH", path);
-            if std::env::var_os("MSYSTEM").is_none() {
-                c.env("MSYSTEM", real.msystem);
-            }
-            if std::env::var_os("PLINK_PROTOCOL").is_none() {
-                c.env("PLINK_PROTOCOL", "ssh");
-            }
+            real_git_env(&mut c, &real);
             c
         }
         None => Command::new("git"),
+    }
+}
+
+/// For a program that runs git itself: the real git first on its PATH, with
+/// the environment the wrapper would give it, so its git calls skip the
+/// wrapper too. Nothing changes where PATH already finds the real git.
+pub fn prefer_real_git(c: &mut Command) {
+    if let Some(real) = found_real_git() {
+        real_git_env(c, &real);
+    }
+}
+
+fn found_real_git() -> Option<RealGit> {
+    let found = crate::launch::which_real("git").map(std::path::PathBuf::from)?;
+    real_git(&found)
+}
+
+fn real_git_env(c: &mut Command, real: &RealGit) {
+    let mut path = std::ffi::OsString::from(real.bin.as_os_str());
+    path.push(";");
+    path.push(real.usr_bin.as_os_str());
+    if let Some(p) = std::env::var_os("PATH") {
+        path.push(";");
+        path.push(p);
+    }
+    c.env("PATH", path);
+    if std::env::var_os("MSYSTEM").is_none() {
+        c.env("MSYSTEM", real.msystem);
+    }
+    if std::env::var_os("PLINK_PROTOCOL").is_none() {
+        c.env("PLINK_PROTOCOL", "ssh");
     }
 }
 
@@ -108,23 +126,176 @@ enum Head {
 }
 
 fn head_branch(cwd: &std::path::Path) -> Head {
-    let Ok(start) = std::path::absolute(cwd) else { return Head::AskGit };
+    match locate(cwd) {
+        Located::Dir { git, .. } => head_in(&git),
+        Located::NoRepo => Head::NoRepo,
+        Located::AskGit => Head::AskGit,
+    }
+}
+
+enum Located {
+    /// The repository's git directory (a worktree's own, for a worktree) and
+    /// the top of its working tree (None for a bare repository).
+    Dir { git: std::path::PathBuf, top: Option<std::path::PathBuf> },
+    NoRepo,
+    AskGit,
+}
+
+fn locate(cwd: &std::path::Path) -> Located {
+    let Ok(start) = std::path::absolute(cwd) else { return Located::AskGit };
     for dir in start.ancestors() {
         let dotgit = dir.join(".git");
         if dotgit.is_dir() {
-            return head_in(&dotgit);
+            return Located::Dir { git: dotgit, top: Some(dir.to_path_buf()) };
         }
         if dotgit.is_file() {
             // A worktree or submodule: "gitdir: <path>", maybe relative.
-            let Ok(text) = std::fs::read_to_string(&dotgit) else { return Head::AskGit };
-            let Some(gitdir) = text.trim_end().strip_prefix("gitdir:") else { return Head::AskGit };
-            return head_in(&dir.join(gitdir.trim()));
+            let Ok(text) = std::fs::read_to_string(&dotgit) else { return Located::AskGit };
+            let Some(gitdir) = text.trim_end().strip_prefix("gitdir:") else {
+                return Located::AskGit;
+            };
+            return Located::Dir { git: dir.join(gitdir.trim()), top: Some(dir.to_path_buf()) };
         }
         if dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir() {
-            return head_in(dir); // a bare repository
+            return Located::Dir { git: dir.to_path_buf(), top: None }; // a bare repository
         }
     }
-    Head::NoRepo
+    Located::NoRepo
+}
+
+/// `(OWNER/NAME, head branch)` for `gh pr view <branch> --repo OWNER/NAME`,
+/// read from the repository's files, so gh need not run git to find them
+/// (each git it runs is a console program started by a console program:
+/// see [`git_command`]). Only where the answer is the one gh would reach
+/// itself: a branch checked out, one github.com remote or the one gh
+/// recorded as the base (`gh-resolved = base`), no `[include]`. None
+/// otherwise, and gh works it out as before.
+pub fn github_target(cwd: &str) -> Option<(String, String)> {
+    let Located::Dir { git: gitdir, .. } = locate(std::path::Path::new(cwd)) else { return None };
+    let Head::Branch(branch) = head_in(&gitdir) else { return None };
+    // Empty is detached; a leading '-' (git refuses one) would read as a flag.
+    if branch.is_empty() || branch.starts_with('-') {
+        return None;
+    }
+    let config = std::fs::read_to_string(common_dir(&gitdir).join("config")).ok()?;
+    target_from_config(&config, &branch)
+}
+
+/// Where a worktree's repository keeps what all its worktrees share (refs,
+/// config): `commondir` names it; the git directory itself otherwise.
+fn common_dir(gitdir: &std::path::Path) -> std::path::PathBuf {
+    match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(rel) => gitdir.join(rel.trim()),
+        Err(_) => gitdir.to_path_buf(),
+    }
+}
+
+/// The commit HEAD names, read from the files: a detached id, a loose ref
+/// or a `packed-refs` line. None for anything else (an unborn branch,
+/// reftable), which only git can answer.
+fn head_oid(gitdir: &std::path::Path) -> Option<String> {
+    let is_oid = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|c| c.is_ascii_hexdigit());
+    let text = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
+    let head = text.trim_end();
+    if is_oid(head) {
+        return Some(head.to_string());
+    }
+    let target = head.strip_prefix("ref: ")?.trim();
+    if !target.starts_with("refs/heads/") || target.contains("..") {
+        return None;
+    }
+    let common = common_dir(gitdir);
+    if let Ok(loose) = std::fs::read_to_string(common.join(target)) {
+        return is_oid(loose.trim_end()).then(|| loose.trim_end().to_string());
+    }
+    let packed = std::fs::read_to_string(common.join("packed-refs")).ok()?;
+    packed.lines().find_map(|line| {
+        let (oid, name) = line.split_once(' ')?;
+        (name.trim_end() == target && is_oid(oid)).then(|| oid.to_string())
+    })
+}
+
+/// [`github_target`]'s reading of a git config file.
+fn target_from_config(config: &str, branch: &str) -> Option<(String, String)> {
+    struct Remote {
+        slug: Option<String>,
+        base: bool,
+    }
+    let mut remotes: Vec<Remote> = Vec::new();
+    let mut merge: Option<String> = None;
+    enum Sect {
+        Remote,
+        Branch,
+        Other,
+    }
+    let mut sect = Sect::Other;
+    for raw in config.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(['#', ';']) {
+            continue;
+        }
+        if let Some(head) = line.strip_prefix('[') {
+            let head = head.split(']').next()?.trim();
+            let (kind, sub) = match head.split_once(char::is_whitespace) {
+                Some((k, s)) => (k.to_ascii_lowercase(), s.trim().trim_matches('"').to_string()),
+                None => (head.to_ascii_lowercase(), String::new()),
+            };
+            sect = match kind.as_str() {
+                "include" | "includeif" => return None,
+                "remote" => {
+                    remotes.push(Remote { slug: None, base: false });
+                    Sect::Remote
+                }
+                "branch" if sub == branch => Sect::Branch,
+                _ => Sect::Other,
+            };
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim().trim_matches('"');
+        match sect {
+            Sect::Remote => {
+                let r = remotes.last_mut()?;
+                match key.as_str() {
+                    "url" => r.slug = github_slug(value),
+                    "gh-resolved" => r.base = value == "base",
+                    _ => {}
+                }
+            }
+            Sect::Branch if key == "merge" => {
+                merge = value.strip_prefix("refs/heads/").map(str::to_string);
+            }
+            _ => {}
+        }
+    }
+    let on_github: Vec<&Remote> = remotes.iter().filter(|r| r.slug.is_some()).collect();
+    let chosen = match on_github.iter().find(|r| r.base) {
+        Some(r) => *r,
+        // One remote only: with a fork beside its upstream, gh's choice of
+        // base depends on more than this file.
+        None if on_github.len() == 1 && remotes.len() == 1 => on_github[0],
+        None => return None,
+    };
+    Some((chosen.slug.clone()?, merge.unwrap_or_else(|| branch.to_string())))
+}
+
+/// OWNER/NAME of a github.com remote URL (https, ssh or scp form).
+fn github_slug(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("git@github.com:"))?;
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let (owner, name) = rest.split_once('/')?;
+    let ok = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    };
+    (ok(owner) && ok(name)).then(|| format!("{owner}/{name}"))
 }
 
 fn head_in(gitdir: &std::path::Path) -> Head {
@@ -277,19 +448,100 @@ fn parse_numstat(text: &str) -> Map<String, Value> {
 type Read = (Map<String, Value>, Map<String, Value>, String, Vec<Value>);
 
 /// changes.changes(cwd): everything uncommitted, ready for the window.
+/// What the last [`changes`] of a folder was read from: `git status`'s
+/// output, the commit HEAD names and the size and time of every file status
+/// lists. While all three hold, the diff, numstat and log would come out the
+/// same, so only `git status` is run (the window asks every 6 s while the
+/// Changes tab is open: five git a time without this).
+#[derive(PartialEq)]
+struct Seen {
+    status: String,
+    head: String,
+    stamps: Vec<Option<(u64, std::time::SystemTime)>>,
+}
+
+fn seen(cwd: &str, status_out: &str, status: &Map<String, Value>) -> Option<Seen> {
+    let Located::Dir { git, top: Some(top) } = locate(std::path::Path::new(cwd)) else {
+        return None;
+    };
+    let head = head_oid(&git)?;
+    let files = status.get("files").and_then(Value::as_array)?;
+    let stamps = files
+        .iter()
+        .map(|f| {
+            let m = std::fs::metadata(top.join(f["path"].as_str().unwrap_or(""))).ok()?;
+            Some((m.len(), m.modified().ok()?))
+        })
+        .collect();
+    Some(Seen { status: status_out.to_string(), head, stamps })
+}
+
+fn changes_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (Seen, Value)>> {
+    static C: OnceLock<std::sync::Mutex<std::collections::HashMap<String, (Seen, Value)>>> =
+        OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+/// `git rev-parse --is-inside-work-tree`, answered from the files where they
+/// are plain (a `.git` folder or file above `cwd`), git otherwise.
+fn in_work_tree(cwd: &str) -> bool {
+    match locate(std::path::Path::new(cwd)) {
+        Located::Dir { top: Some(_), .. } => true,
+        Located::NoRepo => false,
+        _ => is_repo(cwd),
+    }
+}
+
 pub fn changes(cwd: &str) -> Value {
+    use crate::locks::LockExt;
     if cwd.is_empty() || !std::path::Path::new(cwd).is_dir() {
         return json!({"ok": false, "error": "no working directory for this session"});
     }
-    if !is_repo(cwd) {
+    if !in_work_tree(cwd) {
         return json!({"ok": true, "repo": false, "files": [], "diff": ""});
     }
+    let key = paths::abs_normcase(cwd).unwrap_or_else(|| cwd.to_string());
+    // One read of a folder at a time: selecting a session and opening its
+    // Changes tab ask within the same moment, and both missed the cache and
+    // ran the whole read (10 git for 5; seen on a test dispatcher).
+    let turn = {
+        static TURNS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>> =
+            OnceLock::new();
+        let mut turns = TURNS.get_or_init(Default::default).lk();
+        if turns.len() > 64 {
+            turns.retain(|_, t| std::sync::Arc::strong_count(t) > 1);
+        }
+        std::sync::Arc::clone(turns.entry(key.clone()).or_default())
+    };
+    let _mine = turn.lk();
+    let status_out =
+        match git(cwd, &["status", "--porcelain=v1", "-b", "--untracked-files=all"], true) {
+            Ok(s) => s,
+            Err(e) => return json!({"ok": false, "error": e}),
+        };
+    let now = seen(cwd, &status_out, &parse_status(&status_out));
+    if let Some(now) = &now {
+        if let Some((was, value)) = changes_cache().lk().get(&key) {
+            if was == now {
+                return value.clone();
+            }
+        }
+    }
+    let value = changes_read(cwd, &status_out);
+    if let Some(now) = now.filter(|_| value["ok"] == json!(true)) {
+        let mut cache = changes_cache().lk();
+        if cache.len() >= 32 && !cache.contains_key(&key) {
+            cache.clear();
+        }
+        cache.insert(key, (now, value.clone()));
+    }
+    value
+}
+
+/// [`changes`] in full, from `git status`'s output.
+fn changes_read(cwd: &str, status_out: &str) -> Value {
     let run = || -> Result<Read, String> {
-        let status = parse_status(&git(
-            cwd,
-            &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
-            true,
-        )?);
+        let status = parse_status(status_out);
         let has_head =
             !crate::pyish::strip(&git(cwd, &["rev-parse", "--verify", "-q", "HEAD"], false)?)
                 .is_empty();
@@ -698,6 +950,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn github_target_reads_one_remote_or_the_resolved_base() {
+        let one = "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = https://github.com/o/r.git\n\
+                   \tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"feat\"]\n\tremote = origin\n\
+                   \tmerge = refs/heads/feat-pushed\n";
+        assert_eq!(target_from_config(one, "feat"), Some(("o/r".into(), "feat-pushed".into())));
+        assert_eq!(target_from_config(one, "main"), Some(("o/r".into(), "main".into())));
+        let ssh = "[remote \"origin\"]\nurl = git@github.com:o/r\n";
+        assert_eq!(target_from_config(ssh, "b"), Some(("o/r".into(), "b".into())));
+        // A fork beside its upstream: only gh's recorded base is trusted.
+        let two = "[remote \"origin\"]\nurl = git@github.com:me/r.git\n\
+                   [remote \"upstream\"]\nurl = https://github.com/o/r\n";
+        assert_eq!(target_from_config(two, "b"), None);
+        let resolved = format!("{two}\tgh-resolved = base\n");
+        assert_eq!(target_from_config(&resolved, "b"), Some(("o/r".into(), "b".into())));
+        for none in [
+            "[remote \"origin\"]\nurl = https://gitlab.com/o/r\n",
+            "[include]\npath = other\n[remote \"origin\"]\nurl = https://github.com/o/r\n",
+            "[remote \"origin\"]\nurl = https://github.com/-o/r\n",
+            "",
+        ] {
+            assert_eq!(target_from_config(none, "b"), None, "{none:?}");
+        }
+    }
+
+    /// This checkout: the same repository and branch gh would find itself.
+    #[test]
+    fn github_target_of_this_checkout_names_its_branch() {
+        let here = env!("CARGO_MANIFEST_DIR");
+        let Some((repo, branch)) = github_target(here) else { return }; // detached, or no single remote
+        assert!(repo.contains('/') && !branch.is_empty(), "{repo} {branch}");
+    }
+
+    #[test]
     fn status_lines() {
         let s = parse_status(
             "## main...origin/main [ahead 2, behind 1]\n M a.py\nR  old -> new\n?? \"sp ace\"\n",
@@ -858,6 +1143,35 @@ mod tests {
         sh(&feat, &["add", "feat.txt"]);
         sh(&feat, &["commit", "-q", "-m", "feat work"]);
         (top, m, feat)
+    }
+
+    /// The cache answers only while nothing it was read from has moved: a
+    /// second edit of a file already listed as modified, a commit, and a
+    /// worktree's own HEAD each give a fresh read.
+    #[test]
+    fn changes_cache_follows_edits_commits_and_worktrees() {
+        let (top, main, feat) = repo_with_feature();
+        let f = std::path::Path::new(&main).join("f.txt");
+        std::fs::write(&f, "two\n").unwrap();
+        let first = changes(&main);
+        assert!(first["diff"].as_str().unwrap().contains("+two"), "{first}");
+        assert_eq!(changes(&main), first);
+        std::fs::write(&f, "three, longer\n").unwrap();
+        let second = changes(&main);
+        assert!(second["diff"].as_str().unwrap().contains("+three"), "{second}");
+        sh(&main, &["commit", "-qam", "three"]);
+        let third = changes(&main);
+        assert_eq!(third["files"], json!([]));
+        assert_eq!(third["recent"][0]["subject"], "three");
+        let wt = changes(&feat);
+        assert_eq!(wt["branch"], "feat");
+        assert_eq!(wt["recent"][0]["subject"], "feat work");
+        let gitdir = match locate(std::path::Path::new(&feat)) {
+            Located::Dir { git, .. } => git,
+            _ => panic!("no git dir for the worktree"),
+        };
+        assert_eq!(head_oid(&gitdir).map(|o| o.len()), Some(40));
+        let _ = std::fs::remove_dir_all(&top);
     }
 
     #[test]

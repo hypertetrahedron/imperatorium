@@ -1,4 +1,4 @@
-//! remote_cli_twin.py: `imperatorium remote add | remove | check` and
+//! Ported from remote_cli_twin.py (at `last-python`): `imperatorium remote add | remove | check` and
 //! `check`, end to end against the fake ssh in its sh mode (fakecli as
 //! ssh.exe, FAKESSH_MODE=sh): the remote command runs with `sh` in a
 //! sandbox HOME, so the probe script, the binary push, the settings edit and
@@ -25,16 +25,6 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
-
-fn free_port() -> u16 {
-    loop {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let p = l.local_addr().unwrap().port();
-        if !(8792..=8820).contains(&p) {
-            return p;
-        }
-    }
-}
 
 struct Checks {
     failed: Vec<String>,

@@ -1,7 +1,8 @@
-//! twin.py replayed: the hook events, the refused POSTs, the /api POSTs, the
-//! session ids, the state file and the GETs, each answered as the Python
-//! dispatcher answered (tests/golden/twin/steps.jsonl). Compared as the
-//! script compared: POST answers as equal values, the state and the GETs by
+//! Replays tests/golden/twin/steps.jsonl: the hook events, the refused POSTs,
+//! the /api POSTs, the session ids, the state file and the GETs, each answered
+//! as the Python dispatcher answered when the file was recorded (frozen at the
+//! git tag `last-python`; see golden/README.md). Compared as the recording
+//! script did: POST answers as equal values, the state and the GETs by
 //! first_difference (key order counts), clock readings masked.
 #![cfg(windows)]
 

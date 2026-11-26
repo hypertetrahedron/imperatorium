@@ -1,11 +1,11 @@
 //! Decide which permission prompts are worth a human's attention.
 //!
-//! A port of `imperatorium/policy.py`, which stays the reference until the
-//! conformance suite (`rust/conformance/`) passes against this binary. Keep
-//! the two in step: a pattern changed in one and not the other is a policy
-//! hole, and the differential test is there to catch exactly that.
+//! Ported from `imperatorium/policy.py` (at the git tag `last-python`). The
+//! differential test (tests/differential.rs) replays the 86k answers Python
+//! gave, frozen there: any looser verdict fails it, and a stricter one must
+//! be explained in that test (as the 2026-11-25 rules below are).
 //!
-//! Three rules govern everything here (see policy.py for the long form):
+//! Three rules govern everything here:
 //!   1. Default to `ask`. Nothing is allowed unless a rule says so.
 //!   2. This removes prompts, never answers. `deny` is reserved for an agent
 //!      changing the machinery that decides what it may do.
@@ -15,6 +15,10 @@
 //! `decide` turns it into `ask`, with the same reason text Python gives.
 //!
 //! Deliberate differences from Python, each stricter, never looser:
+//! - since 2026-11-25, a lone `&` and a `\r` separate commands as `;` does,
+//!   a leading `NAME=value` is skipped only for the variables in
+//!   [`BENIGN_ENV`] (any other is asked about: `GIT_EXTERNAL_DIFF=x git diff`
+//!   runs x), and PowerShell's `(...)`/`{...}` are asked about;
 //! - a leading `NAME=value` is stripped only for ASCII names (bash accepts no
 //!   others), where Python's `\w` would also strip Unicode letters;
 //! - a `safe_bash` pattern Python's `re` accepts but the `regex` crate does
@@ -24,7 +28,7 @@
 //! Unicode's word characters (letters, digits, marks, connectors) where
 //! Python's follows `str.isalnum()`, so `½git push` and `\u{301}git push`
 //! are asked about for a different reason. The differential test
-//! (`rust/conformance/differential.py`) fails on any difference these do
+//! (tests/differential.rs) fails on any difference these do
 //! not explain, and on any looser verdict at all.
 
 use std::sync::OnceLock;
@@ -162,6 +166,16 @@ const SAFE_BASH: &[&str] = &[
     r"claude\s+agents\s+--json\b",
 ];
 
+/// The variables a leading `NAME=value` may set and still leave a read-only
+/// command read-only: none of them names a program, a library or a script to
+/// run. Anything else (`GIT_EXTERNAL_DIFF=`, `PAGER=`, `GIT_SSH_COMMAND=`,
+/// `LD_PRELOAD=`, `NODE_OPTIONS=`, `PATH=`) can make `git diff` or `ls` run
+/// something else, so it is asked about.
+const BENIGN_ENV: &str = "CI|NO_COLOR|FORCE_COLOR|CLICOLOR|CLICOLOR_FORCE|TERM|COLUMNS|LINES|\
+                          LANG|LANGUAGE|LC_[A-Z]+|TZ|RUST_LOG|RUST_BACKTRACE|CARGO_TERM_COLOR|\
+                          CARGO_INCREMENTAL|NODE_ENV|PYTHONUTF8|PYTHONIOENCODING|\
+                          PYTHONDONTWRITEBYTECODE|PYTHONUNBUFFERED";
+
 const UNSAFE_OPTIONS: &[(&str, &str, &str)] = &[
     (
         r"find\b",
@@ -226,9 +240,16 @@ fn matcher(pattern: &str) -> PyResult<Regex> {
     Regex::new(&format!("(?i)^(?:{})", py_regex(pattern))).map_err(|_| "error")
 }
 
-struct Compiled {
+/// The path rules, which every tool's check needs.
+struct PathRules {
     sensitive: Vec<Regex>,
     self_protect: Vec<Regex>,
+}
+
+/// The shell rules, compiled only for a Bash or PowerShell call: the
+/// permission hook is a new process per tool call, and a Read or an Edit
+/// need not pay for the ~40 patterns it never runs.
+struct Compiled {
     never_auto: Vec<(Regex, &'static str)>,
     safe_bash: Vec<Regex>,
     unsafe_options: Vec<(Regex, Regex, &'static str)>,
@@ -239,16 +260,22 @@ struct Compiled {
     subshell: Regex,
     redirect: Regex,
     env_prefix: Regex,
+    any_env_prefix: Regex,
+}
+
+fn path_rules() -> &'static PathRules {
+    static P: OnceLock<PathRules> = OnceLock::new();
+    P.get_or_init(|| {
+        let all =
+            |src: Vec<String>| -> Vec<Regex> { src.iter().map(|p| search(p).unwrap()).collect() };
+        PathRules { sensitive: all(sensitive_src()), self_protect: all(self_protect_src()) }
+    })
 }
 
 fn compiled() -> &'static Compiled {
     static C: OnceLock<Compiled> = OnceLock::new();
     C.get_or_init(|| {
-        let all =
-            |src: Vec<String>| -> Vec<Regex> { src.iter().map(|p| search(p).unwrap()).collect() };
         Compiled {
-            sensitive: all(sensitive_src()),
-            self_protect: all(self_protect_src()),
             never_auto: NEVER_AUTO
                 .iter()
                 .map(|(p, w)| (search(p).unwrap(), *w))
@@ -265,11 +292,15 @@ fn compiled() -> &'static Compiled {
             .unwrap(),
             git_remote: matcher(r"git\s+remote\b").unwrap(),
             git_branch: matcher(r"git\s+branch\b").unwrap(),
-            split: Regex::new(r"&&|\|\||\||;|\n").unwrap(),
+            // A lone `&` runs what precedes it in the background and goes
+            // on to the rest, and PowerShell ends a statement at `\r`: both
+            // separate commands as surely as `;` does.
+            split: Regex::new(r"&&|\|\||\||;|\n|\r|&").unwrap(),
             subshell: Regex::new(r"\$\(|`|<\(").unwrap(),
             redirect: Regex::new(&py_regex(r"(^|\s)>{1,2}(\s|$)|(^|\s)\d?>&")).unwrap(),
             // ASCII names only: see the module note.
-            env_prefix: Regex::new(&py_regex(r"^([A-Za-z0-9_]+=\S*\s+)+")).unwrap(),
+            env_prefix: Regex::new(&py_regex(&format!(r"^(({BENIGN_ENV})=\S*\s+)+"))).unwrap(),
+            any_env_prefix: Regex::new(r"^[A-Za-z0-9_]+=").unwrap(),
         }
     })
 }
@@ -282,7 +313,7 @@ fn any_match(patterns: &[Regex], text: &str) -> bool {
 pub fn is_sensitive(path: Option<&Value>) -> bool {
     match path {
         Some(p) if truthy(Some(p)) => {
-            any_match(&compiled().sensitive, &py_str(p).replace('\\', "/"))
+            any_match(&path_rules().sensitive, &py_str(p).replace('\\', "/"))
         }
         _ => false,
     }
@@ -292,7 +323,7 @@ pub fn is_sensitive(path: Option<&Value>) -> bool {
 pub fn is_self_protected(text: Option<&Value>) -> bool {
     match text {
         Some(t) if truthy(Some(t)) => {
-            any_match(&compiled().self_protect, &py_str(t).replace('\\', "/"))
+            any_match(&path_rules().self_protect, &py_str(t).replace('\\', "/"))
         }
         _ => false,
     }
@@ -404,6 +435,9 @@ fn bash_verdict(command: &str, policy: &Map<String, Value>) -> PyResult<Verdict>
     for segment in segs {
         let stripped_owned = c.env_prefix.replace(segment, "");
         let stripped = strip(&stripped_owned);
+        if c.any_env_prefix.is_match(stripped) {
+            return Ok(v(ASK, "sets an environment variable for the command", "opaque"));
+        }
         if !begins_safely(stripped, &extra)? {
             return Ok(v(
                 ASK,
@@ -533,8 +567,14 @@ fn decide_inner(request: &Value, policy: &Value) -> PyResult<Verdict> {
         let Value::String(command) = command_v else {
             return Err("AttributeError");
         };
-        if any_match(&compiled().sensitive, &command.replace('\\', "/")) {
+        if any_match(&path_rules().sensitive, &command.replace('\\', "/")) {
             return Ok(v(ASK, "command names a secret", "secret"));
+        }
+        // PowerShell runs what is inside `(...)`, `@(...)` and `{...}` (a
+        // grouping, an array, a script block), so `ls (calc)` is not a
+        // listing. Bash has no such form after a command's name.
+        if tool == Some("PowerShell") && command.contains(['(', '{']) {
+            return Ok(v(ASK, "runs an expression or script block", "opaque"));
         }
         let mut merged = policy.clone();
         for (k, val) in &project {
@@ -671,10 +711,40 @@ mod tests {
             decide(&bash("git branch --list 'x*'"), &ON()).verdict,
             ALLOW
         );
-        assert_eq!(decide(&bash("FOO=1 pytest -q"), &ON()).verdict, ALLOW);
+        assert_eq!(decide(&bash("CI=1 NO_COLOR=1 pytest -q"), &ON()).verdict, ALLOW);
+        assert_eq!(decide(&bash("FOO=1 pytest -q"), &ON()).verdict, ASK);
         assert_eq!(decide(&bash("echo $(rm x)"), &ON()).verdict, ASK);
         assert_eq!(decide(&bash("cat .env"), &ON()).verdict, ASK);
         assert_eq!(decide(&bash("git\u{1c}push"), &ON()).verdict, ASK);
+    }
+
+    /// Each was allowed as "read-only shell" before 2026-11-25.
+    #[test]
+    fn chained_and_prefixed_commands_ask() {
+        for cmd in [
+            "ls & node evil.js",
+            "cat README.md &node evil.js",
+            "ls\rnode evil.js",
+            "git status |& sh",
+            "GIT_EXTERNAL_DIFF=./x.sh git diff",
+            "PAGER=./evil git log",
+            "CI=1 GIT_SSH_COMMAND=./x git log",
+            "LD_PRELOAD=./x.so ls",
+            "PATH=./bin ls",
+        ] {
+            let r = decide(&bash(cmd), &ON());
+            assert_eq!(r.verdict, ASK, "{cmd:?}: {}", r.reason);
+        }
+        let ps = |cmd: &str| {
+            json!({"tool_name": "PowerShell", "tool_input": {"command": cmd}, "cwd": "/w/p"})
+        };
+        for cmd in ["ls (calc)", "ls @(calc)", "ls | % { rm $_ }", "ls & calc", "ls\rcalc"] {
+            let r = decide(&ps(cmd), &ON());
+            assert_eq!(r.verdict, ASK, "{cmd:?}: {}", r.reason);
+        }
+        assert_eq!(decide(&ps("ls -Force"), &ON()).verdict, ALLOW);
+        assert_eq!(decide(&bash("git log --oneline -5"), &ON()).verdict, ALLOW);
+        assert_eq!(decide(&bash("ls && git status"), &ON()).verdict, ALLOW);
     }
 
     #[test]

@@ -226,10 +226,12 @@ impl Shared {
             let t = match cached {
                 Some(t) => t,
                 None => {
-                    let Ok(c) = self.conversation(&sid) else {
+                    // Not through the conversation cache: up to 120 sessions
+                    // read here would push out the ones the window shows.
+                    let Ok(merged) = self.merged_uncached(&sid) else {
                         continue;
                     };
-                    let t = activity::tally(&activity::timeline(&c.merged));
+                    let t = activity::tally(&activity::timeline(&merged));
                     self.tallies
                         .lk()
                         .insert(sid.clone(), (size, t.clone()));

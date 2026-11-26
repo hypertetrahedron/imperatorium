@@ -645,10 +645,16 @@ impl Shared {
                     .parse::<i64>()
                     .map(|d| d.clamp(1, 90))
                     .unwrap_or(30);
-                let got = self
-                    .cost_history
-                    .lk()
-                    .summary(days, Self::now(), 8.0);
+                // In slices of the 8 s budget, the ledger let go between
+                // them: /api/usage, the matrix and the tile spend read it too.
+                let started = std::time::Instant::now();
+                let got = loop {
+                    let got = self.cost_history.lk().summary(days, Self::now(), 0.25);
+                    if got["complete"] == json!(true) || started.elapsed().as_secs_f64() >= 8.0 {
+                        break got;
+                    }
+                    std::thread::yield_now();
+                };
                 (200, Body::Json(got))
             }
             ("GET", "/api/session_status") => {

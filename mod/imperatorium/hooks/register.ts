@@ -39,6 +39,10 @@ const COMMANDS_MS = 60000
 // How long a permission check waits for the dispatcher before leaving the
 // decision to the session: a tool call should never wait on it for long.
 const CHECK_WAIT_MS = 1500
+// A request the dispatcher has not answered by then is given up on: the
+// engine's fetch has no timeout of its own, and a beat waiting forever would
+// hold back every beat after it (`beating` stays set).
+const POST_TIMEOUT_MS = 10_000
 // Tools a hook can only tighten (a question to the person, a plan to
 // approve): an allow from here would not dismiss their dialog.
 const PERSON_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
@@ -55,6 +59,9 @@ type CheckReply = { verdict?: string; reason?: string }
 // The module's state. A reload starts it over: the dispatcher re-offers a
 // prompt that was never accepted, and the next beat restores the rest.
 let endpoint = 'http://127.0.0.1:8792'
+// IMPERATORIUM_MOD_ENDPOINT was given: the dispatcher's own file does not
+// override it.
+let endpointFixed = false
 let token: string | null = null
 let sessionId = ''
 let cwd = ''
@@ -114,7 +121,10 @@ async function findToken($: Engine): Promise<string | null> {
     for (const name of ['imperatorium', 'ccontrol']) {
       try {
         const got = String(await $.fs.read(base + '/' + name + '/mod-token')).trim()
-        if (got.length >= 32) return got
+        if (got.length >= 32) {
+          await readEndpoint($, base + '/' + name + '/mod-endpoint')
+          return got
+        }
       } catch {
         // Not there: try the next place.
       }
@@ -123,19 +133,36 @@ async function findToken($: Engine): Promise<string | null> {
   return null
 }
 
+// Where the dispatcher that wrote the token listens (it writes this beside
+// it at start), so a port other than 8792 is found. Only a loopback http
+// address is taken: the mod's token goes wherever this points.
+async function readEndpoint($: Engine, file: string) {
+  if (endpointFixed) return
+  try {
+    const got = String(await $.fs.read(file)).trim()
+    if (/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(got)) endpoint = got
+  } catch {
+    // An older dispatcher writes none: the default stands.
+  }
+}
+
 async function post($: Engine, path: string, body: unknown): Promise<unknown> {
   if (!token) token = await readToken($)
   if (!token) return null
   let res
   try {
-    res = await $.http.fetch(endpoint + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Imperatorium-Mod': token },
-      body: JSON.stringify(body),
-    })
+    res = await Promise.race([
+      $.http.fetch(endpoint + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Imperatorium-Mod': token },
+        body: JSON.stringify(body),
+      }),
+      $.clock.sleep(POST_TIMEOUT_MS).then(() => null),
+    ])
   } catch {
     return null
   }
+  if (!res) return null
   if (res.status === 403) {
     // A new token (the dispatcher's state folder was reset): read it again.
     token = null
@@ -381,7 +408,10 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     // A test dispatcher elsewhere, for this session only.
     const override = await $.env.get('IMPERATORIUM_MOD_ENDPOINT').catch(() => undefined)
-    if (override && /^https?:\/\//.test(override)) endpoint = override.replace(/\/+$/, '')
+    if (override && /^https?:\/\//.test(override)) {
+      endpoint = override.replace(/\/+$/, '')
+      endpointFixed = true
+    }
     sessionId = await $.session.id()
     cwd = e.cwd
     interactive = e.isInteractive

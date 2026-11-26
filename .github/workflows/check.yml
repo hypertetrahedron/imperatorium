@@ -18,6 +18,14 @@ on:
     branches: ["main", "release/**"]
   pull_request:
   workflow_call:
+    inputs:
+      # release.yml passes true: a tag's build must not wait on the slow
+      # reporting jobs (audit, coverage) or fail on an advisory published
+      # since the last push. github.event_name inside a called workflow is
+      # the caller's ("push"), so it cannot tell the two apart.
+      release:
+        type: boolean
+        default: false
 
 # A newer push to the same branch makes an older run moot.
 concurrency:
@@ -108,9 +116,35 @@ jobs:
       - name: node --test (window JavaScript)
         run: node --test imperatorium/web/tests/*.test.mjs
 
+  # The dictation worker is a crate of its own (not in the rust/ workspace,
+  # so the build above never sees it): it must at least type-check, built as
+  # release.yml builds it (Vulkan, through build-voice.cmd for MSVC, CMake and
+  # Ninja). Not clippy: that has not been run clean against it yet.
+  voice:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Rust ${{ env.RUST_TOOLCHAIN }}
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
+      - name: Vulkan SDK for the dictation worker
+        uses: humbletim/install-vulkan-sdk@30ba978f977e81b72d091fc8888feb1fb26f9aff # v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+      - name: cargo check (imperatorium-voice)
+        working-directory: rust/voice
+        shell: cmd
+        env:
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+        # --target-dir: the short folder release.yml uses (Vulkan shader paths).
+        run: build-voice.cmd check --locked --no-default-features --features vulkan --target-dir C:\vk
+
   # Known vulnerabilities in the locked dependencies (RustSec), for the
   # binary's workspace and the dictation worker's.
   audit:
+    if: ${{ !inputs.release }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -128,6 +162,7 @@ jobs:
   # as lcov.info and an HTML report in the run's artifacts, and a summary in
   # the log. Reported, not gated.
   coverage:
+    if: ${{ !inputs.release }}
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:

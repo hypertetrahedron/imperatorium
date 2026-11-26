@@ -1,4 +1,4 @@
-//! remote_twin.py: the binary's remote hosts end to end against the fake
+//! Ported from remote_twin.py (at `last-python`): the binary's remote hosts end to end against the fake
 //! ssh (fakecli as ssh.exe; it replaces fakessh.py): rows from a host, its
 //! hooks through the tunnel's hook-only listener, the credential they
 //! bring, injection, the queue drained by a remote Stop, a remote
@@ -19,17 +19,6 @@ use std::time::{Duration, Instant};
 
 const SID: &str = "11111111-2222-4333-8444-555555555555";
 const SOCKET: &str = "/tmp/claude-fake/inbox.sock";
-
-/// A free port outside the fixed ones (8792-8820).
-pub fn free_port() -> u16 {
-    loop {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let p = l.local_addr().unwrap().port();
-        if !(8792..=8820).contains(&p) {
-            return p;
-        }
-    }
-}
 
 /// remote_twin.py call(): GET, or POST `body`; the status and the JSON ({}
 /// when empty).

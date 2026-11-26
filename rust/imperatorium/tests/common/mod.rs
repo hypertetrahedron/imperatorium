@@ -21,6 +21,19 @@ pub mod console;
 pub mod fakessh;
 pub mod safety;
 
+/// A free port outside the fixed ones (8792-8820): 8792 is the live
+/// dispatcher's, and no test may ever touch it (tests/harness.rs asserts
+/// the same of the dispatchers it starts).
+pub fn free_port() -> u16 {
+    loop {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let p = l.local_addr().unwrap().port();
+        if !(8792..=8820).contains(&p) {
+            return p;
+        }
+    }
+}
+
 // ---------------------------------------------------------------- places
 
 /// The binary under test: the one cargo builds for the integration tests,
@@ -97,7 +110,7 @@ pub fn read_jsonl(path: &Path) -> Vec<Value> {
 
 // ---------------------------------------------------------- placeholders
 
-/// Puts back what tests/golden's placeholders stand for (rust/conformance/
+/// Puts back what tests/golden's placeholders stand for (at `last-python`:
 /// golden.py `Places`): `<name>`, `<name-lc>`, `<name/>`, `<name/-lc>`, and
 /// the JSON-escaped `<j:...>` and percent-encoded `<u:...>` forms of each.
 pub struct Places {
@@ -246,7 +259,7 @@ fn brief(v: &Value) -> String {
 }
 
 /// The first place `a` (Python's) and `b` (the binary's) differ, as
-/// rust/conformance/sessions_compare.py first_difference() reports it.
+/// sessions_compare.py first_difference() (at `last-python`) reports it.
 /// `ordered`: dict key order counts too (it does there; it does not where a
 /// script compared json.dumps(sort_keys=True) or used ==).
 pub fn first_difference(a: &Value, b: &Value, path: &str, ordered: bool) -> Option<String> {
@@ -466,7 +479,7 @@ const REAL: &[&str] = &[
 ];
 
 /// `bin_dir`, then this PATH without any folder holding a real wt or claude
-/// (rust/conformance/common.py stand_in_path).
+/// (common.py stand_in_path at `last-python`).
 pub fn stand_in_path(bin_dir: Option<&Path>) -> std::ffi::OsString {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut keep: Vec<PathBuf> = bin_dir.map(|b| vec![b.to_path_buf()]).unwrap_or_default();

@@ -49,6 +49,13 @@ function Install-Imperatorium {
             elseif ($Channel -eq 'preview') { "$repo/download/preview" }
             else { "$repo/latest/download" }
 
+    # The binary is run after a checksum that comes from the same place, so a
+    # base that can be altered in transit would hand over the machine: https,
+    # or http on this machine (the local release server of CI's smoke tests).
+    if ($From -and $base -notmatch '^(https://|http://(127\.0\.0\.1|localhost|\[::1\])([:/]|$))') {
+        throw "IMPERATORIUM_RELEASES / -From must be an https:// address (or http:// on this machine), not '$From'. Nothing was downloaded."
+    }
+
     $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
     $triple = "$arch-pc-windows-msvc"
 

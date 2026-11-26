@@ -1,6 +1,7 @@
-//! The transcript readers against the Python reference
-//! (rust/conformance/sessions_compare.py, items_compare.py,
-//! stats_compare.py), all through one `imperatorium sessions batch`:
+//! The transcript readers against the answers of the Python reference, frozen
+//! at the git tag `last-python` (recorded there by
+//! rust/conformance/sessions_compare.py, items_compare.py, stats_compare.py),
+//! all through one `imperatorium sessions batch`:
 //!
 //!   list    the Agent SDK's list_sessions against `list`
 //!   info    get_session_info(id) against `info`

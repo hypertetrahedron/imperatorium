@@ -234,10 +234,7 @@ impl Rig {
             sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect::<String>()
         };
         std::fs::write(ssh.join("probe.out"), format!("x86_64\n{hash}  imperatorium\n")).unwrap();
-        let port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
-        };
+        let port = super::free_port();
         let mut cfg = json!({"remote": {"enabled": true, "hosts": [
             {"name": "pi", "claude": "c", "label": "pi",
              "tunnel": {"local_port": port, "remote_port": 8792}}]}});

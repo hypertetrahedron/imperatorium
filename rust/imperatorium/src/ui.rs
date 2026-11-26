@@ -246,13 +246,43 @@ fn escape(s: &str) -> String {
 /// look, after the page's first `<meta charset=utf-8>`.
 pub fn with_meta(token: &str, page: &str, boot: &str, look: Option<&Value>) -> String {
     let head = "<meta charset=utf-8>";
+    let look = look.map(look_head).unwrap_or_default();
     let extra = format!(
-        "<meta name=imp-window content=\"{}\"><meta name=imp-boot content=\"{}\">{}",
+        "<meta http-equiv=Content-Security-Policy content=\"{}\">\
+         <meta name=imp-window content=\"{}\"><meta name=imp-boot content=\"{}\">{look}",
+        csp(&look),
         escape(token),
         escape(boot),
-        look.map(look_head).unwrap_or_default()
     );
     page.replacen(head, &format!("{head}{extra}"), 1)
+}
+
+/// The pages' Content-Security-Policy: scripts only from this dispatcher's
+/// own /ui/ files, plus the look's one inline line by its hash, so markup a
+/// session's text smuggles past escaping still cannot run (the window token
+/// it could read sends prompts). Inline styles stay allowed: the look's
+/// `<style>` and the `style=` the window writes. Before anything in the head
+/// that it governs.
+fn csp(look: &str) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let mut scripts = String::from("'self'");
+    let mut rest = look;
+    while let Some(at) = rest.find("<script>") {
+        let body = &rest[at + "<script>".len()..];
+        let Some(end) = body.find("</script>") else { break };
+        let hash = sha2::Sha256::digest(&body.as_bytes()[..end]);
+        scripts.push_str(&format!(
+            " 'sha256-{}'",
+            base64::engine::general_purpose::STANDARD.encode(hash)
+        ));
+        rest = &body[end..];
+    }
+    format!(
+        "default-src 'self'; script-src {scripts}; style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; \
+         media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'"
+    )
 }
 
 #[cfg(test)]
@@ -284,9 +314,29 @@ mod tests {
         let out = with_meta("t<k>", page, "b\"1", None);
         assert_eq!(
             out,
-            "<html><head><meta charset=utf-8><meta name=imp-window content=\"t&lt;k&gt;\">\
-             <meta name=imp-boot content=\"b&quot;1\"><meta charset=utf-8></head></html>"
+            format!(
+                "<html><head><meta charset=utf-8><meta http-equiv=Content-Security-Policy \
+                 content=\"{}\"><meta name=imp-window content=\"t&lt;k&gt;\">\
+                 <meta name=imp-boot content=\"b&quot;1\"><meta charset=utf-8></head></html>",
+                csp("")
+            )
         );
+    }
+
+    /// The look's inline script runs by its hash; nothing else inline does.
+    #[test]
+    fn the_policy_allows_the_looks_script_by_hash() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let look = look_head(&Value::Null);
+        let body = look.split("<script>").nth(1).unwrap().split("</script>").next().unwrap();
+        let want = base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body));
+        let policy = csp(&look);
+        assert!(policy.contains(&format!("script-src 'self' 'sha256-{want}';")), "{policy}");
+        let script_src = policy.split(';').find(|d| d.trim().starts_with("script-src")).unwrap();
+        assert!(!script_src.contains("unsafe"), "{script_src}");
+        assert!(csp("").contains("script-src 'self';"));
+        assert!(!policy.contains('"'), "the policy sits in a quoted attribute");
     }
 
     #[test]

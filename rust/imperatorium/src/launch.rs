@@ -63,6 +63,30 @@ pub fn which(name: &str) -> Option<String> {
     None
 }
 
+/// [`which`], seen through a scoop shim: scoop puts `<name>.exe` on PATH, a
+/// program that starts the real one (named in `<name>.shim`) and waits for
+/// it - a console program started by a console program, which Windows 11
+/// 25H2 leaks a token for (see `changes::git_command`). The real program
+/// where the shim names one that exists; what `which` found otherwise.
+pub fn which_real(name: &str) -> Option<String> {
+    let found = which(name)?;
+    Some(unshim(std::path::Path::new(&found)).unwrap_or(found))
+}
+
+fn unshim(found: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(found.with_extension("shim")).ok()?;
+    let target = shim_target(&text)?;
+    std::path::Path::new(&target).is_file().then_some(target)
+}
+
+/// The `path = "..."` line of a scoop `.shim` file.
+fn shim_target(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "path").then(|| value.trim().trim_matches('"').to_string())
+    })
+}
+
 /// history.resume_command: what a person would type.
 pub fn resume_command(session_id: &str, fork: bool) -> Vec<String> {
     let mut cmd = vec![
@@ -317,5 +341,18 @@ mod tests {
             assert!(add_model(&mut vec![], Some(bad), None).is_err(), "{bad}");
         }
         assert!(add_model(&mut vec![], None, Some("ultra")).is_err());
+    }
+
+    #[test]
+    fn a_scoop_shim_names_its_program() {
+        let shim = "path = \"C:\\Users\\x\\scoop\\apps\\gh\\current\\bin\\gh.exe\"\r\nargs = --x\r\n";
+        assert_eq!(
+            shim_target(shim).as_deref(),
+            Some("C:\\Users\\x\\scoop\\apps\\gh\\current\\bin\\gh.exe")
+        );
+        assert_eq!(shim_target("args = x\n"), None);
+        // A program that is no shim is itself.
+        let me = std::env::current_exe().unwrap();
+        assert_eq!(unshim(&me), None);
     }
 }

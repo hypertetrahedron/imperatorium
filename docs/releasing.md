@@ -51,19 +51,11 @@ Rules:
 
 ### Migration from the old layout (done 2026-11-15)
 
-`main` had been the Python era (8de6e51, tag `v0.1.0`) while the real trunk
-was `rust`, 203 commits ahead and containing `main`.
-
-1. `main` fast-forwarded to `rust` (2625e35) and pushed; no history
-   rewritten. `last-python` and `v0.1.0` keep the Python line reachable.
-2. The `imperatorium-rust` worktree (the live one) now has `main` checked
-   out; the `rust` branch is deleted.
-3. Deleted, local and on origin: `python-out/*`, `refactor/*`,
-   `rename-imperatorium`, and `mods` (its one unmerged commit was already on
-   `main` as 1290730, and touched only the deleted Python).
-4. The herdr integration was dropped (2026-11-24, the user's decision).
-5. Rulesets for `main` and for `v*` tags (§3).
-6. The README on `main` is now the native one.
+`main` was the Python era while the real trunk was `rust`; `main` was
+fast-forwarded to `rust` (no history rewritten), the old branches were deleted,
+and the Python line stays reachable at tag `last-python` (and `v0.1.0`). The
+herdr integration was dropped on 2026-11-24. Rulesets for `main` and for `v*`
+tags are in section 3.
 
 ---
 

@@ -1,6 +1,6 @@
 //! The harness itself (tests/common): dispatchers on free ports side by
-//! side, the stand-in PATH, the fake CLI, cleanup on drop. (twin.py's
-//! goldens are replayed in tests/twin.rs.)
+//! side, the stand-in PATH, the fake CLI, cleanup on drop. (The twin goldens
+//! are replayed in tests/twin.rs.)
 #![cfg(windows)]
 
 mod common;

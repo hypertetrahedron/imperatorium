@@ -318,7 +318,11 @@ fn load_settings(path: &Path) -> Result<Map<String, Value>, String> {
         Err(e) => Err(format!("{}: {e}", path.display())),
         Ok(t) => match serde_json::from_str::<Value>(&t) {
             Ok(Value::Object(o)) => Ok(o),
-            Ok(_) => Ok(Map::new()),
+            // Not read as empty: that would write `{}` over whatever it is.
+            Ok(_) => Err(format!(
+                "{} holds JSON that is not an object. Fix it by hand before installing.",
+                path.display()
+            )),
             Err(e) => Err(format!(
                 "{} is not valid JSON ({e}). Fix it by hand before installing.",
                 path.display()
@@ -336,9 +340,34 @@ fn write_settings(path: &Path, settings: &Map<String, Value>, say: &mut dyn FnMu
         let backup = format!("{}.imperatorium-{}.bak", path.display(), stamp());
         std::fs::copy(path, &backup).map_err(|e| e.to_string())?;
         say(format!("backup   : {backup}"));
+        prune_backups(path, KEEP_BACKUPS);
     }
     let body = json_dumps_indent(&Value::Object(settings.clone()), 2) + "\n";
     crate::paths::write_atomic(path, body.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// How many `settings.json.imperatorium-*.bak` are kept: one is made on
+/// every install, and they were never removed.
+const KEEP_BACKUPS: usize = 5;
+
+/// Removes all but the `keep` newest backups of `path` (their names sort by
+/// time: `<name>.imperatorium-YYYYMMDD-HHMMSS.bak`).
+fn prune_backups(path: &Path, keep: usize) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
+    let prefix = format!("{name}.imperatorium-");
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut found: Vec<String> = rd
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(&prefix) && n.ends_with(".bak"))
+        .collect();
+    found.sort();
+    let extra = found.len().saturating_sub(keep);
+    for old in &found[..extra] {
+        let _ = std::fs::remove_file(dir.join(old));
+    }
 }
 
 /// time.strftime("%Y%m%d-%H%M%S"), local time.
@@ -1040,7 +1069,16 @@ pub fn install_hooks_main(args: &[String]) -> i32 {
         println!("  {c}");
     }
     let body = json_dumps_indent(&Value::Object(s), 2) + "\n";
-    match std::fs::write(&settings_file, body) {
+    // Replaced whole, never left half-written (this runs on remote hosts
+    // and in containers, where nobody would notice a broken settings.json),
+    // and not at all when nothing changed.
+    if std::fs::read_to_string(&settings_file).is_ok_and(|was| was == body) {
+        return 0;
+    }
+    if let Some(dir) = settings_file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match crate::paths::write_atomic(&settings_file, body.as_bytes()) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("{e}");
@@ -1237,6 +1275,31 @@ Run `imperatorium install` to install what is missing.");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_backups_keep_the_newest_and_odd_json_is_refused() {
+        let dir = std::env::temp_dir().join(format!("imp-bak-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        for i in 0..8 {
+            std::fs::write(dir.join(format!("settings.json.imperatorium-20261125-00000{i}.bak")), "{}").unwrap();
+        }
+        std::fs::write(dir.join("other.bak"), "").unwrap();
+        prune_backups(&path, 5);
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten()
+            .map(|e| e.file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left.len(), 6, "{left:?}");
+        assert!(left.contains(&"other.bak".to_string()));
+        assert!(left.contains(&"settings.json.imperatorium-20261125-000007.bak".to_string()));
+        assert!(!left.contains(&"settings.json.imperatorium-20261125-000002.bak".to_string()));
+        for odd in ["[]", "null", "3"] {
+            std::fs::write(&path, odd).unwrap();
+            assert!(load_settings(&path).is_err(), "{odd}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_permission_hook_outlasts_a_request_held_until_answered() {

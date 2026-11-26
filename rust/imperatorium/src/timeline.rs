@@ -562,7 +562,10 @@ pub fn of_session(session_id: &str, known: &str) -> Value {
 
 /// of_session, the cached answer shared rather than copied.
 pub fn of_session_shared(session_id: &str, known: &str) -> Arc<Value> {
-    static CACHE: Mutex<Option<(PathBuf, String, Arc<Value>)>> = Mutex::new(None);
+    // The last few sessions asked about, the newest last: switching between
+    // sessions in the window rereads none of them (one entry did, each time).
+    const KEPT: usize = 8;
+    static CACHE: Mutex<Vec<(PathBuf, String, Arc<Value>)>> = Mutex::new(Vec::new());
     if !crate::sessions::valid_uuid(session_id) {
         return Arc::new(json!({"ok": false, "error": "not a session id"}));
     }
@@ -582,15 +585,16 @@ pub fn of_session_shared(session_id: &str, known: &str) -> Arc<Value> {
             key.push_str(&v.join(","));
         }
     }
-    if let Ok(g) = CACHE.lock() {
-        if let Some((p, k, v)) = g.as_ref() {
-            if *p == path && *k == key {
-                // The caller has this one already: say so, not all of it again.
-                if !known.is_empty() && v.get("sig").and_then(Value::as_str) == Some(known) {
-                    return Arc::new(json!({"ok": true, "same": true, "sig": known}));
-                }
-                return Arc::clone(v);
+    if let Ok(mut g) = CACHE.lock() {
+        if let Some(i) = g.iter().position(|(p, k, _)| *p == path && *k == key) {
+            let hit = g.remove(i);
+            let v = Arc::clone(&hit.2);
+            g.push(hit);
+            // The caller has this one already: say so, not all of it again.
+            if !known.is_empty() && v.get("sig").and_then(Value::as_str) == Some(known) {
+                return Arc::new(json!({"ok": true, "same": true, "sig": known}));
             }
+            return v;
         }
     }
     let mut v = read(&path);
@@ -605,7 +609,11 @@ pub fn of_session_shared(session_id: &str, known: &str) -> Arc<Value> {
     }
     let v = Arc::new(v);
     if let Ok(mut g) = CACHE.lock() {
-        *g = Some((path, key, Arc::clone(&v)));
+        g.retain(|(p, _, _)| *p != path);
+        if g.len() >= KEPT {
+            g.remove(0);
+        }
+        g.push((path, key, Arc::clone(&v)));
     }
     v
 }

@@ -1,7 +1,7 @@
 //! test_policy.py's calls to `policy.decide`, each with the answer the
 //! Python policy gave (golden: policy_tests/calls.jsonl, recorded by
-//! rust/conformance/run_policy_tests.py --record), against
-//! `imperatorium policy-decide`, run from the checkout as Python was.
+//! rust/conformance/run_policy_tests.py --record at the git tag `last-python`),
+//! against `imperatorium policy-decide`, run from the checkout as Python was.
 #![cfg(windows)]
 
 mod common;

@@ -159,7 +159,12 @@ pub fn load_hosts(config: &Value) -> Vec<Host> {
             None if container.is_some() => None,
             None => Some(name.clone()),
         };
-        set_via(&name, Via { ssh, container, docker: pick("docker", "docker") });
+        let docker = pick("docker", "docker");
+        if let Err(e) = unsafe_route(ssh.as_deref(), container.as_deref(), &docker) {
+            eprintln!("imperatorium: remote host {name:?} left out: {e}");
+            continue;
+        }
+        set_via(&name, Via { ssh, container, docker });
         hosts.push(Host {
             claude: pick("claude", DEFAULT_CLAUDE),
             label: pick("label", &name),
@@ -283,6 +288,34 @@ pub fn via_of(host: &str) -> Via {
     })
 }
 
+/// Err when a host entry's route could be read as something else: an ssh
+/// destination or container name starting with '-' is an option to ssh or
+/// docker (`-oProxyCommand=...` runs a program here), and over ssh the
+/// docker program is part of a remote shell line, so it is held to plain
+/// words. config.json is written by Settings and by hand; checked where it
+/// is read, so every path that reaches ssh is covered.
+pub fn unsafe_route(ssh: Option<&str>, container: Option<&str>, docker: &str) -> Result<(), String> {
+    if let Some(dest) = ssh {
+        crate::remote_cli::check_host_name(dest)?;
+    }
+    if let Some(c) = container {
+        if c.trim_start().starts_with('-') {
+            return Err("a container name cannot start with '-'".into());
+        }
+    }
+    let plain = |s: &str| {
+        !s.trim_start().starts_with('-')
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || " ._/-".contains(c))
+    };
+    if container.is_some() && ssh.is_some() && !plain(docker) {
+        return Err(format!("{docker:?} cannot be the docker program on an ssh host: letters, digits, spaces and ._/- only"));
+    }
+    if container.is_some() && docker.trim_start().starts_with('-') {
+        return Err("the docker program cannot start with '-'".into());
+    }
+    Ok(())
+}
+
 /// The program and arguments that run `cmd` (a POSIX shell command line)
 /// on `host`.
 pub fn argv_for(host: &str, cmd: &str) -> (String, Vec<String>) {
@@ -350,26 +383,34 @@ pub fn run(host: &str, remote_cmd: &str, input: Option<Vec<u8>>, timeout: f64) -
             let _ = sin.write_all(&data);
         });
     }
+    // Each pipe read on a thread of its own, its bytes sent back when it
+    // closes. Once ssh has exited, what is still open is held by something
+    // it left behind (a `docker exec`, a ControlMaster): waited for until the
+    // timeout and a moment more, then left, so a run never outlives its
+    // timeout by more than that.
     let drain = |s: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut s) = s {
                 let _ = s.read_to_end(&mut buf);
             }
-            buf
-        })
+            let _ = tx.send(buf);
+        });
+        rx
     };
     let out = drain(child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>));
     let err = drain(child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>));
     let started = Instant::now();
+    let left = |started: Instant| {
+        Duration::from_secs_f64((timeout - started.elapsed().as_secs_f64()).max(0.0)) + Duration::from_secs(2)
+    };
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                return Ok(Done {
-                    code: status.code().unwrap_or(-1),
-                    stdout: out.join().unwrap_or_default(),
-                    stderr: err.join().unwrap_or_default(),
-                })
+                let stdout = out.recv_timeout(left(started)).unwrap_or_default();
+                let stderr = err.recv_timeout(left(started)).unwrap_or_default();
+                return Ok(Done { code: status.code().unwrap_or(-1), stdout, stderr });
             }
             Ok(None) if started.elapsed().as_secs_f64() < timeout => {
                 std::thread::sleep(Duration::from_millis(20))
@@ -1586,6 +1627,19 @@ pub fn inbox_send_main(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A route ssh or docker would take for an option is left out at load.
+    #[test]
+    fn option_shaped_routes_are_left_out() {
+        let cfg = json!({"remote": {"hosts": [
+            "-oProxyCommand=calc", {"name": "a", "ssh": "-F/tmp/x"},
+            {"name": "b", "container": "--privileged", "ssh": false},
+            {"name": "c", "container": "c1", "ssh": "h", "docker": "docker; rm -rf ~"},
+            {"name": "ok-1", "container": "c 2", "ssh": "me@h", "docker": "sudo docker"},
+            "me@host.example:2222"]}});
+        let names: Vec<String> = load_hosts(&cfg).into_iter().map(|h| h.name).collect();
+        assert_eq!(names, ["ok-1", "me@host.example:2222"]);
+    }
 
     #[test]
     fn containers_run_through_docker_exec() {

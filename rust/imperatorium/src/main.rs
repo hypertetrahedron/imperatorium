@@ -317,6 +317,14 @@ fn main() {
             let state = flag(&args, "--state").or_else(|| {
                 live.then(|| paths::state_dir().join("state.json").to_string_lossy().into_owned())
             });
+            // The read-only shadow (no state at all) ran beside the Python
+            // dispatcher until the cutover; nothing has needed it since.
+            if state.is_none() {
+                eprintln!(
+                    "imperatorium serve: give --live (the dispatcher) or --state FILE (a copy with a state of its own)"
+                );
+                std::process::exit(2);
+            }
             let port = if live && flag(&args, "--port").is_none() { 8792 } else { port };
             // The live state folder's format, before anything reads it: a
             // folder a newer version wrote stops an older one here.
