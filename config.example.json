@@ -1,5 +1,5 @@
 {
-  "_comment": "Copied to config.json by setup_machine.py, which then fills in `roots`. Every key is optional.",
+  "_comment": "`imperatorium install` writes config.json from this and fills in `roots`. Every key is optional.",
   "roots": [],
   "_roots": "Folders whose subfolders are your projects. Empty means the folder this checkout sits in.",
   "streamdeck": {
@@ -18,7 +18,7 @@
     "permission_mode": "acceptEdits"
   },
   "voice": {
-    "_comment": "Dictation (F9). Local GPU; nothing leaves the machine. Needs the voice extras (setup_machine.py --voice). The model runs in its own process; preload starts it with the dispatcher, idle_unload (seconds, 0 = never) ends it when unused. With no usable GPU it falls back to the CPU and cpu_model, a smaller model, and the window says so.",
+    "_comment": "Dictation (F9). Local GPU; nothing leaves the machine. Turned on by `imperatorium install --voice` (or its question), which fetches the model. The model runs in its own process; preload starts it with the dispatcher, idle_unload (seconds, 0 = never) ends it when unused. With no usable GPU it falls back to the CPU and cpu_model, a smaller model, and the window says so.",
     "enabled": false,
     "model": "large-v3-turbo",
     "cpu_model": "small",
@@ -50,7 +50,7 @@
     }
   },
   "budget": {
-    "_comment": "Rate-limit percentages that raise an event (and a push/speech when those are on), once per window. Needs the statusline: python hooks/install.py --statusline",
+    "_comment": "Rate-limit percentages that raise an event (and a push/speech when those are on), once per window. Needs the usage numbers from the mod or the statusline; `imperatorium install` sets up one of them.",
     "thresholds": [
       80,
       95

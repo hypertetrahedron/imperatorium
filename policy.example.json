@@ -19,5 +19,5 @@
   },
   "projects": {},
   "_projects": "Per-project overrides keyed by absolute path, e.g. {\"C:\\code\\my-app\": {\"auto_edit\": true, \"safe_bash\": [\"make\\s+test\\b\"]}}",
-  "_enabled": "Auto-approval: true lets this policy answer cheap prompts (reads, git status, tests) for you. false asks about everything, but the window and Stream Deck can still answer prompts. setup_machine.py asks which you want."
+  "_enabled": "Auto-approval: true lets this policy answer cheap prompts (reads, git status, tests) for you. false asks about everything, but the window and Stream Deck can still answer prompts. `imperatorium install` asks which you want (--auto-approve / --no-auto-approve)."
 }
