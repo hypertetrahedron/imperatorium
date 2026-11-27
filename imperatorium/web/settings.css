@@ -69,7 +69,7 @@ body{overflow:hidden}
 #set .rlog{white-space:pre-wrap;font:12px var(--mono);margin:6px 0;padding:8px 10px;
   border:1px solid var(--line);border-radius:6px;max-height:260px;overflow:auto}
 #set #updst.bad{color:var(--fail)}
-#set #updnotes{white-space:pre-wrap;font:inherit;font-size:13px;margin:6px 0;padding:8px 10px;
+#set #updnotes,#set #prevnotes{white-space:pre-wrap;font:inherit;font-size:13px;margin:6px 0;padding:8px 10px;
   border:1px solid var(--line);border-radius:6px;max-height:260px;overflow:auto}
 #set button.small{font:12px var(--ui);padding:3px 10px;border-radius:5px;border:1px solid var(--line);
   background:var(--panel);color:var(--ink);cursor:pointer;margin-top:6px}

@@ -418,7 +418,9 @@ function wireHosts(){
 }
 // The native binary's update check (`/api/update`): this version, the newest
 // release the last check saw and what is new in it, and the button that
-// installs it. The Python dispatcher has none and updates by git.
+// installs it. Below it, a preview build, looked for only when asked
+// ({preview: true}): the daily check and the badge stay on releases. The
+// Python dispatcher has none and updates by git.
 function updatesHtml(){
   return `<div class="f"><label>Version</label><div class="ctl"><span id="updst" class="help">…</span>` +
     `<pre id="updnotes" hidden></pre>` +
@@ -426,17 +428,40 @@ function updatesHtml(){
     `<button type=button class="small" id="updapply" hidden>Update</button></span>` +
     `<span class="help">Update downloads the new binary, checks its SHA-256 and restarts the ` +
     `dispatcher, the hotkey and the Stream Deck; Claude Code sessions keep running, and this ` +
-    `window reloads when the dispatcher is back.</span></div></div>`;
+    `window reloads when the dispatcher is back.</span></div></div>` +
+    `<div class="f" id="prevf" hidden><label>Preview build</label><div class="ctl"><span id="prevst" class="help">…</span>` +
+    `<pre id="prevnotes" hidden></pre>` +
+    `<span><button type=button class="small" id="prevcheck">Check for a preview</button> ` +
+    `<button type=button class="small" id="prevapply" hidden>Install preview</button></span>` +
+    `<span class="help">Previews carry what is coming in the next release, sooner, and break more ` +
+    `often. Installing one is checked and restarts things the same way as Update. To go back, ` +
+    `<code>imperatorium update --rollback</code> puts back the binary it replaced; the next ` +
+    `release newer than the preview is offered as usual.</span></div></div>`;
+}
+function agoText(s){
+  s = Math.max(0, Math.round(s));
+  return s < 60 ? s + "s" : s < 7200 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h";
 }
 function updateLine(d, now){
   if (!d || !d.ok) return {text: "Updates come with the native binary; this dispatcher updates by git.", bad: false};
-  const head = `Imperatorium ${d.current} · ${d.channel}`;
-  if (d.applying) return {text: head + ` · updating to ${d.latest}…`, bad: false};
+  const head = `Imperatorium ${d.current}`;
+  if (d.applying) return {text: head + ` · updating to ${d.applying_to || d.latest}…`, bad: false};
   if (!d.checked_at) return {text: head + (d.check ? " · not checked yet" : " · checking is off"), bad: false};
-  const s = Math.max(0, Math.round(now - d.checked_at));
-  const ago = s < 60 ? s + "s" : s < 7200 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h";
+  const ago = agoText(now - d.checked_at);
   if (d.error) return {text: head + ` · the check ${ago} ago failed: ${d.error}`, bad: true};
   return {text: head + (d.newer ? ` · ${d.latest} is out` : " · up to date") + ` (checked ${ago} ago)`, bad: false};
+}
+// The preview line: what the last preview check (if any) found.
+function previewLine(d, now){
+  const p = d && d.preview, onPreview = /-preview/.test((d && d.current) || "");
+  if (!p || !p.checked_at) return {text: onPreview ? "This is a preview build. Look for a newer one here."
+    : "Not checked. The daily check never offers a preview; look for one here.", bad: false};
+  const ago = agoText(now - p.checked_at);
+  if (p.error) return {text: `The check ${ago} ago failed: ${p.error}`, bad: true};
+  if (p.newer) return {text: `Preview ${p.latest} is available (checked ${ago} ago)` +
+    (p.installable === false ? ", but has no build for this machine" : ""), bad: false};
+  return {text: (p.latest === d.current ? `You are on the newest preview, ${p.latest}`
+    : `The newest preview, ${p.latest}, is not newer than this version`) + ` (checked ${ago} ago)`, bad: false};
 }
 async function drawUpdates(d){
   if (d === undefined) {
@@ -444,7 +469,7 @@ async function drawUpdates(d){
   }
   const st = document.getElementById("updst");
   if (!st) return d;
-  const line = updateLine(d, Date.now() / 1000);
+  const now = Date.now() / 1000, line = updateLine(d, now);
   st.textContent = line.text; st.classList.toggle("bad", line.bad);
   const notes = document.getElementById("updnotes"), apply = document.getElementById("updapply");
   const fresh = !!(d && d.ok && d.newer);
@@ -453,32 +478,56 @@ async function drawUpdates(d){
   apply.hidden = !(fresh && d.installable !== false && !d.applying);
   apply.textContent = fresh ? `Update to ${d.latest}` : "Update";
   document.getElementById("updcheck").hidden = !(d && d.ok);
+  // The preview row: only where the binary can update itself.
+  const pf = document.getElementById("prevf");
+  pf.hidden = !(d && d.ok);
+  if (!pf.hidden) {
+    const p = d.preview || {}, pl = previewLine(d, now), ps = document.getElementById("prevst");
+    ps.textContent = pl.text; ps.classList.toggle("bad", pl.bad);
+    const pn = document.getElementById("prevnotes"), pa = document.getElementById("prevapply");
+    const pfresh = !!(p.newer && !p.error);
+    pn.hidden = !(pfresh && p.notes);
+    pn.textContent = pfresh && p.notes ? `What's new in ${p.latest}\n\n${p.notes}` : "";
+    pa.hidden = !(pfresh && p.installable !== false && !d.applying);
+    pa.textContent = pfresh ? `Install preview ${p.latest}` : "Install preview";
+  }
   return d;
 }
-async function postUpdate(path){
-  try { return await post(path, {}); }
+async function postUpdate(path, body){
+  try { return await post(path, body || {}); }
   catch (e) { return {ok: false, error: "not answered"}; }
 }
 function wireUpdates(){
   const check = document.getElementById("updcheck"), apply = document.getElementById("updapply");
   if (!check) return;
+  const pcheck = document.getElementById("prevcheck"), papply = document.getElementById("prevapply");
   drawUpdates();
   check.onclick = async () => {
     check.disabled = true; say("checking for updates…");
-    let d;
-    try { d = await postUpdate("/api/update/check"); } catch (e) { say("dispatcher not answering", true); check.disabled = false; return; }
+    const d = await postUpdate("/api/update/check");
     drawUpdates(d);
     say(d.error ? "the check failed" : d.newer ? `${d.latest} is out` : "Imperatorium is up to date", !!d.error);
     check.disabled = false;
   };
-  apply.onclick = async () => {
-    apply.disabled = true;
-    let d;
-    try { d = await postUpdate("/api/update/apply"); } catch (e) { say("dispatcher not answering", true); apply.disabled = false; return; }
-    say(d.ok ? `Updating to ${d.version}: the dispatcher restarts in a moment.` : (d.error || "not updated"), !d.ok);
-    apply.disabled = false;
+  const install = (btn, preview) => async () => {
+    btn.disabled = true;
+    const d = await postUpdate("/api/update/apply", preview ? {preview: true} : {});
+    say(d.ok ? `${preview ? "Installing preview" : "Updating to"} ${d.version}: the dispatcher restarts in a moment.`
+      : (d.error || "not updated"), !d.ok);
+    btn.disabled = false;
     drawUpdates();
   };
+  apply.onclick = install(apply, false);
+  pcheck.onclick = async () => {
+    pcheck.disabled = true; say("looking for a preview…");
+    const d = await postUpdate("/api/update/check", {preview: true});
+    drawUpdates(d);
+    const p = (d && d.preview) || {};
+    say(!d.ok || p.error ? "the preview check failed" : p.newer ? `preview ${p.latest} is available` : "no newer preview",
+      !d.ok || !!p.error);
+    pcheck.disabled = false;
+  };
+  papply.onclick = install(papply, true);
 }
 function changes(){
   const out = {};

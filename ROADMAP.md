@@ -1,7 +1,7 @@
 # Roadmap
 
 Status legend: Not Started · In Progress · Complete · Deferred
-Last updated: 2026-11-25
+Last updated: 2026-11-26
 
 Imperatorium (package `imperatorium`): a single input
 surface for dispatching prompts to, and tracking attention across, ~20
@@ -12,6 +12,7 @@ Complete rows from before 2026-11-25 are in [docs/roadmap-archive.md](docs/roadm
 
 | Feature | Status | Notes |
 |---|---|---|
+| Settings: install a preview build by hand | In Progress | 2026-11-26 (user request), branch `preview-install`: the daily check and the badge look at releases only (the `updates.channel` setting is removed; a value left in config.json is ignored). Settings > Updates > Preview build: Check for a preview (`/api/update/check` `{preview: true}`, answer kept apart under `preview`) and Install preview X, which runs `update --version X` so it installs the tag whose notes were shown. Goldens: 351 `updates.channel` settings_compare cases and the field in 6 settings_twin answers removed. Full suite (45 binaries), clippy and window tests pass. Checked on a test dispatcher (port 8899): found 0.4.0-preview.4 from GitHub with a valid signature, notes shown, release answer untouched, apply refused without the window token. Left: Install pressed end to end (not done: the swap restarts services), commit/PR. |
 | Review 2026-11-25: policy splitter bypasses | Complete | 2026-11-25 (codebase review, user agreed all items): `ls & x`, `\r`, PowerShell `(...)` and `NAME=value` prefixes (`GIT_EXTERNAL_DIFF`, `PAGER`) were auto-approved as read-only; verified against the live policy. Now `&` and `\r` split commands, only `BENIGN_ENV` prefixes are skipped, PowerShell `(`/`{` asks (policy.rs). Unit tests for each case; the 86k differential explains the new stricter answers. Path and shell regexes compile separately, so a Read/Edit check skips the shell set. Full suite passed. |
 | Review: attribute escaping and CSP in the window | Complete | 2026-11-25: `esc()` now escapes `"` and `'` (`attr` = `esc`); a JS test pins it. Pages carry a CSP meta (ui.rs `csp`): scripts only from /ui/ plus the look's inline line by sha256, inline styles allowed. Unit tests pass. Browser check 2026-11-26 on a test dispatcher (port 8899, own state): the window, Settings (92 controls) and the Matrix (9 tiles) render with no CSP violation (a `securitypolicyviolation` listener and the console stayed empty); the look's inline script ran by its hash. |
 | Review: release and install integrity | In Progress | 2026-11-25: `package` job in the `release` environment; check.yml's audit/coverage skip a release call (`inputs.release`); voice crate gets `cargo check` in CI; smoke tests serve with node, not Python; SIGNER once per workflow; install scripts refuse non-https overrides except loopback. Remote hosts with option-shaped ssh/container/docker values are left out at load (`remote::unsafe_route`), and `remote add/check` refuse such names. Not yet run in Actions. 2026-11-26: `release` environment requires the user's approval (tag rule `v*` was already set); `IMPERATORIUM_SIGNING_KEY` added to it by the user; the repository-level copy is deleted once this branch is merged (main's `package` job still reads it). Deferred: checking the pushed host binary against the manifest (it sits beside the dispatcher's own exe: no trust boundary). |

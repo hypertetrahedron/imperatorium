@@ -228,7 +228,13 @@ impl Shared {
         }
         match path {
             "/hook" => (200, Body::Json(self.on_hook(p, None))),
-            "/api/update/check" => (200, Body::Json(self.updates.check(&self.config()))),
+            // {"preview": true} looks for a preview instead of a release: only
+            // ever asked for by hand (Settings > Updates), never by the daily check.
+            "/api/update/check" => {
+                let cfg = self.config();
+                let d = if truthy(p.get("preview")) { self.updates.check_preview(&cfg) } else { self.updates.check(&cfg) };
+                (200, Body::Json(d))
+            }
             "/api/update/apply" => {
                 if !from_window {
                     return (403, Body::Json(json!({"ok": false, "error": "only the Imperatorium window installs an update"})));
@@ -237,7 +243,7 @@ impl Shared {
                     return (200, Body::Json(json!({"ok": false, "error": "a read-only shadow changes nothing"})));
                 }
                 let log = self.state_dir().join("update.log");
-                (200, Body::Json(self.updates.apply(&self.config(), &log)))
+                (200, Body::Json(self.updates.apply(&log, truthy(p.get("preview")))))
             }
             "/api/remote/refresh" => {
                 let n = self.fleet.as_ref().map(|f| f.refresh()).unwrap_or(0);

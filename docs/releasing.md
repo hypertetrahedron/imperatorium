@@ -147,6 +147,11 @@ Two, as `update.rs` and the installers already implement:
 | **stable** (default) | `vX.Y.Z` | GitHub's "latest" release | Everyone |
 | **preview** | `vX.Y.Z-preview.N` | the rolling `preview` release | Opt-in testers, and **your own machines** |
 
+The dispatcher's daily check and the window's badge look at stable only. A
+preview is installed by hand: Settings > Updates > Check for a preview, then
+Install preview (which installs that tag, `update --version X`), or
+`imperatorium update --channel preview` from a terminal.
+
 - **Dogfood the preview channel.** Your live dispatcher should run published
   preview builds installed by `imperatorium update --channel preview`, not a
   binary built from a worktree. That way the exact bytes users will get have
@@ -198,7 +203,8 @@ Delete `release/0.4` once 0.5.0 is out and 0.4 is no longer supported.
 2. `git tag -a v0.4.0-preview.3 -m "<what's new, user-facing, a few lines>"`
 3. `git push origin v0.4.0-preview.3`
 4. CI builds, packages, smoke-tests, publishes (§7). Update your own machine:
-   `imperatorium update --channel preview`.
+   `imperatorium update --channel preview` (or Settings > Updates > Check for
+   a preview).
 
 ### Stable
 

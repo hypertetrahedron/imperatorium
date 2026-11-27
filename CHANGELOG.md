@@ -18,8 +18,10 @@ The first release of the native build: 0.4.0.
   than a Python tree.
 - One-command install on Windows, Linux and macOS: the install script downloads
   the binary, checks its SHA-256, and runs `imperatorium install`.
-- `imperatorium update` and the window's update badge, with two channels:
-  stable (the default) and preview.
+- `imperatorium update` and the window's update badge. The badge and the daily
+  check offer releases only; Settings > Updates can also look for a preview
+  build and install it when you ask (`imperatorium update --channel preview`
+  from a terminal).
 - Signed releases. Each release's `manifest.json` carries an Ed25519 signature
   (`manifest.json.sig`) that the binary checks before it updates; an unsigned
   or wrongly signed manifest is refused. Release files also carry build
