@@ -8,6 +8,10 @@ All notable changes to Imperatorium. The format follows
 
 The first release of the native build: 0.4.0.
 
+Needs Claude Code 2.1.234 or later (2.1.224 on macOS and Linux); the
+Imperatorium mod needs 2.1.287. git is required; gh, Windows Terminal and Edge
+are optional.
+
 ### Added
 
 - Imperatorium is now a single native binary, `imperatorium`. There is no
@@ -67,7 +71,6 @@ The first release of the native build: 0.4.0.
   Typing `/` in the prompt box lists the session's commands and says which ones
   start a model turn. Commands only the terminal can do are refused with Show
   Window and the reason. New session lets you choose the model and effort.
-
 - Send to a new session: the Send button's menu has Send to New Session, Send
   to New Session with Context, Send to New Background Session and Send to New
   Background Session with Context (ctrl+Enter and ctrl+shift+Enter). The New
@@ -96,26 +99,15 @@ The first release of the native build: 0.4.0.
   own.
 - The line under the session's name no longer repeats its window title (the
   gist of its prompt); the tile shows it, and so does Show Current Prompt.
-
 - The install scripts do their work in one function called on the last line, so
   a download that is cut short runs nothing.
 - `install.sh` says that macOS builds are experimental.
 
 ### Fixed
 
-- Auto-approval no longer lets a chained command through as read-only. A lone
-  `&` and a carriage return now separate commands as `;` does, a leading
-  `NAME=value` other than a short list of harmless variables (`CI`,
-  `NO_COLOR`, `LANG`, ...) is asked about (`GIT_EXTERNAL_DIFF=x git diff` runs
-  `x`), and PowerShell's `(...)` and `{...}` are asked about.
-- Text from a session (a Bash command in a tile, a tool's output) can no
-  longer close an HTML attribute in the window, and the window's pages carry a
-  Content-Security-Policy that runs only the dispatcher's own scripts.
 - `imperatorium install-hooks` replaces `settings.json` atomically, and a
   `settings.json` that is valid JSON but not an object is refused rather than
   overwritten. Only the five newest `settings.json` backups are kept.
-- A remote host whose ssh destination or container name starts with `-` (an
-  option to ssh or docker) is left out, wherever the configuration came from.
 - The pull-request badge no longer runs git through Git for Windows' wrapper,
   or gh through a scoop shim; the Changes tab runs one git a refresh instead of
   six, and none while the window is hidden.
@@ -132,12 +124,31 @@ The first release of the native build: 0.4.0.
   says "resume to answer" instead of "waiting for you", since its Resume button
   is the way to answer it.
 
+### Security
+
+- Auto-approval no longer lets a chained command through as read-only. A lone
+  `&` and a carriage return now separate commands as `;` does, a leading
+  `NAME=value` other than a short list of harmless variables (`CI`,
+  `NO_COLOR`, `LANG`, ...) is asked about (`GIT_EXTERNAL_DIFF=x git diff` runs
+  `x`), and PowerShell's `(...)` and `{...}` are asked about.
+- Text from a session (a Bash command in a tile, a tool's output) can no
+  longer close an HTML attribute in the window, and the window's pages carry a
+  Content-Security-Policy that runs only the dispatcher's own scripts.
+- A remote host whose ssh destination or container name starts with `-` (an
+  option to ssh or docker) is left out, wherever the configuration came from.
+- The install scripts refuse a release URL override that is not https, unless
+  it points at this machine.
+
 ### Breaking
 
 - `imperatorium serve` needs `--live` or `--state FILE`; the read-only shadow
-  it started without them is gone.
+  it started without them is gone. The installed service already passes
+  `--live`; only a `serve` you run by hand needs the flag.
 - The Python implementation is gone from this line (the last version with it is
-  the tag `last-python`). Install the native binary with the install script.
+  the tag `last-python`). Nothing is migrated: run the Python version's
+  `setup_machine.py uninstall` first, then the install script, then
+  `imperatorium remote add HOST` for each remote host. `CCONTROL_*`
+  environment variables are no longer read; use `IMPERATORIUM_*`.
 
 ## [0.1.0] - 2026-11-03
 

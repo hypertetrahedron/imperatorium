@@ -60,7 +60,7 @@ walks through the whole thing step by step, including other machines.</p>
 <pre><code>imperatorium check                  # what is present and missing; changes nothing
 imperatorium status                 # is everything running
 imperatorium restart                # all, or one of dispatcher | streamdeck | hotkey
-imperatorium update                 # the latest release on your channel
+imperatorium update                 # the latest release
 imperatorium update --rollback      # back to the binary before the last update
 imperatorium uninstall              # hooks, mod and service; config and state stay
 imperatorium uninstall --purge      # ...and the config and state too</code></pre>
@@ -70,7 +70,7 @@ imperatorium uninstall --purge      # ...and the config and state too</code></pr
   <li>Every published build is made by CI from a tag; nothing built on a developer's machine is distributed.</li>
   <li>Each release's manifest carries an Ed25519 signature that the binary checks before it updates, and the binary's SHA-256 is checked against it.</li>
   <li>Windows binaries carry an Authenticode signature, and release files carry build provenance attestations.</li>
-  <li>Two channels: stable by default, preview by choice. Any version can be installed exactly, and the last update can always be rolled back.</li>
+  <li>Releases update themselves; a preview build is installed only when you ask (Settings &gt; Updates, or <code>update --channel preview</code>). Any version can be installed exactly, and the last update can always be rolled back.</li>
 </ul>
 <p>More in <a href="https://github.com/hypertetrahedron/imperatorium/blob/main/docs/releasing.md">docs/releasing.md</a>
 and the <a href="https://github.com/hypertetrahedron/imperatorium/blob/main/CHANGELOG.md">changelog</a>.</p>

@@ -246,8 +246,9 @@ it the only door to users, it should also:
 ### The release signing key
 
 Made 2026-11-15 with `imperatorium release-keygen`. The public half is in
-`RELEASE_KEYS` (`rust/imperatorium/src/signing.rs`); the secret is the
-repository secret `IMPERATORIUM_SIGNING_KEY`, and the one other copy is
+`RELEASE_KEYS` (`rust/imperatorium/src/signing.rs`); the secret is
+`IMPERATORIUM_SIGNING_KEY`, a secret of the `release` environment (which
+needs the maintainer's approval; there is no repository-level copy), and the one other copy is
 `%USERPROFILE%\.imperatorium-release\signing-key.json` on the maintainer's
 machine (readable by that user only). That copy should move to offline
 storage (a password manager or an encrypted USB key) and be deleted from
