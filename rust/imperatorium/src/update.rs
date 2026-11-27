@@ -209,11 +209,13 @@ fn restart_services(prefix: &str) {
 
 // -- the dispatcher's check and the window's Update button (gap J3) --------
 
-/// Asked once a few minutes after the dispatcher starts, then once a
-/// day, when `updates.check` is on (it is by default). Nothing is
-/// installed until the window asks; then `imperatorium update` runs as a
-/// child that outlives us, swaps the binary and restarts the services
-/// (this dispatcher last).
+/// Releases are asked for once a few minutes after the dispatcher starts,
+/// then once a day, when `updates.check` is on (it is by default). A
+/// preview is only looked for when the window asks (Settings > Updates >
+/// Check for a preview), and its answer is kept apart, under `preview`, so
+/// the badge only ever offers a release. Nothing is installed until the
+/// window asks; then `imperatorium update` runs as a child that outlives
+/// us, swaps the binary and restarts the services (this dispatcher last).
 pub struct Checker {
     state: std::sync::Mutex<Value>,
 }
@@ -225,55 +227,68 @@ impl Default for Checker {
     }
 }
 
-fn channel_of(cfg: &Value) -> String {
-    match crate::settings::value(cfg, "updates.channel").as_str() {
-        Some("preview") => "preview".into(),
-        _ => "stable".into(),
-    }
-}
-
 fn epoch() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
+/// One check of the release at `base`: its version, whether it is newer
+/// than this one, its notes, and whether it has a build for this machine.
+fn ask(base: &str) -> Value {
+    let mut next = serde_json::json!({"checked_at": epoch()});
+    match manifest(base) {
+        Ok(m) => {
+            let latest = m.get("version").and_then(Value::as_str).unwrap_or("").to_string();
+            next["newer"] = Value::Bool(newer(&latest, version()));
+            next["latest"] = Value::from(latest);
+            next["notes"] = m.get("notes").cloned().unwrap_or(Value::Null);
+            // A release without our build cannot be installed from here.
+            next["installable"] = Value::Bool(m.get("assets").and_then(|a| a.get(this_triple())).is_some());
+        }
+        Err(e) => next["error"] = Value::from(e),
+    }
+    next
+}
+
 impl Checker {
-    /// What the window shows: this version, the newest one the last check
-    /// saw, its notes, and whether an update is under way.
+    /// What the window shows: this version, the newest release the last
+    /// check saw and its notes, the last preview check's answer (under
+    /// `preview`, once one was asked for), and whether an update is under way.
     pub fn status(&self, cfg: &Value) -> Value {
         let mut s = self.state.lk().clone();
         if let Some(o) = s.as_object_mut() {
             o.insert("current".into(), Value::from(version()));
-            o.insert("channel".into(), Value::from(channel_of(cfg)));
             o.insert("check".into(), Value::Bool(crate::pyish::truthy(Some(&crate::settings::value(cfg, "updates.check")))));
             o.insert("ok".into(), Value::Bool(true));
         }
         s
     }
 
-    /// Ask the release now; the answer replaces the last one.
+    /// Ask for the newest release now; the answer replaces the last one
+    /// (the preview answer and an update under way are kept).
     pub fn check(&self, cfg: &Value) -> Value {
-        let channel = channel_of(cfg);
-        let base = base(None, &channel, None);
-        let mut next = serde_json::json!({"checked_at": epoch(), "checked_channel": channel});
-        match manifest(&base) {
-            Ok(m) => {
-                let latest = m.get("version").and_then(Value::as_str).unwrap_or("").to_string();
-                next["newer"] = Value::Bool(newer(&latest, version()));
-                next["latest"] = Value::from(latest);
-                next["notes"] = m.get("notes").cloned().unwrap_or(Value::Null);
-                // A release without our build cannot be installed from here.
-                next["installable"] = Value::Bool(m.get("assets").and_then(|a| a.get(this_triple())).is_some());
-            }
-            Err(e) => next["error"] = Value::from(e),
-        }
-        {
-            let mut st = self.state.lk();
-            if let Some(a) = st.get("applying").cloned() {
-                next["applying"] = a;
-            }
-            *st = next;
-        }
+        self.keep_release(ask(&base(None, "stable", None)));
         self.status(cfg)
+    }
+
+    /// Ask for the newest preview now: only ever from the window, never by
+    /// the daily check.
+    pub fn check_preview(&self, cfg: &Value) -> Value {
+        self.keep_preview(ask(&base(None, "preview", None)));
+        self.status(cfg)
+    }
+
+    fn keep_release(&self, mut next: Value) {
+        let mut st = self.state.lk();
+        for k in ["applying", "applying_to", "preview"] {
+            if let Some(v) = st.get(k).cloned() {
+                next[k] = v;
+            }
+        }
+        *st = next;
+    }
+
+    fn keep_preview(&self, next: Value) {
+        self.state.lk()["preview"] = next;
     }
 
     /// The background check. `cfg` is None once the dispatcher is gone.
@@ -291,28 +306,36 @@ impl Checker {
         });
     }
 
-    /// Run `imperatorium update` for the version the last check found. Its
-    /// output goes to `update.log` in the state folder.
-    pub fn apply(&self, cfg: &Value, log: &Path) -> Value {
+    /// Run `imperatorium update` for the version the last check found: the
+    /// release, or with `preview` the preview the last preview check found.
+    /// A preview is installed by its own tag (`--version`), so it is the
+    /// build whose notes the window showed even if the rolling preview has
+    /// moved on since. Its output goes to `update.log` in the state folder.
+    pub fn apply(&self, log: &Path, preview: bool) -> Value {
         let mut st = self.state.lk();
-        if st.get("newer") != Some(&Value::Bool(true)) {
-            return serde_json::json!({"ok": false, "error": "no newer version known - check first"});
+        let found = if preview { st.get("preview").cloned().unwrap_or(Value::Null) } else { st.clone() };
+        let what = if preview { "preview" } else { "version" };
+        if found.get("newer") != Some(&Value::Bool(true)) {
+            return serde_json::json!({"ok": false, "error": format!("no newer {what} known - check first")});
         }
-        if st.get("installable") == Some(&Value::Bool(false)) {
-            return serde_json::json!({"ok": false, "error": format!("the release has no build for {}", this_triple())});
+        if found.get("installable") == Some(&Value::Bool(false)) {
+            return serde_json::json!({"ok": false, "error": format!("the {} has no build for {}", if preview { "preview" } else { "release" }, this_triple())});
         }
         if st.get("applying").and_then(Value::as_f64).is_some_and(|t| epoch() - t < 600.0) {
             return serde_json::json!({"ok": false, "error": "an update is already under way"});
         }
-        let latest = st.get("latest").cloned().unwrap_or(Value::Null);
-        let channel = st.get("checked_channel").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| channel_of(cfg));
+        let latest = found.get("latest").and_then(Value::as_str).unwrap_or("").to_string();
+        if preview && parse(&latest).is_none() {
+            return serde_json::json!({"ok": false, "error": format!("the preview says it is {latest:?}, not a version")});
+        }
+        let args: Vec<&str> = if preview { vec!["update", "--version", &latest] } else { vec!["update", "--channel", "stable"] };
         let out = match std::fs::File::create(log) {
             Ok(f) => f,
             Err(e) => return serde_json::json!({"ok": false, "error": format!("{}: {e}", log.display())}),
         };
         let err = out.try_clone().ok();
         let mut c = std::process::Command::new(std::env::current_exe().unwrap_or_default());
-        c.args(["update", "--channel", &channel]).stdin(std::process::Stdio::null()).stdout(out);
+        c.args(&args).stdin(std::process::Stdio::null()).stdout(out);
         if let Some(e) = err {
             c.stderr(e);
         }
@@ -326,6 +349,7 @@ impl Checker {
         match c.spawn() {
             Ok(child) => {
                 st["applying"] = Value::from(epoch());
+                st["applying_to"] = Value::from(latest.as_str());
                 serde_json::json!({"ok": true, "version": latest, "pid": child.id(), "log": log.to_string_lossy()})
             }
             Err(e) => serde_json::json!({"ok": false, "error": format!("cannot start the update: {e}")}),
@@ -517,19 +541,51 @@ mod tests {
         let cfg = serde_json::json!({});
         let s = c.status(&cfg);
         assert_eq!(s["current"], version());
-        assert_eq!(s["channel"], "stable");
         assert_eq!(s["check"], true);
         assert!(s.get("checked_at").is_none());
+        assert!(s.get("preview").is_none());
+        // A channel left in config.json from before changes nothing.
         let cfg = serde_json::json!({"updates": {"channel": "preview", "check": false}});
-        assert_eq!(c.status(&cfg)["channel"], "preview");
+        assert!(c.status(&cfg).get("channel").is_none());
         assert_eq!(c.status(&cfg)["check"], false);
         // Nothing to install before a check has found something newer.
         let log = std::env::temp_dir().join("imperatorium-update-test.log");
-        assert_eq!(c.apply(&cfg, &log)["ok"], false);
+        assert_eq!(c.apply(&log, false)["ok"], false);
+        assert!(c.apply(&log, true)["error"].as_str().unwrap().contains("no newer preview"));
         *c.state.lk() = serde_json::json!({"newer": true, "latest": "9.9.9", "installable": false});
-        assert!(c.apply(&cfg, &log)["error"].as_str().unwrap().contains("no build"));
-        *c.state.lk() = serde_json::json!({"newer": true, "latest": "9.9.9", "applying": epoch()});
-        assert!(c.apply(&cfg, &log)["error"].as_str().unwrap().contains("under way"));
+        assert!(c.apply(&log, false)["error"].as_str().unwrap().contains("no build"));
+        // A newer release says nothing about the preview, and back.
+        assert!(c.apply(&log, true)["error"].as_str().unwrap().contains("no newer preview"));
+        *c.state.lk() = serde_json::json!({"preview": {"newer": true, "latest": "9.9.9-preview.1", "installable": false}});
+        assert!(c.apply(&log, false)["error"].as_str().unwrap().contains("no newer version"));
+        assert!(c.apply(&log, true)["error"].as_str().unwrap().contains("the preview has no build"));
+        *c.state.lk() = serde_json::json!({"preview": {"newer": true, "latest": "garbage"}});
+        assert!(c.apply(&log, true)["error"].as_str().unwrap().contains("not a version"));
+        *c.state.lk() = serde_json::json!({"newer": true, "latest": "9.9.9", "applying": epoch(),
+                                           "preview": {"newer": true, "latest": "9.9.9-preview.1"}});
+        assert!(c.apply(&log, false)["error"].as_str().unwrap().contains("under way"));
+        assert!(c.apply(&log, true)["error"].as_str().unwrap().contains("under way"));
+    }
+
+    /// The daily (release) check keeps the last preview answer and an
+    /// update under way; the preview check touches only its own answer.
+    #[test]
+    fn checks_keep_each_others_answers() {
+        let c = Checker::default();
+        let cfg = serde_json::json!({});
+        *c.state.lk() = serde_json::json!({"applying": 1.0, "applying_to": "9.9.9",
+                                           "preview": {"latest": "9.9.9-preview.1", "newer": true}});
+        c.keep_release(serde_json::json!({"checked_at": 2.0, "error": "offline"}));
+        let s = c.status(&cfg);
+        assert_eq!(s["error"], "offline");
+        assert_eq!(s["applying_to"], "9.9.9");
+        assert_eq!(s["preview"]["latest"], "9.9.9-preview.1");
+        *c.state.lk() = serde_json::json!({"latest": "9.9.9", "newer": true});
+        c.keep_preview(serde_json::json!({"checked_at": 3.0, "error": "offline"}));
+        let s = c.status(&cfg);
+        assert_eq!(s["latest"], "9.9.9");
+        assert_eq!(s["newer"], true);
+        assert_eq!(s["preview"]["error"], "offline");
     }
 
     #[test]
